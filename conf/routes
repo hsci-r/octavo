@@ -1,0 +1,12 @@
+# Routes
+# This file defines all application routes (Higher priority routes first)
+# ~~~~
+
+# An example controller showing a sample home page
+GET     /search                     controllers.SearchController.search(q: Option[String], f: Seq[String], rf: Seq[String], n:Option[String], mf: Int ?= 1)
+POST	/search						controllers.SearchController.search(q: Option[String], f: Seq[String], rf: Seq[String], n:Option[String], mf: Int ?= 1)
+GET     /jsearch                    controllers.SearchController.jsearch(q: Option[String], f: Seq[String], rf: Seq[String], l:Int ?= 10, mf: Int ?= 1)
+POST	/jsearch					controllers.SearchController.jsearch(q: Option[String], f: Seq[String], rf: Seq[String], l:Int ?= 10, mf: Int ?= 1)
+GET		/fields						controllers.SearchController.fields
+GET		/terms						controllers.SearchController.terms(q: String,d:Int ?= 2,cp:Int ?= 0,t:Boolean ?= true, f: Seq[String])
+GET		/dump						controllers.SearchController.dump
