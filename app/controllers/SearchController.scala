@@ -58,6 +58,14 @@ import org.apache.lucene.search.TotalHitCountCollector
 import org.apache.lucene.analysis.tokenattributes.OffsetAttribute
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
 import org.apache.lucene.index.IndexOptions
+import org.apache.lucene.util.BytesRef
+import java.util.Collections
+import org.apache.lucene.search.Query
+import org.apache.lucene.queryparser.xml.builders.RangeQueryBuilder
+import org.apache.lucene.document.IntPoint
+import scala.util.Try
+import org.apache.lucene.analysis.core.KeywordAnalyzer
+import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper
 
 /**
  * This controller creates an `Action` to handle HTTP requests to the
@@ -68,40 +76,39 @@ class SearchController @Inject() extends Controller {
 
   BooleanQuery.setMaxClauseCount(Integer.MAX_VALUE)
   
-  val dir = FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/index"))
-  val ir = DirectoryReader.open(dir)
-  val is = new IndexSearcher(ir)
+  val dir = DirectoryReader.open(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/dindex")))
+  val dis = new IndexSearcher(dir)
+  val hir = DirectoryReader.open(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/hindex")))
+  val his = new IndexSearcher(hir)
+  val pir = DirectoryReader.open(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/pindex")))
+  val pis = new IndexSearcher(pir)
+  
   val sim = new SimilarityBase() {
     override def score(stats: BasicStats, freq: Float, docLen: Float): Float = {
       return freq
     }
     override def explain(stats: BasicStats, doc: Int, freq: Explanation, docLen: Float): Explanation = {
-      return Explanation.`match`(freq.getValue,"{TF:"+freq.getValue+",DL:"+docLen.toInt+"}")
+      return Explanation.`match`(freq.getValue,"")
     }
     override def toString(): String = {
       ""
     }
-    def decodeDocLen(len: Long): Int = {
-      if (len==0) 0
-      else decodeNormValue(len.toByte).toInt
+  }
+  dis.setSimilarity(sim)
+  val sa = new StandardAnalyzer()
+  val analyzer = new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),Map("content"->sa,"notes"->sa,"fullTitle"->sa))
+  val dqp = new QueryParser("content",analyzer) {
+    override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
+      field match {
+        case "pubDate" | "contentTokens" =>
+          val l = Try(if (startInclusive) part1.toInt else part1.toInt + 1).getOrElse(Integer.MIN_VALUE)
+          val h = Try(if (endInclusive) part2.toInt else part2.toInt - 1).getOrElse(Integer.MAX_VALUE)
+          IntPoint.newRangeQuery(field, l, h)
+        case _ => super.getRangeQuery(field,part1,part2,startInclusive,endInclusive) 
+      }
     }
   }
-  is.setSimilarity(sim)
-  val analyzer = new StandardAnalyzer()
-  val allFields = {
-    val fs = new HashSet[String]
-    for (r <- ir.leaves();fi <- r.reader().getFieldInfos) fs.add(fi.name)
-    fs.toSeq
-  }
-  val readableFields = ir.document(0).getFields.map(_.name).toSeq
-  val fieldsArray = allFields.toArray
 
-  def fields = Action {
-    Ok(Json.obj(
-        "all"->allFields,
-        "readable"->readableFields))
-  }
-  
   def combine[A](a: Seq[A],b: Seq[A]): Seq[Seq[A]] =
     a.zip(b).foldLeft(Seq.empty[Seq[A]]) { (x,s) => if (x.isEmpty) Seq(Seq(s._1),Seq(s._2)) else (for (a<-x) yield Seq(a:+s._1,a:+s._2)).flatten }
 
@@ -110,8 +117,8 @@ class SearchController @Inject() extends Controller {
       (acc, next) => acc.flatMap { combo => next.map { num => combo :+ num } } 
     }
   
-  def terms(q: String, d:Int, cp:Int,transpose : Boolean, f: Seq[String]) = Action {
-    val ts = analyzer.tokenStream("", q)
+  def terms(q: String, d:Int, cp:Int,transpose : Boolean) = Action {
+    val ts = analyzer.tokenStream("content", q)
     val ta = ts.addAttribute(classOf[CharTermAttribute])
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
     ts.reset()
@@ -122,10 +129,10 @@ class SearchController @Inject() extends Controller {
     ts.end()
     ts.close()
     val termMaps = parts.map(_ => new HashMap[String,Long]().withDefaultValue(0l)).toSeq
-    for (((so,qt),termMap) <- parts.zip(termMaps); f <- f) {
+    for (((so,qt),termMap) <- parts.zip(termMaps)) {
       val as = new AttributeSource()
-      val t = new Term(f,qt)
-      for (lrc <- ir.leaves; terms = lrc.reader.terms(f); if (terms!=null)) {
+      val t = new Term("content",qt)
+      for (lrc <- dir.leaves; terms = lrc.reader.terms("content"); if (terms!=null)) {
         val fte = new FuzzyTermsEnum(terms,as,t,d,cp,transpose)
         var br = fte.next()
         while (br!=null) {
@@ -140,16 +147,14 @@ class SearchController @Inject() extends Controller {
     for (terms <- permutations(termMaps.map(_.keys.toSeq))) {
       val hc = new TotalHitCountCollector()
       val bqb = new BooleanQuery.Builder()
-      for (field <-f ) {
-        var position = -1
-        val pqb = new PhraseQuery.Builder()
-        for ((q,o) <- terms.zip(parts.map(_._1))) {
-          position += o
-          pqb.add(new Term(field,q),position)
-        }
-        bqb.add(pqb.build,BooleanClause.Occur.SHOULD)
+      var position = -1
+      val pqb = new PhraseQuery.Builder()
+      for ((q,o) <- terms.zip(parts.map(_._1))) {
+        position += o
+        pqb.add(new Term("content",q),position)
       }
-      is.search(bqb.build, hc)
+      bqb.add(pqb.build,BooleanClause.Occur.SHOULD)
+      dis.search(bqb.build, hc)
       if (hc.getTotalHits>0) termMap.put(terms.zip(parts.map(_._1)).map(t => "a " * (t._2 - 1) + t._1 ).mkString(" "),hc.getTotalHits)
     }
     Ok(Json.toJson(termMap))
@@ -160,115 +165,156 @@ class SearchController @Inject() extends Controller {
    }
   
   def dump() = Action {
-    if (ir.hasDeletions()) throw new UnsupportedOperationException("Index should not have deletions!")
+    if (dir.hasDeletions()) throw new UnsupportedOperationException("Index should not have deletions!")
     Ok.chunked(Enumerator.outputStream { os => 
       val w = CSVWriter(os)
-      val rfs = new java.util.HashSet[String]
-      val allFields = {
-        val fs = new HashSet[String]
-        for (r <- ir.leaves();fi <- r.reader().getFieldInfos) {
-         if (fi.getIndexOptions != IndexOptions.DOCS_AND_FREQS_AND_POSITIONS) rfs.add(fi.name)
-         fs.add(fi.name) 
+      val dfields = Seq("ESTCID","documentID","fullTitle","language","module","notes","pubDate")
+      val pfields = Seq("type","contentTokens")
+      w.write(dfields ++ pfields)
+      var ld: Document = null
+      var ldid: String = null
+      val pfieldContents = pfields.map(f => new ArrayBuffer[String]())
+      for (lrc<-dir.leaves();lr = lrc.reader;
+      i <- 0 until lr.maxDoc) {
+        val d = lr.document(i)
+        val did = d.get("documentID") 
+        if (ldid!=did) {
+          if (ldid!=null) { 
+            w.write(dfields.map(f => d.get(f)) ++ pfieldContents.map(_.mkString(";")))
+            pfieldContents.foreach(_.clear)
+          }
+          ldid=did
+          ld=d
         }
-        fs.toSeq
+        pfields.zip(pfieldContents).foreach{ case (p,c) => c += d.get(p) }
       }
-      w.write(allFields.map(f => if (rfs.contains(f)) f else f + " Length"))
-      for (lrc<-ir.leaves();lr = lrc.reader) {
-        var i = 0
-        val fieldNorms = allFields.map(t => lr.getNormValues(t))
-        while (i<lr.maxDoc) {
-          val d = lr.document(i,rfs)
-          w.write(allFields.zip(fieldNorms).map(t => if (rfs.contains(t._1)) d.getValues(t._1).mkString(";") else (if (t._2 != null) sim.decodeDocLen(t._2.get(i)).toString else "0")))
-          i+=1
-        }
-      }
+      w.write(dfields.map(f => ld.getValues(f).mkString(";")) ++ pfieldContents.map(_.mkString(";")))
       w.close()
     }).as("text/csv")
   }
+  
+  def collectTermVector(is: IndexSearcher, q: Query, ls: Int, l: Int): Map[String,Double] = {
+   val cv = new HashMap[String,Double].withDefaultValue(-ls)
+   is.search(q, new SimpleCollector() {
+      override def needsScores: Boolean = false
+      var context: LeafReaderContext = null
 
-  def jsearch(qg: Option[String], fg: Seq[String], rfg: Seq[String], lg: Int, mfg: Int) = Action { implicit request =>
+      override def collect(doc: Int) {
+        val tv = this.context.reader.getTermVector(doc, "content")
+        val tvt = tv.iterator()
+        var term = tvt.next()
+        while (term!=null) {
+          cv(term.utf8ToString) += tvt.docFreq
+          term = tvt.next()
+        }
+      }
+      override def doSetNextReader(context: LeafReaderContext) = {
+        this.context = context
+      }
+    })
+    cv.toSeq.map(p => (p._1,(p._2.toDouble)/is.getIndexReader.docFreq(new Term("content",p._1)))).sortWith{ case (p1,p2) => p1._2> p2._2}.take(l).toMap
+  }
+  
+  def collocations(qg: Option[String], lsg: Int, lg: Int, p: Option[String]) = Action { implicit request =>
+    var q: String = qg.getOrElse(null)
+    var ls: Int = lsg
+    var l: Int = lg
+    request.body.asFormUrlEncoded.foreach { data => 
+      q = data.get("q").map(_(0)).orElse(qg).get
+      data.get("ls").map(_(0)).foreach(bls => ls = bls.toInt)
+      data.get("l").map(_(0)).foreach(bl => l = bl.toInt)
+    }
+    val pq = dqp.parse(q) 
+    val json = Json.toJson(Map("document"->collectTermVector(dis,pq,ls,l),"part"->collectTermVector(his,pq,ls,l),"paragraph"->collectTermVector(pis,pq,ls,l))) 
+    if (p.isDefined && (p.get=="" || p.get.toBoolean))
+      Ok(Json.prettyPrint(json))
+    else 
+      Ok(json)
+  }
+
+  def jsearch(qg: Option[String], rfg: Seq[String], lg: Int, mfg: Int, pg: Option[String]) = Action { implicit request =>
     var q: String = qg.getOrElse(null)
     var rf: Seq[String] = rfg
-    var f: Seq[String] = fg
     var l: Int = lg
     var mf: Int = mfg
+    var p: Option[String] = pg
     request.body.asFormUrlEncoded.foreach { data =>
       q = data.get("q").map(_(0)).orElse(qg).get
-      data.get("f").foreach(bf => f = f ++ bf)
       data.get("rf").foreach(brf => rf = rf ++ brf)
       data.get("l").map(_(0)).foreach(bl => l = bl.toInt)
       data.get("mf").map(_(0)).foreach(bmf => mf = bmf.toInt)
+      data.get("p").map(_(0)).foreach(bp => p = Some(bp))
     }
     var total = 0
     val maxHeap = PriorityQueue.empty[(Seq[String],Int)](Order) 
-    doSearch(q, f, rf, (doc: Int, d: Document, scorer: Scorer, we: Weight, context: LeafReaderContext, terms: HashSet[Term], norms: Seq[NumericDocValues]) => {
+    doSearch(q, rf, (doc: Int, d: Document, scorer: Scorer, we: Weight, context: LeafReaderContext, terms: HashSet[Term]) => {
       if (scorer.score.toInt>=mf) {
         total+=1
         if (total<=l) 
-          maxHeap += ((rf.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString :+ norms.foldLeft(0)((c,n) => c+sim.decodeDocLen(n.get(doc))).toString, scorer.score.toInt))
+          maxHeap += ((rf.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString, scorer.score.toInt))
         else if (maxHeap.head._2<scorer.score.toInt) {
           maxHeap.dequeue()
-          maxHeap += ((rf.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString :+ norms.foldLeft(0)((c,n) => c+sim.decodeDocLen(n.get(doc))).toString, scorer.score.toInt))
+          maxHeap += ((rf.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString, scorer.score.toInt))
         }
       }
     })
-    Ok(Json.toJson(Map("total"->Json.toJson(total),"fields"->Json.toJson(rf :+ "Freq" :+ "TotalLength"),"results"->Json.toJson(Json.toJson(maxHeap.map(_._1))))))
+    val json = Json.toJson(Map("total"->Json.toJson(total),"fields"->Json.toJson(rf :+ "Freq" :+ "TotalLength"),"results"->Json.toJson(Json.toJson(maxHeap.map(_._1)))))
+    if (p.isDefined && (p.get=="" || p.get.toBoolean))
+      Ok(Json.prettyPrint(json))
+    else 
+      Ok(json)
   }
   
-  def search(qg: Option[String], fg: Seq[String], rfg: Seq[String], ng: Option[String], mfg: Int) = Action { implicit request => 
+  def search(qg: Option[String], rfg: Seq[String], ng: Option[String], mfg: Int) = Action { implicit request => 
     var q: String = qg.getOrElse(null)
     var rf: Seq[String] = rfg
-    var f: Seq[String] = fg
     var mf: Int = mfg
     var n: Boolean = ng.isDefined && (ng.get=="" || ng.get.toBoolean)
     request.body.asFormUrlEncoded.foreach { data =>
       q = data.get("q").map(_(0)).orElse(qg).get
-      data.get("f").foreach(bf => f = f ++ bf)
       data.get("rf").foreach(brf => rf = rf ++ brf)
       data.get("mf").map(_(0)).foreach(bmf => mf = bmf.toInt)
       data.get("n").map(_(0)).foreach(bn => n = bn=="" || bn.toBoolean)
     }
     Ok.chunked(Enumerator.outputStream { os => 
       val w = CSVWriter(os)
-      if (n) w.write(rf :+ "Freq" :+ "TotalLength" :+ "Explanation" :+ "LengthNorms" :+ "TermNorms")
-      else w.write(rf :+ "Freq" :+ "TotalLength")
-      doSearch(q, f, rf, (doc: Int, d: Document, scorer: Scorer, we: Weight, context: LeafReaderContext, terms: HashSet[Term], norms: Seq[NumericDocValues]) => {
+      if (n) w.write(rf :+ "Freq" :+ "Explanation" :+ "TermNorms")
+      else w.write(rf :+ "Freq")
+      doSearch(q, rf, (doc: Int, d: Document, scorer: Scorer, we: Weight, context: LeafReaderContext, terms: HashSet[Term]) => {
         if (scorer.score().toInt>=mf) {
           if (n)
-            w.write(rf.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString :+ norms.foldLeft(0)((c,n) => c+sim.decodeDocLen(n.get(doc))).toString :+ we.explain(context, doc).toString :+ (f.zip(norms).map(t => t._1+":"+sim.decodeDocLen(t._2.get(doc))).mkString(";"))  :+ (terms.map(t => t.field+":"+t.text+":"+ir.docFreq(t)+":"+ir.totalTermFreq(t)).mkString(";")))
+            w.write(rf.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString :+ we.explain(context, doc).toString :+ (terms.map(t => t.field+":"+t.text+":"+dir.docFreq(t)+":"+dir.totalTermFreq(t)).mkString(";")))
           else 
-            w.write(rf.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString :+ norms.foldLeft(0)((c,n) => c+sim.decodeDocLen(n.get(doc))).toString)
+            w.write(rf.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString)
         }
       })
       w.close()
     }).as("text/csv")
   }
  
-  def doSearch(q: String, f: Seq[String], rf: Seq[String], collector: (Int,Document,Scorer,Weight,LeafReaderContext,HashSet[Term],Seq[NumericDocValues]) => Unit) {
-    val pq = new MultiFieldQueryParser(f.toArray, analyzer).parse(q).rewrite(ir)
+  def doSearch(q: String, rf: Seq[String], collector: (Int,Document,Scorer,Weight,LeafReaderContext,HashSet[Term]) => Unit) {
+    val pq = dqp.parse(q).rewrite(dir)
     val fs = new java.util.HashSet[String]
     for (s<-rf) fs.add(s)
-    val we = pq.createWeight(is, true)
+    val we = pq.createWeight(dis, true)
     val terms = new HashSet[Term]
     we.extractTerms(terms)
 
-    is.search(pq, new SimpleCollector() {
+    dis.search(pq, new SimpleCollector() {
     
       override def needsScores: Boolean = true
       var scorer: Scorer = null
       var context: LeafReaderContext = null
-      var norms: Seq[NumericDocValues] = null
 
       override def setScorer(scorer: Scorer) {this.scorer=scorer}
 
       override def collect(doc: Int) {
-        val d = is.doc(context.docBase+doc, fs)
-        collector(doc,d,scorer,we,context,terms,norms)
+        val d = dis.doc(context.docBase+doc, fs)
+        collector(doc,d,scorer,we,context,terms)
       }
 
       override def doSetNextReader(context: LeafReaderContext) = {
         this.context = context
-        this.norms = f.map(f => context.reader.getNormValues(f))
       }
     })
     
