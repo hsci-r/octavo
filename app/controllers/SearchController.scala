@@ -121,7 +121,7 @@ class SearchController @Inject() extends Controller {
     }
     ts.end()
     ts.close()
-    val termMaps = parts.map(_ => new HashMap[String,Long]()).toSeq
+    val termMaps = parts.map(_ => new HashMap[String,Long]().withDefaultValue(0l)).toSeq
     for (((so,qt),termMap) <- parts.zip(termMaps); f <- f) {
       val as = new AttributeSource()
       val t = new Term(f,qt)
@@ -129,7 +129,7 @@ class SearchController @Inject() extends Controller {
         val fte = new FuzzyTermsEnum(terms,as,t,d,cp,transpose)
         var br = fte.next()
         while (br!=null) {
-          termMap.put(br.utf8ToString, termMap.getOrElse(br.utf8ToString, 0l) + fte.docFreq)
+          termMap(br.utf8ToString) += fte.docFreq
           br = fte.next()
         }
       }
