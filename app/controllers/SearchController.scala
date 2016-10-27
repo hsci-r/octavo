@@ -66,6 +66,10 @@ import org.apache.lucene.document.IntPoint
 import scala.util.Try
 import org.apache.lucene.analysis.core.KeywordAnalyzer
 import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper
+import com.koloboke.collect.map.hash.HashObjIntMaps
+import com.koloboke.collect.map.hash.HashObjIntMap
+import com.koloboke.collect.map.ObjIntMap
+import java.util.function.ObjIntConsumer
 
 /**
  * This controller creates an `Action` to handle HTTP requests to the
@@ -194,9 +198,13 @@ class SearchController @Inject() extends Controller {
      def compare(x: (String,Double), y: (String,Double)) = y._2 compare x._2
    }
   
-  def buildTermVector(is: IndexSearcher, q: Query, mf: Int, mtl: Int): Map[String,Int] = {
-   val cv = new HashMap[String,Int].withDefaultValue(-mf)
+  var lasttime = 0
+  
+  def buildTermVector(is: IndexSearcher, q: Query, mtl: Int): ObjIntMap[String] = {
+   val cv = HashObjIntMaps.getDefaultFactory[String].withNullKeyAllowed(false).newUpdatableMap[String]() 
    var t = 0
+   var t2 = 0
+   Logger.info("start search:"+q)
    is.search(q, new SimpleCollector() {
       override def needsScores: Boolean = false
       var context: LeafReaderContext = null
@@ -207,9 +215,10 @@ class SearchController @Inject() extends Controller {
         val tvt = tv.iterator()
         var term = tvt.next()
         while (term!=null) {
+          t2+=1
           val ts = term.utf8ToString
           if (ts.length>=mtl)
-          cv(ts) += tvt.docFreq
+            cv.addValue(ts, tvt.docFreq)
           term = tvt.next()
         }
       }
@@ -217,14 +226,15 @@ class SearchController @Inject() extends Controller {
         this.context = context
       }
     })
-    println(q+":"+t)
-    cv.toMap
+    Logger.info(q+":"+t+":"+cv.size+":"+t2)
+    cv
   }
   
   def collectTermVector(is: IndexSearcher, q: Query, mf: Int, mtl: Int, l: Int): Map[String,Double] = {
     val maxHeap = PriorityQueue.empty[(String,Double)](StringDoubleOrder)
     var total = 0
-    for ((term,freq) <- buildTermVector(is,q,mf,mtl); if freq>=0) {
+    Logger.info("start heap building:"+q)
+    for ((term,freq) <- buildTermVector(is,q,mtl); if freq>=mf) {
       val score = (freq + mf).toDouble/is.getIndexReader.docFreq(new Term("content",term))
       total+=1
       if (total<=l) 
@@ -234,50 +244,57 @@ class SearchController @Inject() extends Controller {
         maxHeap += ((term,score))
       }
     }
+    Logger.info("end heap building:"+q)
     maxHeap.toMap
   }
   
-  def jaccardSimilarity(x: Map[String,Int], y: Map[String,Int]): Double = {
+  def jaccardSimilarity(x: ObjIntMap[String], y: ObjIntMap[String]): Double = {
     var nom = 0
     var denom = 0
     for (key <- x.keySet ++ y.keySet) {
-      nom+=math.min(x.getOrElse(key,0),y.getOrElse(key,0))
-      denom+=math.max(x.getOrElse(key,0),y.getOrElse(key,0))
+      nom+=math.min(x.getOrDefault(key,0),y.getOrDefault(key,0))
+      denom+=math.max(x.getOrDefault(key,0),y.getOrDefault(key,0))
     }
     return nom.toDouble/denom
   }
   
-  def diceSimilarity(x: Map[String,Int], y: Map[String,Int]): Double = {
+  def diceSimilarity(x: ObjIntMap[String], y: ObjIntMap[String]): Double = {
     var nom = 0
     var denom = 0
     for (key <- x.keySet ++ y.keySet) {
-      nom+=math.min(x.getOrElse(key,0),y.getOrElse(key,0))
-      denom+=x.getOrElse(key,0)+y.getOrElse(key,0)
+      nom+=math.min(x.getOrDefault(key,0),y.getOrDefault(key,0))
+      denom+=x.getOrDefault(key,0)+y.getOrDefault(key,0)
     }
     return (nom*2).toDouble/denom
   }
   
-  def cosineSimilarity(t1: Map[String, Int], t2: Map[String, Int]): Double = {
+  def cosineSimilarity(t1: ObjIntMap[String], t2: ObjIntMap[String]): Double = {
      //word, t1 freq, t2 freq
      val m = scala.collection.mutable.HashMap[String, (Int, Int)]()
 
-     val sum1 = t1.foldLeft(0d) {case (sum, (word, freq)) =>
-         m += word ->(freq, 0)
-         sum + freq
-     }
-
-     val sum2 = t2.foldLeft(0d) {case (sum, (word, freq)) =>
+     var sum1 = 0 
+     t1.forEach(new ObjIntConsumer[String] {
+       override def accept(word: String, freq: Int): Unit = {
+         m += word -> (freq, 0)
+         sum1 += freq
+       }
+       
+     })
+     var sum2 = 0
+     t2.forEach(new ObjIntConsumer[String] {
+       override def accept(word: String, freq: Int): Unit = {
          m.get(word) match {
              case Some((freq1, _)) => m += word ->(freq1, freq)
              case None => m += word ->(0, freq)
          }
-         sum + freq
-     }
+         sum2 += freq
+       }
+     })
 
      val (p1, p2, p3) = m.foldLeft((0d, 0d, 0d)) {case ((s1, s2, s3), e) =>
          val fs = e._2
-         val f1 = fs._1 / sum1
-         val f2 = fs._2 / sum2
+         val f1 = fs._1.toDouble / sum1
+         val f2 = fs._2.toDouble / sum2
          (s1 + f1 * f2, s2 + f1 * f1, s3 + f2 * f2)
      }
 
@@ -287,46 +304,46 @@ class SearchController @Inject() extends Controller {
 
 
 
-  def collectTermVector2(is: IndexSearcher, q: Query, mf: Int, mtl: Int, l: Int): (Map[String,Double],Map[String,Double],Map[String,Double]) = {
+  def collectTermVector2(is: IndexSearcher, q: Query, mf: Int, mtl: Int, l: Int): (Map[String,Double],Map[String,Double]) = {
     val tv = buildTermVector(is,q,0,mtl)
     println("tv:"+tv.size)
-    val tvm = new HashMap[String,Map[String,Int]] // tvs for all terms in the tv of the query
+    val tvm = new HashMap[String,ObjIntMap[String]] // tvs for all terms in the tv of the query
     for ((term,freq) <- tv;if freq>=mf)
       tvm(term) = buildTermVector(is,new TermQuery(new Term("content",term)),0,mtl)
     println("tvm:"+tvm.size)
-    val tvm2 = new HashMap[String,Map[String,Int]]
+    val tvm2 = new HashMap[String,ObjIntMap[String]]
     for ((term,tv) <- tvm; (term2,freq) <- tv; if freq>=mf && !tvm2.contains(term2))
       tvm2(term2)=buildTermVector(is, new BooleanQuery.Builder().add(q, Occur.MUST_NOT).add(new TermQuery(new Term("content",term2)),Occur.MUST).setDisableCoord(true).build(),0,mtl)
     println("tvm2:"+tvm2.size)
     val cmaxHeap = PriorityQueue.empty[(String,Double)](StringDoubleOrder)
     val dmaxHeap = PriorityQueue.empty[(String,Double)](StringDoubleOrder)
-    val jmaxHeap = PriorityQueue.empty[(String,Double)](StringDoubleOrder)
+//    val jmaxHeap = PriorityQueue.empty[(String,Double)](StringDoubleOrder)
     var total = 0
     for ((term,otv) <- tvm2;if (!otv.isEmpty)) {
       val cscore = cosineSimilarity(tv,otv)
-      val jscore = jaccardSimilarity(tv,otv)
+//      val jscore = jaccardSimilarity(tv,otv)
       val dscore = diceSimilarity(tv,otv)
       total+=1
       if (total<=l) { 
         cmaxHeap += ((term,cscore))
-        jmaxHeap += ((term,jscore))
+//        jmaxHeap += ((term,jscore))
         dmaxHeap += ((term,dscore))
       } else {
         if (cmaxHeap.head._2<cscore) {
           cmaxHeap.dequeue()
           cmaxHeap += ((term,cscore))
         }
-        if (jmaxHeap.head._2<jscore) {
+/*        if (jmaxHeap.head._2<jscore) {
           jmaxHeap.dequeue()
           jmaxHeap += ((term,jscore))
-        }
+        } */
         if (dmaxHeap.head._2<dscore) {
           dmaxHeap.dequeue()
           dmaxHeap += ((term,dscore))
         }
       }
     }
-    (cmaxHeap.toMap,jmaxHeap.toMap,dmaxHeap.toMap)
+    (cmaxHeap.toMap,dmaxHeap.toMap)
   }
 
   def collocations(qg: Option[String], mfg: Int, mtlg: Int, lg: Int, p: Option[String]) = Action { implicit request =>
@@ -360,8 +377,8 @@ class SearchController @Inject() extends Controller {
       data.get("l").map(_(0)).foreach(bl => l = bl.toInt)
     }
     val pq = dqp.parse(q) 
-    val (c,j,d) = collectTermVector2(pis,pq,mf,mtl,l)
-    val json = Json.toJson(Map("cosine"->c,"jaccard"->j,"dice"->d)) 
+    val (c,d) = collectTermVector2(pis,pq,mf,mtl,l)
+    val json = Json.toJson(Map("cosine"->c,"dice"->d)) 
     if (p.isDefined && (p.get=="" || p.get.toBoolean))
       Ok(Json.prettyPrint(json))
     else 

@@ -11,7 +11,10 @@ libraryDependencies ++= Seq(
   ws,
   filters,
   "org.apache.lucene" % "lucene-analyzers-common" % "6.2.1",
+  "org.apache.lucene" % "lucene-codecs" % "6.2.1",
   "org.apache.lucene" % "lucene-queryparser" % "6.2.1",
+  "com.koloboke" % "koloboke-api-jdk8" % "1.0.0",
+  "com.koloboke" % "koloboke-impl-jdk8" % "1.0.0",
   "com.bizo" %% "mighty-csv" % "0.2"
 )
 
