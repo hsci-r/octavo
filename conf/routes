@@ -3,8 +3,8 @@
 # ~~~~
 
 # An example controller showing a sample home page
-GET     /search                     controllers.SearchController.search(query: Option[String], field: Seq[String], explain:Option[String], minTotalFreq: Int ?= 1)
-GET     /jsearch                    controllers.SearchController.jsearch(query: Option[String], field: Seq[String], limit:Int ?= 10, minTotalFreq: Int ?= 1, pretty: Option[String])
+GET     /search                     controllers.SearchController.search(query: Option[String], field: Seq[String], minTermVectorFreq:Int ?= -1, explain:Option[String], minTermFreq: Int ?= 1)
+GET     /jsearch                    controllers.SearchController.jsearch(query: Option[String], field: Seq[String], limit:Int ?= 10, minTermFreq: Int ?= 1, pretty: Option[String])
 GET		/terms						controllers.SearchController.terms(query: String, level: String ?= "document", maxDistance:Int ?= 2, minCommonPrefix:Int ?= 0, transposeIsSingleEdit:Boolean ?= false)
 GET		/stats						controllers.SearchController.stats(query: String)
 GET		/collocations				controllers.SearchController.collocations(term: Seq[String], limitQuery: Option[String], level: String ?= "paragraph", scaling: String ?= "min", minTotalFreq: Int ?= 2, minFreqInDoc: Int ?= 1, minTermLength: Int ?= 4, limit: Int ?= 20, pretty: Option[String])

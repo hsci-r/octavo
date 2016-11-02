@@ -6,6 +6,8 @@ lazy val root = (project in file(".")).enablePlugins(PlayScala)
 
 scalaVersion := "2.11.7"
 
+resolvers += Resolver.mavenLocal
+
 libraryDependencies ++= Seq(
   cache,
   ws,
@@ -15,6 +17,7 @@ libraryDependencies ++= Seq(
   "org.apache.lucene" % "lucene-queryparser" % "6.2.1",
   "com.koloboke" % "koloboke-api-jdk8" % "1.0.0",
   "com.koloboke" % "koloboke-impl-jdk8" % "1.0.0",
-  "com.bizo" %% "mighty-csv" % "0.2"
+  "com.bizo" %% "mighty-csv" % "0.2",
+  "mdsj" % "mdsj" % "0.2"
 )
 
