@@ -75,6 +75,7 @@ import play.api.libs.json.JsValue
 import org.apache.lucene.document.Field
 import org.apache.lucene.analysis.Analyzer
 import services.Distance
+import mdsj.MDSJ
 
 /**
  * This controller creates an `Action` to handle HTTP requests to the
@@ -125,10 +126,6 @@ class SearchController @Inject() extends Controller {
     a.foldLeft(Seq(Seq.empty[A])) { 
       (acc, next) => acc.flatMap { combo => next.map { num => combo :+ num } } 
     }
-  
-  private object StringDoubleOrder extends Ordering[(String,Double)] {
-    def compare(x: (String,Double), y: (String,Double)) = y._2 compare x._2
-  }
   
   object Level extends Enumeration {
     val DOCUMENT, SECTION, PARAGRAPH = Value
@@ -304,8 +301,10 @@ class SearchController @Inject() extends Controller {
     (docFreq,totalTermFreq,cv)
   }
   
-  private def getBestCollocations(is: IndexSearcher, terms: Seq[String], q: Query, scaling: Scaling.Value, mf: Int, mdf: Int, mtl: Int, l: Int): (Long,Long,Map[String,Double]) = {
-    val maxHeap = PriorityQueue.empty[(String,Double)](StringDoubleOrder)
+  private def getBestCollocations(is: IndexSearcher, terms: Seq[String], q: Query, scaling: Scaling.Value, mf: Int, mdf: Int, mtl: Int, l: Int): (Long,Long,Map[String,(ObjIntMap[String],Double)]) = {
+    val maxHeap = PriorityQueue.empty[(String,(ObjIntMap[String],Double))](new Ordering[(String,(ObjIntMap[String],Double))] {
+      override def compare(x: (String,ObjIntMap[String],Double), y: (String,ObjIntMap[String],Double)) = y._3 compare x._3
+    })
     var total = 0
     Logger.info("start heap building:"+q)
     val (docFreq,totalTermFreq,cv) = getAggregateContextVectorForTerms(is,terms,q,scaling,mdf,mtl)
@@ -313,10 +312,10 @@ class SearchController @Inject() extends Controller {
       val score = (freq + mf).toDouble/is.getIndexReader.docFreq(new Term("content",term))
       total+=1
       if (total<=l) 
-        maxHeap += ((term,score))
-      else if (maxHeap.head._2<score) {
+        maxHeap += ((term,(cv,score)))
+      else if (maxHeap.head._2._2<score) {
         maxHeap.dequeue()
-        maxHeap += ((term,score))
+        maxHeap += ((term,(cv,score)))
       }
     }
     Logger.info("end heap building:"+q)
@@ -324,22 +323,30 @@ class SearchController @Inject() extends Controller {
   }
 
   // get collocations for a term query (+ a possible limit query), for defining a topic
-  def collocations(termsg: Seq[String], lqg: Option[String], levelg: String, scalingg: String, mfg: Int, mdfg: Int, mtlg: Int, lg: Int, p: Option[String]) = Action { implicit request =>
-    var terms: Seq[String] = termsg
-    var lq: Option[String] = lqg
-    var scaling: Scaling.Value = Scaling.withName(scalingg.toUpperCase)
-    var level: Level.Value = Level.withName(levelg.toUpperCase)
-    var mf: Int = mfg
-    var mdf: Int = mdfg
-    var mtl: Int = mtlg
-    var l: Int = lg
-    var oqb = new BooleanQuery.Builder().setDisableCoord(true)
-    lq.foreach(lq => oqb.add(dqp.parse(lq), Occur.MUST))
-    var qb = new BooleanQuery.Builder().setDisableCoord(true)
-    val pq = oqb.add(terms.foldLeft(qb)((q, term) => q.add(new TermQuery(new Term("content", term)), Occur.SHOULD)).build, Occur.MUST).build
-    val (docFreq, totalTermFreq, collocations) = getBestCollocations(Level.searcher(level),terms,pq,scaling,mf,mdf,mtl,l)
-    val json = Json.toJson(Map("docFreq"->Json.toJson(docFreq),"totalTermFreq"->Json.toJson(totalTermFreq),"collocations"->Json.toJson(collocations)))
-    if (p.isDefined && (p.get=="" || p.get.toBoolean))
+  def collocations() = Action { implicit request =>
+    val p = new TermVectorQueryParameters
+    val (docFreq, totalTermFreq, collocations) = getBestCollocations(Level.searcher(p.level),p.terms,p.combinedQuery,p.scaling,p.minTotalFreq,p.minFreqInDoc,p.minTermLength,p.limit)
+    val json = Json.toJson(Map("docFreq"->Json.toJson(docFreq),"totalTermFreq"->Json.toJson(totalTermFreq),"collocations"->(if (p.mdsDimensions>0) {
+      val keys = new HashSet[String] 
+      collocations.values.foreach(_._1.keySet.asScala.foreach(keys += _))
+      val keySeq = keys.toSeq
+      val matrix = new Array[Array[Double]](collocations.size)
+      collocations.values.zipWithIndex.foreach{ case ((c,_),i) => 
+        matrix(i)=new Array[Double](keySeq.length)
+        keySeq.zipWithIndex.foreach{ case (key,i2) => matrix(i)(i2) = c.getOrDefault(key, 0) }
+      }
+      /* normalize values to be between 0 and 1 */
+      for (i <- 0 until keySeq.length) {
+        val max = matrix.view.map(_(i)).max
+        matrix.foreach(r => r(i)= r(i) / max)
+      }
+      // TODO: apply docFreq scaling?
+      val mdsMatrix = MDSJ.stressMinimization(matrix, p.mdsDimensions)
+      Json.toJson(collocations.zipWithIndex.map{ case ((term,(cv, weight)),i) => (term,Json.toJson(Map("termVector"->Json.toJson(mdsMatrix(i)),"weight"->Json.toJson(weight))))})
+    } else if (p.minTermVectorFreq>=0) {
+      Json.toJson(collocations.map{ case (term,(cv, weight)) => (term,weight)})
+    } else Json.toJson(collocations.map{ case (term,(cv, weight)) => (term,weight)}))))
+    if (p.pretty)
       Ok(Json.prettyPrint(json))
     else 
       Ok(json)
@@ -454,8 +461,14 @@ class SearchController @Inject() extends Controller {
       tvm2(term2)= tv
     }
     println("tvm2:"+tvm2.size)
-    val cmaxHeap = PriorityQueue.empty[(String,Double)](StringDoubleOrder)
-    val dmaxHeap = PriorityQueue.empty[(String,Double)](StringDoubleOrder)
+    val maxHeap = PriorityQueue.empty[(String,(ObjIntMap[String],Double))](new Ordering[(String,(ObjIntMap[String],Double))] {
+      override def compare(x: (String,ObjIntMap[String],Double), y: (String,ObjIntMap[String],Double)) = y._3 compare x._3
+    })
+    val ordering = new Ordering[(String,Double)] {
+      override def compare(x: (String,Double), y: (String,Double)) = y._2 compare x._2
+    }
+    val cmaxHeap = PriorityQueue.empty[(String,Double)](ordering)
+    val dmaxHeap = PriorityQueue.empty[(String,Double)](ordering)
     var total = 0
     for ((term,otv) <- tvm2;if (!otv.isEmpty)) {
       val cscore = Distance.cosineSimilarity(tv,otv)
@@ -496,8 +509,19 @@ class SearchController @Inject() extends Controller {
     else 
       Ok(json)
   }
+  
+  private class GeneralParameters(implicit request: Request[AnyContent]) {
+    private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    val level: Level.Value = p.get("level").map(v => Level.withName(v(0).toUpperCase)).getOrElse(Level.PARAGRAPH)
+    val pretty: Boolean = p.get("pretty").exists(v => v(0)=="" || v(0).toBoolean)
+    val limit: Int = p.get("limit").map(_(0).toInt).getOrElse(20)
+    /** minimum term frequency for term to be included in returned term vector */
+    val minTermVectorFreq: Int = p.get("minTermVectorFreq").map(_(0).toInt).getOrElse(-1)
+    /** amount of dimensions for dimensionally reduced term vector coordinates */
+    val mdsDimensions: Int = p.get("mdsDimensions").map(_(0).toInt).getOrElse(-1)    
+  }
 
-  private class TermVectorQueryParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) {
+  private class TermVectorQueryParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) extends GeneralParameters {
     private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val terms: Seq[String] = p.get(prefix+"terms"+suffix).getOrElse(Seq.empty)
     val termQuery: Query = {
@@ -507,25 +531,25 @@ class SearchController @Inject() extends Controller {
     }
     val limitQuery: Option[Query] = p.get(prefix+"limitQuery").map(v => dqp.parse(v(0)))
     val combinedQuery: Query = if (!limitQuery.isDefined) termQuery else new BooleanQuery.Builder().add(termQuery, Occur.MUST).add(limitQuery.get, Occur.MUST).build
-    val level: Level.Value = p.get(prefix+"level"+suffix).map(v => Level.withName(v(0).toUpperCase)).getOrElse(Level.PARAGRAPH)
+    
     val scaling: Scaling.Value = p.get(prefix+"scaling"+suffix).map(v => Scaling.withName(v(0).toUpperCase)).getOrElse(Scaling.MIN)
+    /** minimum total frequency of term to filter resulting term vector */
     val minTotalFreq: Int = p.get(prefix+"minTotalFreq"+suffix).map(_(0).toInt).getOrElse(2)
+    /** minimum per document frequency of term to be added to the term vector */
     val minFreqInDoc: Int = p.get(prefix+"minFreqInDoc"+suffix).map(_(0).toInt).getOrElse(1)
+    /** minimum length of term to be included in the term vector */
     val minTermLength: Int = p.get(prefix+"minTermLength"+suffix).map(_(0).toInt).getOrElse(4)
+    
  }
   
-  private class QueryParameters(implicit request: Request[AnyContent]) {
+  private class QueryParameters(implicit request: Request[AnyContent]) extends GeneralParameters {
     private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val query: Query = dqp.parse(p.get("query").get(0))
     val fields: Seq[String] = p.get("fields").getOrElse(Seq.empty)
     val level: Level.Value = p.get("level").map(v => Level.withName(v(0).toUpperCase)).getOrElse(Level.PARAGRAPH)
+    /** minimum query match frequency for doc to be included in query results */
     val minFreq: Int = p.get("minFreq").map(_(0).toInt).getOrElse(1)
-    val limit: Int = p.get("limit").map(_(0).toInt).getOrElse(20)
     val termVectorQuery: TermVectorQueryParameters = new TermVectorQueryParameters("compareTermVector_")
-    val minTermVectorFreq: Int = p.get("minTermVectorFreq").map(_(0).toInt).getOrElse(-1)
-    // amount of dimensions for dimensionally reduced term vector coordinates
-    val mdsDimensions: Int = p.get("mdsDimensions").map(_(0).toInt).getOrElse(-1)
-    val pretty: Boolean = p.get("pretty").exists(v => v(0)=="" || v(0).toBoolean)
   }
   
   def jsearch() = Action { implicit request =>
