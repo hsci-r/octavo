@@ -185,11 +185,12 @@ class SearchController @Inject() extends Controller {
   }
   
   // get terms lexically similar to a query term - used in topic definition to get past OCR errors
-  def similarTerms(q: String, levelg: String, d:Int, cp:Int,transpose : Boolean) = Action {
+  def similarTerms(q: String, levelg: String, maxEditDistance:Int, minCommonPrefix:Int,transposeIsSingleEditg : Option[String]) = Action {
     val ts = analyzer.tokenStream("content", q)
     val ta = ts.addAttribute(classOf[CharTermAttribute])
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
     val level = Level.withName(levelg.toUpperCase)
+    val transposeIsSingleEdit: Boolean = transposeIsSingleEditg.exists(v => v=="" || v.toBoolean)
     ts.reset()
     val parts = new ArrayBuffer[(Int,String)]
     while (ts.incrementToken()) {
@@ -202,7 +203,7 @@ class SearchController @Inject() extends Controller {
       val as = new AttributeSource()
       val t = new Term("content",qt)
       for (lrc <- Level.reader(level).leaves.asScala; terms = lrc.reader.terms("content"); if (terms!=null)) {
-        val fte = new FuzzyTermsEnum(terms,as,t,d,cp,transpose)
+        val fte = new FuzzyTermsEnum(terms,as,t,maxEditDistance,minCommonPrefix,transposeIsSingleEdit)
         var br = fte.next()
         while (br!=null) {
           termMap(br.utf8ToString) += fte.docFreq
@@ -303,7 +304,7 @@ class SearchController @Inject() extends Controller {
   
   private def getBestCollocations(is: IndexSearcher, terms: Seq[String], q: Query, scaling: Scaling.Value, mf: Int, mdf: Int, mtl: Int, l: Int): (Long,Long,Map[String,(ObjIntMap[String],Double)]) = {
     val maxHeap = PriorityQueue.empty[(String,(ObjIntMap[String],Double))](new Ordering[(String,(ObjIntMap[String],Double))] {
-      override def compare(x: (String,ObjIntMap[String],Double), y: (String,ObjIntMap[String],Double)) = y._3 compare x._3
+      override def compare(x: (String,(ObjIntMap[String],Double)), y: (String,(ObjIntMap[String],Double))) = y._2._2 compare x._2._2
     })
     var total = 0
     Logger.info("start heap building:"+q)
@@ -550,6 +551,8 @@ class SearchController @Inject() extends Controller {
     /** minimum query match frequency for doc to be included in query results */
     val minFreq: Int = p.get("minFreq").map(_(0).toInt).getOrElse(1)
     val termVectorQuery: TermVectorQueryParameters = new TermVectorQueryParameters("compareTermVector_")
+    /** return explanations and norms in search */
+    val returnNorms: Boolean = p.get("returnNorms").exists(v => v(0)=="" || v(0).toBoolean)
   }
   
   def jsearch() = Action { implicit request =>
@@ -589,41 +592,29 @@ class SearchController @Inject() extends Controller {
       Ok(json)
   }
   
-  def search(qg: Option[String], fg: Seq[String], levelg: String, tvg: Int, ng: Option[String], mfg: Int) = Action { implicit request => 
-    var q: String = qg.getOrElse(null)
-    var f: Seq[String] = fg
-    var mf: Int = mfg
-    var n: Boolean = ng.isDefined && (ng.get=="" || ng.get.toBoolean)
-    var tv: Int = tvg
-    var level: Level.Value = Level.withName(levelg.toUpperCase)
-    request.body.asFormUrlEncoded.foreach { data =>
-      q = data.get("q").map(_(0)).orElse(qg).get
-      data.get("rf").foreach(brf => f = f ++ brf)
-      data.get("f").map(_(0)).foreach(bmf => mf = bmf.toInt)
-      data.get("n").map(_(0)).foreach(bn => n = bn=="" || bn.toBoolean)
-      data.get("tv").map(_(0)).foreach(btv => tv = btv.toInt)
-    }
+  def search() = Action { implicit request => 
+    val qp = new QueryParameters
     Ok.chunked(Enumerator.outputStream { os => 
       val w = CSVWriter(os)
-      var headers = f :+ "Freq"
-      if (tv != -1) headers = headers :+ "Term Vector"      
-      if (n) headers = headers :+ "Explanation" :+ "TermNorms"
+      var headers = qp.fields :+ "Freq"
+      if (qp.minTermVectorFreq != -1) headers = headers :+ "Term Vector"      
+      if (qp.returnNorms) headers = headers :+ "Explanation" :+ "TermNorms"
       w.write(headers)
-      doSearch(Level.searcher(level), dqp.parse(q), f, (doc: Int, d: Document, scorer: Scorer, we: Weight, context: LeafReaderContext, terms: HashSet[Term]) => {
-        if (scorer.score().toInt>=mf) {
-          var row = f.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString
-          if (tv != -1) {
+      doSearch(Level.searcher(qp.level), qp.query, qp.fields, (doc: Int, d: Document, scorer: Scorer, we: Weight, context: LeafReaderContext, terms: HashSet[Term]) => {
+        if (scorer.score().toInt>=qp.minFreq) {
+          var row = qp.fields.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString
+          if (qp.minTermVectorFreq != -1) {
             val cv = HashObjIntMaps.getDefaultFactory[String].withNullKeyAllowed(false).newUpdatableMap[String]() 
             val tvt = context.reader.getTermVector(doc, "content").iterator()
             var term = tvt.next()
             while (term!=null) {
-              if (tvt.totalTermFreq >= tv)
+              if (tvt.totalTermFreq >= qp.minTermVectorFreq)
                 cv.addValue(term.utf8ToString, tvt.totalTermFreq.toInt)
               term = tvt.next()
             }
             row = row :+ cv.asScala.map(p => p._1+':'+p._2).mkString(";")
           }
-          if (n) row = row :+ we.explain(context, doc).toString :+ (terms.map(t => t.field+":"+t.text+":"+dir.docFreq(t)+":"+dir.totalTermFreq(t)).mkString(";"))
+          if (qp.returnNorms) row = row :+ we.explain(context, doc).toString :+ (terms.map(t => t.field+":"+t.text+":"+dir.docFreq(t)+":"+dir.totalTermFreq(t)).mkString(";"))
           w.write(row)
         }
       })
