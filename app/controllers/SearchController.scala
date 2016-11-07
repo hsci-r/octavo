@@ -463,7 +463,7 @@ class SearchController @Inject() extends Controller {
     }
     println("tvm2:"+tvm2.size)
     val maxHeap = PriorityQueue.empty[(String,(ObjIntMap[String],Double))](new Ordering[(String,(ObjIntMap[String],Double))] {
-      override def compare(x: (String,ObjIntMap[String],Double), y: (String,ObjIntMap[String],Double)) = y._3 compare x._3
+      override def compare(x: (String,(ObjIntMap[String],Double)), y: (String,(ObjIntMap[String],Double))) = y._2._2 compare x._2._2
     })
     val ordering = new Ordering[(String,Double)] {
       override def compare(x: (String,Double), y: (String,Double)) = y._2 compare x._2
@@ -547,7 +547,6 @@ class SearchController @Inject() extends Controller {
     private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val query: Query = dqp.parse(p.get("query").get(0))
     val fields: Seq[String] = p.get("fields").getOrElse(Seq.empty)
-    val level: Level.Value = p.get("level").map(v => Level.withName(v(0).toUpperCase)).getOrElse(Level.PARAGRAPH)
     /** minimum query match frequency for doc to be included in query results */
     val minFreq: Int = p.get("minFreq").map(_(0).toInt).getOrElse(1)
     val termVectorQuery: TermVectorQueryParameters = new TermVectorQueryParameters("compareTermVector_")
