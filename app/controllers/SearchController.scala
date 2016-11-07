@@ -345,7 +345,9 @@ class SearchController @Inject() extends Controller {
       val mdsMatrix = MDSJ.stressMinimization(matrix, p.mdsDimensions)
       Json.toJson(collocations.zipWithIndex.map{ case ((term,(cv, weight)),i) => (term,Json.toJson(Map("termVector"->Json.toJson(mdsMatrix(i)),"weight"->Json.toJson(weight))))})
     } else if (p.minTermVectorFreq>=0) {
-      Json.toJson(collocations.map{ case (term,(cv, weight)) => (term,weight)})
+      Json.toJson(collocations.map{ case (term,(cv, weight)) =>
+        (term,Json.toJson(Map("termVector"->Json.toJson(cv.asScala.toMap.map(p => (p._1,p._2.toInt))),"weight"->Json.toJson(weight))))
+      })
     } else Json.toJson(collocations.map{ case (term,(cv, weight)) => (term,weight)}))))
     if (p.pretty)
       Ok(Json.prettyPrint(json))
@@ -524,7 +526,7 @@ class SearchController @Inject() extends Controller {
 
   private class TermVectorQueryParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) extends GeneralParameters {
     private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    val terms: Seq[String] = p.get(prefix+"terms"+suffix).getOrElse(Seq.empty)
+    val terms: Seq[String] = p.get(prefix+"term"+suffix).getOrElse(Seq.empty)
     val termQuery: Query = {
       val qb = new BooleanQuery.Builder
       terms.foreach(term => qb.add(new TermQuery(new Term("content", term)), Occur.SHOULD))
@@ -546,7 +548,7 @@ class SearchController @Inject() extends Controller {
   private class QueryParameters(implicit request: Request[AnyContent]) extends GeneralParameters {
     private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val query: Query = dqp.parse(p.get("query").get(0))
-    val fields: Seq[String] = p.get("fields").getOrElse(Seq.empty)
+    val fields: Seq[String] = p.get("field").getOrElse(Seq.empty)
     /** minimum query match frequency for doc to be included in query results */
     val minFreq: Int = p.get("minFreq").map(_(0).toInt).getOrElse(1)
     val termVectorQuery: TermVectorQueryParameters = new TermVectorQueryParameters("compareTermVector_")
