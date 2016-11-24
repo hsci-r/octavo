@@ -1,5 +1,6 @@
 package controllers
 
+import enumeratum._
 import javax.inject._
 import play.api._
 import play.api.mvc._
@@ -76,6 +77,20 @@ import org.apache.lucene.document.Field
 import org.apache.lucene.analysis.Analyzer
 import services.Distance
 import mdsj.MDSJ
+import scala.collection.immutable.AbstractMap
+import org.apache.lucene.store.MMapDirectory
+import com.koloboke.collect.map.IntIntMap
+import com.koloboke.collect.map.hash.HashIntIntMaps
+import org.apache.lucene.codecs.compressing.OrdTermVectorsReader.TVTermsEnum
+import com.koloboke.collect.map.IntDoubleMap
+import com.koloboke.collect.map.hash.HashLongIntMaps
+import com.koloboke.collect.map.LongIntMap
+import com.koloboke.function.LongIntConsumer
+import com.koloboke.collect.map.hash.HashLongDoubleMaps
+import com.koloboke.collect.map.LongDoubleMap
+import com.koloboke.function.LongDoubleConsumer
+import com.koloboke.collect.map.hash.HashLongObjMaps
+import scala.collection.AbstractIterable
 
 /**
  * This controller creates an `Action` to handle HTTP requests to the
@@ -83,16 +98,9 @@ import mdsj.MDSJ
  */
 @Singleton
 class SearchController @Inject() extends Controller {
+  
+  BooleanQuery.setMaxClauseCount(Int.MaxValue)
 
-  BooleanQuery.setMaxClauseCount(Integer.MAX_VALUE)
-  
-  private val dir = DirectoryReader.open(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/dindex")))
-  private val dis = new IndexSearcher(dir)
-  private val hir = DirectoryReader.open(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/hindex")))
-  private val his = new IndexSearcher(hir)
-  private val pir = DirectoryReader.open(FSDirectory.open(FileSystems.getDefault().getPath("/srv/ecco/pindex")))
-  private val pis = new IndexSearcher(pir)
-  
   private val sim = new SimilarityBase() {
     override def score(stats: BasicStats, freq: Float, docLen: Float): Float = {
       return freq
@@ -104,15 +112,34 @@ class SearchController @Inject() extends Controller {
       ""
     }
   }
-  dis.setSimilarity(sim)
+
+  private val dir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath("/srv/ecco/dindex")))
+  private val dis = {
+    val is = new IndexSearcher(dir)
+    is.setSimilarity(sim)
+    is
+  }
+  private val hir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath("/srv/ecco/hindex")))
+  private val his = {
+    val is = new IndexSearcher(hir)
+    is.setSimilarity(sim)
+    is
+  }
+  private val pir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath("/srv/ecco/pindex")))
+  private val pis = {
+    val is = new IndexSearcher(pir)
+    is.setSimilarity(sim)
+    is
+  }
+  
   private val sa = new StandardAnalyzer()
   private val analyzer = new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),Map[String,Analyzer]("content"->sa,"notes"->sa,"fullTitle"->sa).asJava)
   private val dqp = new QueryParser("content",analyzer) {
     override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
       field match {
         case "pubDate" | "contentTokens" | "length" | "totalPages" =>
-          val l = Try(if (startInclusive) part1.toInt else part1.toInt + 1).getOrElse(Integer.MIN_VALUE)
-          val h = Try(if (endInclusive) part2.toInt else part2.toInt - 1).getOrElse(Integer.MAX_VALUE)
+          val l = Try(if (startInclusive) part1.toInt else part1.toInt + 1).getOrElse(Int.MinValue)
+          val h = Try(if (endInclusive) part2.toInt else part2.toInt - 1).getOrElse(Int.MaxValue)
           IntPoint.newRangeQuery(field, l, h)
         case _ => super.getRangeQuery(field,part1,part2,startInclusive,endInclusive) 
       }
@@ -122,31 +149,77 @@ class SearchController @Inject() extends Controller {
   private def combine[A](a: Seq[A],b: Seq[A]): Seq[Seq[A]] =
     a.zip(b).foldLeft(Seq.empty[Seq[A]]) { (x,s) => if (x.isEmpty) Seq(Seq(s._1),Seq(s._2)) else (for (a<-x) yield Seq(a:+s._1,a:+s._2)).flatten }
 
-  private def permutations[A](a: Seq[Seq[A]]): Seq[Seq[A]] =
-    a.foldLeft(Seq(Seq.empty[A])) { 
-      (acc, next) => acc.flatMap { combo => next.map { num => combo :+ num } } 
-    }
-  
-  object Level extends Enumeration {
-    val DOCUMENT, SECTION, PARAGRAPH = Value
-    def searcher(level: Value): IndexSearcher = {
-      level match {
-        case Level.PARAGRAPH => pis
-        case Level.DOCUMENT => dis
-        case Level.SECTION => his
-      }
-    }
-    def reader(level: Value): IndexReader = {
-      level match {
-        case Level.PARAGRAPH => pir
-        case Level.DOCUMENT => dir
-        case Level.SECTION => hir
-      }
-    }
+  private def permutations[A](a: Seq[Seq[A]]): Seq[Seq[A]] = a.foldLeft(Seq(Seq.empty[A])) {
+    (acc, next) => acc.flatMap { combo => next.map { num => combo :+ num } } 
   }
   
-  object Scaling extends Enumeration {
+  sealed abstract class Level(val searcher: IndexSearcher, val reader: IndexReader) extends EnumEntry
+  
+  object Level extends Enum[Level] {
+    val values = findValues
+
+    case object PARAGRAPH extends Level(pis,pir)
+    case object SECTION extends Level(his,hir)
+    case object DOCUMENT extends Level(dis,dir)
+  }
+  
+  sealed trait SumTermVectorScaling extends EnumEntry {
+    def apply(term: Long, freq: Int)(implicit ir: IndexReader): Double
+  }
+  
+  object SumTermVectorScaling extends Enum[SumTermVectorScaling] {
+    case object ABSOLUTE extends SumTermVectorScaling {
+      def apply(term: Long, freq: Int)(implicit ir: IndexReader) = freq.toDouble
+    }
+    case object DF extends SumTermVectorScaling {
+      def apply(term: Long, freq: Int)(implicit ir: IndexReader) = freq.toDouble/df(term)
+    }
+    case object TTF extends SumTermVectorScaling {
+      def apply(term: Long, freq: Int)(implicit ir: IndexReader) = freq.toDouble/ttf(term)
+    }
+
+    val values = findValues
+  }
+  
+  sealed abstract class DistanceMetric extends EnumEntry {
+    def similarity(t1: LongDoubleMap, t2: LongDoubleMap): Double
+    def apply(t1: LongDoubleMap, t2: LongDoubleMap): Double = 1.0 - similarity(t1, t2)
+  }
+  
+  object DistanceMetric extends Enum[DistanceMetric] {
+    case object COSINE extends DistanceMetric {
+      def similarity(t1: LongDoubleMap, t2: LongDoubleMap): Double = Distance.cosineSimilarity(t1, t2)
+    }
+    case object DICE extends DistanceMetric {
+      def similarity(t1: LongDoubleMap, t2: LongDoubleMap): Double = Distance.diceSimilarity(t1, t2)
+    } 
+    case object JACCARD extends DistanceMetric {
+      def similarity(t1: LongDoubleMap, t2: LongDoubleMap): Double = Distance.jaccardSimilarity(t1, t2)
+    }
+    
+    val values = findValues
+  }
+  
+  object LocalTermVectorScaling extends Enumeration {
     val MIN, ABSOLUTE, FLAT = Value
+  }
+  
+  def df(term: Long)(implicit ir: IndexReader): Int = {
+     val it = ir.leaves.get(0).reader.terms("content").iterator
+     it.seekExact(term)
+     return it.docFreq
+  }
+
+  def ttf(term: Long)(implicit ir: IndexReader): Long = {
+    val it = ir.leaves.get(0).reader.terms("content").iterator
+    it.seekExact(term)
+    return it.totalTermFreq
+  }
+  
+  def getTerm(term: Long)(implicit ir: IndexReader): String = {
+    val it = ir.leaves.get(0).reader.terms("content").iterator
+    it.seekExact(term)
+    return it.term.utf8ToString
   }
   
   class Stats {
@@ -186,6 +259,7 @@ class SearchController @Inject() extends Controller {
   
   // get terms lexically similar to a query term - used in topic definition to get past OCR errors
   def similarTerms(q: String, levelg: String, maxEditDistance:Int, minCommonPrefix:Int,transposeIsSingleEditg : Option[String]) = Action {
+    Logger.info(s"b:similarTerms(query:$q, level:$levelg, maxEditdistance:$maxEditDistance, minCommonPrefix:$minCommonPrefix, transposeIsSingleEdit:$transposeIsSingleEditg)")
     val ts = analyzer.tokenStream("content", q)
     val ta = ts.addAttribute(classOf[CharTermAttribute])
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
@@ -202,7 +276,7 @@ class SearchController @Inject() extends Controller {
     for (((so,qt),termMap) <- parts.zip(termMaps)) {
       val as = new AttributeSource()
       val t = new Term("content",qt)
-      for (lrc <- Level.reader(level).leaves.asScala; terms = lrc.reader.terms("content"); if (terms!=null)) {
+      for (lrc <- level.reader.leaves.asScala; terms = lrc.reader.terms("content"); if (terms!=null)) {
         val fte = new FuzzyTermsEnum(terms,as,t,maxEditDistance,minCommonPrefix,transposeIsSingleEdit)
         var br = fte.next()
         while (br!=null) {
@@ -213,24 +287,27 @@ class SearchController @Inject() extends Controller {
     }
     if (parts.length==1)
       Ok(Json.toJson(termMaps(0)))
-    val termMap = new HashMap[String, Long]()
-    for (terms <- permutations(termMaps.map(_.keys.toSeq))) {
-      val hc = new TotalHitCountCollector()
-      val bqb = new BooleanQuery.Builder()
-      var position = -1
-      val pqb = new PhraseQuery.Builder()
-      for ((q,o) <- terms.zip(parts.map(_._1))) {
-        position += o
-        pqb.add(new Term("content",q),position)
+    else {
+      val termMap = new HashMap[String, Long]()
+      for (terms <- permutations(termMaps.map(_.keys.toSeq))) {
+        val hc = new TotalHitCountCollector()
+        val bqb = new BooleanQuery.Builder()
+        var position = -1
+        val pqb = new PhraseQuery.Builder()
+        for ((q,o) <- terms.zip(parts.map(_._1))) {
+          position += o
+          pqb.add(new Term("content",q),position)
+        }
+        bqb.add(pqb.build,BooleanClause.Occur.SHOULD)
+        dis.search(bqb.build, hc)
+        if (hc.getTotalHits>0) termMap.put(terms.zip(parts.map(_._1)).map(t => "a " * (t._2 - 1) + t._1 ).mkString(" "),hc.getTotalHits)
       }
-      bqb.add(pqb.build,BooleanClause.Occur.SHOULD)
-      dis.search(bqb.build, hc)
-      if (hc.getTotalHits>0) termMap.put(terms.zip(parts.map(_._1)).map(t => "a " * (t._2 - 1) + t._1 ).mkString(" "),hc.getTotalHits)
+      Ok(Json.toJson(termMap))
     }
-    Ok(Json.toJson(termMap))
   }
 
   def dump() = Action {
+    Logger.info("dump")
     if (dir.hasDeletions()) throw new UnsupportedOperationException("Index should not have deletions!")
     Ok.chunked(Enumerator.outputStream { os => 
       val w = CSVWriter(os)
@@ -260,113 +337,164 @@ class SearchController @Inject() extends Controller {
     }).as("text/csv")
   }
   
-  private def getAggregateContextVectorForTerms(is: IndexSearcher, terms: Seq[String], q: Query, scaling: Scaling.Value, minFreqInDoc: Int, minTermLength: Int): (Long,Long,ObjIntMap[String]) = {
-   val cv = HashObjIntMaps.getDefaultFactory[String].withNullKeyAllowed(false).newUpdatableMap[String]() 
+  private def getUnscaledAggregateContextVectorForTerms(terms: Seq[String], q: Query, ctvp: LocalTermVectorProcessingParameters)(implicit is: IndexSearcher, ir: IndexReader): (Long,Long,LongIntMap) = {
+   val cv = HashLongIntMaps.newUpdatableMap() 
+   var aDocFreq = 0l
    var docFreq = 0l
    var t2 = 0l
    var totalTermFreq = 0l
-   Logger.info("start search:"+q)
    is.search(q, new SimpleCollector() {
       override def needsScores: Boolean = false
       var context: LeafReaderContext = null
 
       override def collect(doc: Int) {
-        docFreq+=1
+        aDocFreq+=1
         val tv = this.context.reader.getTermVector(doc, "content")
         if (tv.size()>10000) println(tv.size())
-        val tvt = tv.iterator()
-        val min = if (scaling!=Scaling.MIN) 0 else terms.foldLeft(0)((f,term) => if (tvt.seekExact(new BytesRef(term))) f+tvt.totalTermFreq.toInt else f)
-        var term = tvt.next()
-        while (term!=null) {
+        val tvt = tv.iterator().asInstanceOf[TVTermsEnum]
+        val min = if (ctvp.localScaling!=LocalTermVectorScaling.MIN) 0 else terms.foldLeft(0)((f,term) => if (tvt.seekExact(new BytesRef(term))) f+tvt.totalTermFreq.toInt else f)
+        var term = tvt.nextOrd()
+        var anyMatches = false
+        while (term != -1l) {
           t2+=1
-          if (tvt.totalTermFreq()>=minFreqInDoc) {
-            val ts = term.utf8ToString
-            if (ts.length>=minTermLength) {
-              val d = scaling match {
-                case Scaling.MIN => math.min(min,tvt.totalTermFreq.toInt)
-                case Scaling.ABSOLUTE => tvt.totalTermFreq.toInt
-                case Scaling.FLAT => 1
-              }
-              totalTermFreq+=d
-              cv.addValue(ts, d)
+          if (ctvp.matches(term, tvt.totalTermFreq)) {
+            anyMatches = true
+            val d = ctvp.localScaling match {
+              case LocalTermVectorScaling.MIN => math.min(min,tvt.totalTermFreq.toInt)
+              case LocalTermVectorScaling.ABSOLUTE => tvt.totalTermFreq.toInt
+              case LocalTermVectorScaling.FLAT => 1
             }
+            totalTermFreq+=d
+            cv.addValue(term.toInt, d)
           }
-          term = tvt.next()
+          term = tvt.nextOrd()
         }
+        if (anyMatches) docFreq+=1
       }
       override def doSetNextReader(context: LeafReaderContext) = {
         this.context = context
       }
     })
-    Logger.info(q+":"+docFreq+":"+cv.size+":"+t2+":"+totalTermFreq)
+    Logger.info(f"$q%s, processed docs: $aDocFreq%,d, contributing docs: $docFreq%,d, processed terms: $t2%,d, terms in accepted term vector: ${cv.size}%,d, total accepted term freq: $totalTermFreq%,d")
     (docFreq,totalTermFreq,cv)
   }
   
-  private def getBestCollocations(is: IndexSearcher, terms: Seq[String], q: Query, scaling: Scaling.Value, mf: Int, mdf: Int, mtl: Int, l: Int): (Long,Long,Map[String,(ObjIntMap[String],Double)]) = {
-    val maxHeap = PriorityQueue.empty[(String,(ObjIntMap[String],Double))](new Ordering[(String,(ObjIntMap[String],Double))] {
-      override def compare(x: (String,(ObjIntMap[String],Double)), y: (String,(ObjIntMap[String],Double))) = y._2._2 compare x._2._2
+  private def scaleAndFilterTermVector(cv: LongIntMap, ctvp: AggregateTermVectorProcessingParameters)(implicit ir: IndexReader): LongDoubleMap = {
+    val m = HashLongDoubleMaps.newUpdatableMap()
+    cv.forEach(new LongIntConsumer {
+       override def accept(k: Long, v: Int) {
+         if (ctvp.matches(v)) m.put(k, ctvp.sumScaling(k, v))
+       }
+    })
+    m
+  }
+  
+  private def getAggregateContextVectorForTerms(terms: Seq[String], q: Query, ctvpl: LocalTermVectorProcessingParameters, ctvpa: AggregateTermVectorProcessingParameters)(implicit is: IndexSearcher, ir: IndexReader): (Long,Long,LongDoubleMap) = {
+    val (docFreq, totalTermFreq, cv) = getUnscaledAggregateContextVectorForTerms(terms, q, ctvpl)
+    (docFreq, totalTermFreq, scaleAndFilterTermVector(cv, ctvpa))
+  }
+  
+  private def getBestCollocations(terms: Seq[String], q: Query, ctvpl: LocalTermVectorProcessingParameters, ctvpa: AggregateTermVectorProcessingParameters, l: Int)(implicit is: IndexSearcher, ir: IndexReader): (Long,Long,Map[Long,Double]) = {
+    val maxHeap = PriorityQueue.empty[(Long,Double)](new Ordering[(Long,Double)] {
+      override def compare(x: (Long,Double), y: (Long,Double)) = y._2 compare x._2
     })
     var total = 0
-    Logger.info("start heap building:"+q)
-    val (docFreq,totalTermFreq,cv) = getAggregateContextVectorForTerms(is,terms,q,scaling,mdf,mtl)
-    for ((term,freq) <- cv.asScala; if freq>=mf) {
-      val score = (freq + mf).toDouble/is.getIndexReader.docFreq(new Term("content",term))
-      total+=1
-      if (total<=l) 
-        maxHeap += ((term,(cv,score)))
-      else if (maxHeap.head._2._2<score) {
-        maxHeap.dequeue()
-        maxHeap += ((term,(cv,score)))
-      }
-    }
-    Logger.info("end heap building:"+q)
+    val (docFreq,totalTermFreq,cv) = getAggregateContextVectorForTerms(terms,q,ctvpl, ctvpa)
+    cv.forEach(new LongDoubleConsumer {
+      override def accept(term: Long, score: Double) {
+        total+=1
+        if (total<=l) 
+          maxHeap += ((term,score))
+        else if (maxHeap.head._2<score) {
+          maxHeap.dequeue()
+          maxHeap += ((term,score))
+        }
+      }      
+    })
     (docFreq,totalTermFreq,maxHeap.toMap)
   }
 
+  private def mds(termVectors: Iterable[LongDoubleMap], rtp: AggregateTermVectorProcessingParameters)(implicit ir: IndexReader): Array[Array[Double]] = {
+    val tvms = termVectors.toSeq
+    val matrix = new Array[Array[Double]](tvms.size)
+    for (i <- 0 until matrix.length)
+      matrix(i) = new Array[Double](matrix.length)
+    for (i <- 0 until matrix.length) {
+      for (j <- i + 1 until matrix.length) {
+        val dis = rtp.distance(tvms(i), tvms(j))
+        matrix(i)(j) = dis
+        matrix(j)(i) = dis
+      }
+    }
+    return MDSJ.stressMinimization(matrix, rtp.mdsDimensions).transpose
+  }
+  
+  private def toStringMap(m: LongDoubleMap)(implicit ir: IndexReader): collection.Map[String,Double] = {
+    val rm = new HashMap[String,Double]
+    m.forEach(new LongDoubleConsumer {
+      override def accept(term: Long, freq: Double) {
+        rm.put(getTerm(term),freq)
+      }
+    })
+    rm
+  }
+  
+  private def toStringTraversable(m: LongDoubleMap)(implicit ir: IndexReader): Traversable[String] = {
+    return new Traversable[String] {
+      override def foreach[U](f: String => U): Unit = {
+        m.forEach(new LongDoubleConsumer {
+          override def accept(term: Long, freq: Double) {
+            f(getTerm(term))
+          }
+        })
+      }
+    }
+  }
+  
   // get collocations for a term query (+ a possible limit query), for defining a topic
   def collocations() = Action { implicit request =>
-    val p = new TermVectorQueryParameters
-    val (docFreq, totalTermFreq, collocations) = getBestCollocations(Level.searcher(p.level),p.terms,p.combinedQuery,p.scaling,p.minTotalFreq,p.minFreqInDoc,p.minTermLength,p.limit)
-    val json = Json.toJson(Map("docFreq"->Json.toJson(docFreq),"totalTermFreq"->Json.toJson(totalTermFreq),"collocations"->(if (p.mdsDimensions>0) {
-      val keys = new HashSet[String] 
-      collocations.values.foreach(_._1.keySet.asScala.foreach(keys += _))
-      val keySeq = keys.toSeq
-      val matrix = new Array[Array[Double]](collocations.size)
-      collocations.values.zipWithIndex.foreach{ case ((c,_),i) => 
-        matrix(i)=new Array[Double](keySeq.length)
-        keySeq.zipWithIndex.foreach{ case (key,i2) => matrix(i)(i2) = c.getOrDefault(key, 0) }
+    val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    val gp = new GeneralParameters
+    implicit val ir = gp.level.reader
+    implicit val is = gp.level.searcher
+    val tp = new TermVectorQueryParameters
+    val tppl = new LocalTermVectorProcessingParameters
+    val tppa = new AggregateTermVectorProcessingParameters
+    val rtpl = new LocalTermVectorProcessingParameters("r_")
+    val rtpa = new AggregateTermVectorProcessingParameters("r_")
+    val termVectors = p.get("termVector").exists(v => v(0)=="" || v(0).toBoolean)
+    Logger.info(s"collocations: $gp, $tp, $tppl, $tppa, $rtpl, $rtpa")
+    val (docFreq, totalTermFreq, collocations) = getBestCollocations(tp.terms,tp.combinedQuery,tppl,tppa,gp.limit)
+    val json = Json.toJson(Map("docFreq"->Json.toJson(docFreq),"totalTermFreq"->Json.toJson(totalTermFreq),"collocations"->(if (rtpa.mdsDimensions>0) {
+      val secondOrderCollocations = collocations.keys.toSeq.map{term => 
+        val terms = getTerm(term)
+        getAggregateContextVectorForTerms(Seq(terms), new TermQuery(new Term("content",terms)), rtpl, rtpa)._3
       }
-      /* normalize values to be between 0 and 1 */
-      for (i <- 0 until keySeq.length) {
-        val max = matrix.view.map(_(i)).max
-        matrix.foreach(r => r(i)= r(i) / max)
-      }
-      // TODO: apply docFreq scaling?
-      val mdsMatrix = MDSJ.stressMinimization(matrix, p.mdsDimensions)
-      Json.toJson(collocations.zipWithIndex.map{ case ((term,(cv, weight)),i) => (term,Json.toJson(Map("termVector"->Json.toJson(mdsMatrix(i)),"weight"->Json.toJson(weight))))})
-    } else if (p.minTermVectorFreq>=0) {
-      Json.toJson(collocations.map{ case (term,(cv, weight)) =>
-        (term,Json.toJson(Map("termVector"->Json.toJson(cv.asScala.toMap.map(p => (p._1,p._2.toInt))),"weight"->Json.toJson(weight))))
-      })
-    } else Json.toJson(collocations.map{ case (term,(cv, weight)) => (term,weight)}))))
-    if (p.pretty)
+      val mdsMatrix = mds(secondOrderCollocations,rtpa)
+      Json.toJson(collocations.zipWithIndex.map{ case ((term,weight),i) => (getTerm(term),Json.toJson(Map("termVector"->Json.toJson(mdsMatrix(i)),"weight"->Json.toJson(weight))))})
+    } else if (rtpl.defined || rtpa.defined || termVectors)
+      Json.toJson(collocations.map{ case (term, weight) => {
+        val terms = getTerm(term)
+        (terms,Json.toJson(Map("termVector"->Json.toJson(toStringMap(getAggregateContextVectorForTerms(Seq(terms), new TermQuery(new Term("content",terms)), rtpl, rtpa)._3)),"weight"->Json.toJson(weight))))
+      }})
+    else Json.toJson(collocations.map(p => (getTerm(p._1),p._2))))))
+    if (gp.pretty)
       Ok(Json.prettyPrint(json))
     else 
       Ok(json)
   }
   
-  private class VectorInfo {
+  private final class UnscaledVectorInfo {
     var docFreq = 0l
     var totalTermFreq = 0l
-    val cv: ObjIntMap[String] = HashObjIntMaps.getDefaultFactory[String].withNullKeyAllowed(false).newUpdatableMap[String]()
+    val cv: LongIntMap = HashLongIntMaps.getDefaultFactory.newUpdatableMap()
   }
   
-  private def getAggregateContextVectorForGroupedTerms(is: IndexSearcher, terms: Seq[String], q: Query, attr: String, scaling: Scaling.Value, minFreqInDoc: Int, minTermLength: Int): collection.Map[String,VectorInfo] = {
-    val cvm = new HashMap[String,VectorInfo]
+  private def getUnscaledAggregateContextVectorForGroupedTerms(terms: Seq[String], q: Query, attr: String, attrLength: Int, ctvp: LocalTermVectorProcessingParameters)(implicit is: IndexSearcher, ir: IndexReader): collection.Map[String,UnscaledVectorInfo] = {
+    val cvm = new HashMap[String,UnscaledVectorInfo]
     var docFreq = 0l
     var t2 = 0l
     var totalTermFreq = 0l
-    Logger.info("start search:"+q)
     val attrs = Collections.singleton(attr)
     is.search(q, new SimpleCollector() {
       override def needsScores: Boolean = false
@@ -376,92 +504,105 @@ class SearchController @Inject() extends Controller {
         docFreq+=1
         val tv = this.context.reader.getTermVector(doc, "content")
         if (tv.size()>10000) println(tv.size())
-        val tvt = tv.iterator()
-        val min = if (scaling!=Scaling.MIN) 0 else terms.foldLeft(0)((f,term) => if (tvt.seekExact(new BytesRef(term))) f+tvt.totalTermFreq.toInt else f)
-        val cv = cvm.getOrElseUpdate(context.reader.document(doc,attrs).get(attr), new VectorInfo) 
-        var term = tvt.next()
-        while (term!=null) {
+        val tvt = tv.iterator().asInstanceOf[TVTermsEnum]
+        val min = if (ctvp.localScaling!=LocalTermVectorScaling.MIN) 0 else terms.foldLeft(0)((f,term) => if (tvt.seekExact(new BytesRef(term))) f+tvt.totalTermFreq.toInt else f)
+        val cattr = context.reader.document(doc,attrs).get(attr)
+        val cv = cvm.getOrElseUpdate(if (attrLength == -1) cattr else cattr.substring(0,attrLength), new UnscaledVectorInfo) 
+        var term = tvt.nextOrd()
+        var anyMatches = false
+        while (term != -1l) {
           t2+=1
-          cv.docFreq+=1
-          if (tvt.totalTermFreq()>=minFreqInDoc) {
-            val ts = term.utf8ToString
-            if (ts.length>=minTermLength) {
-              val d = scaling match {
-                case Scaling.MIN => math.min(min,tvt.totalTermFreq.toInt)
-                case Scaling.ABSOLUTE => tvt.totalTermFreq.toInt
-                case Scaling.FLAT => 1
-              }
-              totalTermFreq+=d
-              cv.totalTermFreq+=d
-              cv.cv.addValue(ts, d)
+          if (ctvp.matches(term, tvt.totalTermFreq)) {
+            anyMatches = true
+            val d = ctvp.localScaling match {
+              case LocalTermVectorScaling.MIN => math.min(min,tvt.totalTermFreq.toInt)
+              case LocalTermVectorScaling.ABSOLUTE => tvt.totalTermFreq.toInt
+              case LocalTermVectorScaling.FLAT => 1
             }
+            totalTermFreq+=d
+            cv.totalTermFreq+=d
+            cv.cv.addValue(term, d)
           }
-          term = tvt.next()
+          term = tvt.nextOrd()
         }
+        if (anyMatches) cv.docFreq+=1
       }
       override def doSetNextReader(context: LeafReaderContext) = {
         this.context = context
       }
     })
-    Logger.info(q+":"+docFreq+":"+cvm.size+":"+t2+":"+totalTermFreq)
+    Logger.info(f"$q%s, processed docs: $docFreq%,d, processed terms: $t2%,d, attr groups: ${cvm.size}%,d, terms in accepted term vector: ${cvm.foldLeft(0)((total,cvi) => total+cvi._2.cv.size)}%,d, total accepted term freq: $totalTermFreq%,d")
     cvm
   }  
+
+  private final class VectorInfo(value: UnscaledVectorInfo, ctvpa: AggregateTermVectorProcessingParameters)(implicit ir: IndexReader) {
+    var docFreq = value.docFreq
+    var totalTermFreq = value.totalTermFreq
+    val cv: LongDoubleMap = scaleAndFilterTermVector(value.cv,ctvpa)
+  }
+
+  private def getAggregateContextVectorForGroupedTerms(terms: Seq[String], q: Query, attr: String, attrLength: Int, ctvpl: LocalTermVectorProcessingParameters, ctvpa: AggregateTermVectorProcessingParameters)(implicit is: IndexSearcher, ir: IndexReader): collection.Map[String,VectorInfo] = {
+    getUnscaledAggregateContextVectorForGroupedTerms(terms, q, attr, attrLength, ctvpl).map{ case (key,value) => (key, new VectorInfo(value,ctvpa)) }
+  }
+  
+  private def getHitCount(q: Query)(implicit is: IndexSearcher): Long = {
+    val hc = new TotalHitCountCollector()
+    is.search(q,hc)
+    return hc.getTotalHits
+  }
   
   // calculate distance between two term vectors across a metadata variable (use to create e.g. graphs of term meaning changes)
-  def termVectorDiff(terms1g: Seq[String], limitQuery1g: Option[String], terms2g: Seq[String], limitQuery2g: Option[String], attrg: Option[String], levelg: String, scalingg: String, mfg: Int, mdfg: Int, mtlg: Int, p: Option[String]) = Action { implicit request =>
-    var terms1: Seq[String] = terms1g
-    var limitQuery1: Option[String] = limitQuery1g
-    var terms2: Seq[String] = terms2g
-    var limitQuery2: Option[String] = limitQuery2g
-    var attr = attrg.get
-    var scaling: Scaling.Value = Scaling.withName(scalingg.toUpperCase)
-    var level: Level.Value = Level.withName(levelg.toUpperCase)
-    var mf: Int = mfg
-    var mdf: Int = mdfg
-    var mtl: Int = mtlg
-    var oqb1 = new BooleanQuery.Builder().setDisableCoord(true)
-    limitQuery1.foreach(lq => oqb1.add(dqp.parse(lq), Occur.MUST))
-    var qb1 = new BooleanQuery.Builder().setDisableCoord(true)
-    var oqb2 = new BooleanQuery.Builder().setDisableCoord(true)
-    limitQuery2.foreach(lq => oqb2.add(dqp.parse(lq), Occur.MUST))
-    var qb2 = new BooleanQuery.Builder().setDisableCoord(true)
-    terms1.foreach(term => qb1.add(new TermQuery(new Term("content", term)), Occur.SHOULD))
-    terms2.foreach(term => qb2.add(new TermQuery(new Term("content", term)), Occur.SHOULD))
-    val q1 = qb1.build
-    val q2 = qb2.build
-    val pq1 = oqb1.add(q1, Occur.MUST).add(q2, Occur.MUST_NOT).build
-    val pq2 = oqb2.add(q2, Occur.MUST).add(q1, Occur.MUST_NOT).build
-    val tvm1 = getAggregateContextVectorForGroupedTerms(Level.searcher(level),terms1,pq1,attr,scaling,mdf,mtl)
-    val tvm2 = getAggregateContextVectorForGroupedTerms(Level.searcher(level),terms2,pq2,attr,scaling,mdf,mtl)
-    
-    val json = Json.toJson((tvm1.keySet ++ tvm2.keySet).map(key => { 
-      if (!tvm1.contains(key) || !tvm2.contains(key)) (key,0.0)
-      else (key,Distance.cosineSimilarity(tvm1(key).cv,tvm2(key).cv))
-    }).toMap)
-    if (p.isDefined && (p.get=="" || p.get.toBoolean))
+  def termVectorDiff() = Action { implicit request =>
+    val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    val gp = new GeneralParameters
+    implicit val ir = gp.level.reader
+    implicit val is = gp.level.searcher
+    val tvq1 = new TermVectorQueryParameters("t1_")
+    val tvq2 = new TermVectorQueryParameters("t2_")
+    val tvpl = new LocalTermVectorProcessingParameters
+    val tvpa = new AggregateTermVectorProcessingParameters
+    val attr = p.get("attr").map(_(0)).get
+    val attrLength = p.get("attrLength").map(_(0).toInt).getOrElse(-1)
+    val excludeOther: Boolean = p.get("excludeOther").exists(v => v(0)=="" || v(0).toBoolean)
+    val bqb1 = new BooleanQuery.Builder().add(tvq1.combinedQuery, Occur.MUST)
+    if (excludeOther) bqb1.add(tvq2.termQuery, Occur.MUST_NOT)
+    val bqb2 = new BooleanQuery.Builder().add(tvq2.combinedQuery, Occur.MUST)
+    if (excludeOther) bqb2.add(tvq1.termQuery, Occur.MUST_NOT)
+    Logger.info(s"termVectorDiff: $gp, $tvq1, $tvq2, $tvpl, $tvpa, attr:$attr, attrLength:$attrLength, excludeOther:$excludeOther. Going to process "+f"${getHitCount(bqb1.build)}%,d+${getHitCount(bqb2.build)}%,d documents.")
+    val tvm1 = getAggregateContextVectorForGroupedTerms(tvq1.terms,bqb1.build,attr,attrLength,tvpl,tvpa)
+    val tvm2 = getAggregateContextVectorForGroupedTerms(tvq2.terms,bqb2.build,attr,attrLength,tvpl,tvpa)
+    val obj = (tvm1.keySet ++ tvm2.keySet).map(key => (key,Json.toJson({
+      if (!tvm1.contains(key) || !tvm2.contains(key)) Map("similarity"->Json.toJson(0.0),"df1"->Json.toJson(tvm1.get(key).map(_.docFreq).getOrElse(0l)),"df2"->Json.toJson(tvm2.get(key).map(_.docFreq).getOrElse(0l)),"tf1"->Json.toJson(tvm1.get(key).map(_.totalTermFreq).getOrElse(0l)),"tf2"->Json.toJson(tvm2.get(key).map(_.totalTermFreq).getOrElse(0l)))
+      else Map("distance"->Json.toJson(tvpa.distance(tvm1(key).cv,tvm2(key).cv)),"df1"->Json.toJson(tvm1(key).docFreq),"df2"->Json.toJson(tvm2(key).docFreq),"tf1"->Json.toJson(tvm1(key).totalTermFreq),"tf2"->Json.toJson(tvm2(key).totalTermFreq))
+    }))).toMap
+    val json = Json.toJson(obj)
+    if (gp.pretty)
       Ok(Json.prettyPrint(json))
     else 
       Ok(json)
   }
 
-
- 
-  private def getBestSecondOrderCollocations(is: IndexSearcher, terms: Seq[String], lq: Option[Query], scaling: Scaling.Value, mf: Int, mdf: Int, mtl: Int, l: Int): (Map[String,Double],Map[String,Double]) = {
-    var oqb = new BooleanQuery.Builder().setDisableCoord(true)
-    lq.foreach(lq => oqb.add(lq, Occur.MUST))
-    var qb = new BooleanQuery.Builder().setDisableCoord(true)
-    val (_,_,tv) = getAggregateContextVectorForTerms(is,terms,oqb.add(terms.foldLeft(qb)((q, term) => q.add(new TermQuery(new Term("content", term)), Occur.SHOULD)).build, Occur.MUST).build,scaling,mdf,mtl)
+  private def getBestSecondOrderCollocations(terms: Seq[String], termQuery: Query, limitQuery: Option[Query], ctvpl: LocalTermVectorProcessingParameters, ctvpa: AggregateTermVectorProcessingParameters, excludeOriginal: Boolean, limit: Int)(implicit is: IndexSearcher, ir: IndexReader): (Map[String,Double],Map[String,Double]) = {
+    val bqp = new BooleanQuery.Builder().add(termQuery, Occur.MUST)
+    limitQuery.foreach(bqp.add(_, Occur.MUST))
+    val (_,_,tv) = getAggregateContextVectorForTerms(terms,bqp.build,ctvpl,ctvpa)
     println("tv:"+tv.size)
-    val tvm = new HashMap[String,ObjIntMap[String]] // tvs for all terms in the tv of the query
-    for ((term,freq) <- tv.asScala;if freq>=mf) {
-      val (_,_,tv) = getAggregateContextVectorForTerms(is,Seq(term),if (lq.isDefined) new BooleanQuery.Builder().setDisableCoord(true).add(lq.get, Occur.MUST).add(new TermQuery(new Term("content",term)), Occur.MUST).build else new TermQuery(new Term("content",term)),scaling,mdf,mtl)
-      tvm(term) = tv
-    }
+    val tvm = new HashMap[String,LongDoubleMap]() // tvs for all terms in the tv of the query
+    tv.forEach(new LongDoubleConsumer {
+      override def accept(term: Long, freq: Double) {
+        val terms = getTerm(term)
+        val (_,_,tv) = getAggregateContextVectorForTerms(Seq(terms),if (limitQuery.isDefined) new BooleanQuery.Builder().setDisableCoord(true).add(limitQuery.get, Occur.MUST).add(new TermQuery(new Term("content",terms)), Occur.MUST).build else new TermQuery(new Term("content",terms)), ctvpl, ctvpa)
+        tvm(terms) = tv
+      }
+    })
     println("tvm:"+tvm.size)
-    val tvm2 = new HashMap[String,ObjIntMap[String]]
-    for ((term,tv) <- tvm; (term2,freq) <- tv.asScala; if freq>=mf && !tvm2.contains(term2)) {
-      val (_,_,tv) = getAggregateContextVectorForTerms(is,Seq(term),if (lq.isDefined) new BooleanQuery.Builder().setDisableCoord(true).add(lq.get, Occur.MUST).add(new TermQuery(new Term("content",term2)), Occur.MUST).build else new TermQuery(new Term("content",term2)),scaling,mdf,mtl)
-      tvm2(term2)= tv
+    val tvm2 = new HashMap[String,LongDoubleMap]
+    for ((term,tv) <- tvm; term2 <- toStringTraversable(tv); if !tvm2.contains(term2)) {
+      val bqp = new BooleanQuery.Builder().add(new TermQuery(new Term("content",term2)), Occur.MUST)
+      if (excludeOriginal) bqp.add(termQuery, Occur.MUST_NOT)
+      limitQuery.foreach(bqp.add(_, Occur.MUST))
+      val (_,_,tv) = getAggregateContextVectorForTerms(Seq(term),bqp.build,ctvpl,ctvpa)
+      tvm2(term2) = tv
     }
     println("tvm2:"+tvm2.size)
     val maxHeap = PriorityQueue.empty[(String,(ObjIntMap[String],Double))](new Ordering[(String,(ObjIntMap[String],Double))] {
@@ -477,16 +618,16 @@ class SearchController @Inject() extends Controller {
       val cscore = Distance.cosineSimilarity(tv,otv)
       val dscore = Distance.diceSimilarity(tv,otv)
       total+=1
-      if (total<=l) { 
-        cmaxHeap += ((term,cscore))
+      if (total<=limit) { 
+        if (cscore!=0.0) cmaxHeap += ((term,cscore))
 //        jmaxHeap += ((term,jscore))
-        dmaxHeap += ((term,dscore))
+        if (dscore!=0.0) dmaxHeap += ((term,dscore))
       } else {
-        if (cmaxHeap.head._2<cscore) {
+        if (cmaxHeap.head._2<cscore && cscore!=0.0) {
           cmaxHeap.dequeue()
           cmaxHeap += ((term,cscore))
         }
-        if (dmaxHeap.head._2<dscore) {
+        if (dmaxHeap.head._2<dscore && dscore!=0.0) {
           dmaxHeap.dequeue()
           dmaxHeap += ((term,dscore))
         }
@@ -496,135 +637,256 @@ class SearchController @Inject() extends Controller {
   } 
   
   // get second order collocations for a term - to find out what other words are talked about in a similar manner, for topic definition
-  def collocations2(termsg: Seq[String], lqg: Option[String], levelg: String, scalingg: String, mfg: Int, mdfg: Int, mtlg: Int, lg: Int, p: Option[String]) = Action { implicit request =>
-    var terms: Seq[String] = termsg
-    var lq: Option[String] = lqg
-    var scaling: Scaling.Value = Scaling.withName(scalingg.toUpperCase)
-    var level: Level.Value = Level.withName(levelg.toUpperCase)
-    var mf: Int = mfg
-    var mdf: Int = mdfg
-    var mtl: Int = mtlg
-    var l: Int = lg
-    val (c,d) = getBestSecondOrderCollocations(pis,terms,lq.map(dqp.parse(_)),scaling,mf,mdf,mtl,l)
+  def collocations2() = Action { implicit request =>
+    val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    val excludeOriginal: Boolean = p.get("excludeOriginal").exists(v => v(0)=="" || v(0).toBoolean)    
+    val gp = new GeneralParameters
+    implicit val ir = gp.level.reader
+    implicit val is = gp.level.searcher
+    val ctv = new TermVectorQueryParameters()
+    val ctvpl = new LocalTermVectorProcessingParameters()
+    val ctvpa = new AggregateTermVectorProcessingParameters()
+    Logger.info(s"collocations2: $gp, $ctv, $ctvpl, $ctvpa, excludeOriginal:$excludeOriginal")
+    val (c,d) = getBestSecondOrderCollocations(ctv.terms,ctv.termQuery,ctv.limitQuery,ctvpl,ctvpa,excludeOriginal, gp.limit)
     val json = Json.toJson(Map("cosine"->c,"dice"->d)) 
-    if (p.isDefined && (p.get=="" || p.get.toBoolean))
+    if (gp.pretty)
       Ok(Json.prettyPrint(json))
     else 
       Ok(json)
   }
   
-  private class GeneralParameters(implicit request: Request[AnyContent]) {
+  private class TermVectorQueryParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) {
     private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    val level: Level.Value = p.get("level").map(v => Level.withName(v(0).toUpperCase)).getOrElse(Level.PARAGRAPH)
-    val pretty: Boolean = p.get("pretty").exists(v => v(0)=="" || v(0).toBoolean)
-    val limit: Int = p.get("limit").map(_(0).toInt).getOrElse(20)
-    /** minimum term frequency for term to be included in returned term vector */
-    val minTermVectorFreq: Int = p.get("minTermVectorFreq").map(_(0).toInt).getOrElse(-1)
-    /** amount of dimensions for dimensionally reduced term vector coordinates */
-    val mdsDimensions: Int = p.get("mdsDimensions").map(_(0).toInt).getOrElse(-1)    
-  }
-
-  private class TermVectorQueryParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) extends GeneralParameters {
-    private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    val terms: Seq[String] = p.get(prefix+"term"+suffix).getOrElse(Seq.empty)
+    val phrases: Seq[String] = p.get(prefix+"term"+suffix).getOrElse(Seq.empty)
+    val terms: Seq[String] = phrases.map(_.split(" ")).flatten
     val termQuery: Query = {
       val qb = new BooleanQuery.Builder
-      terms.foreach(term => qb.add(new TermQuery(new Term("content", term)), Occur.SHOULD))
+      phrases.foreach{phrase => 
+        val pqb = new PhraseQuery.Builder
+        phrase.split(" ").foreach(t => pqb.add(new Term("content",t)))
+        qb.add(pqb.build, Occur.SHOULD)
+      }
       qb.build
     }
     val limitQuery: Option[Query] = p.get(prefix+"limitQuery").map(v => dqp.parse(v(0)))
     val combinedQuery: Query = if (!limitQuery.isDefined) termQuery else new BooleanQuery.Builder().add(termQuery, Occur.MUST).add(limitQuery.get, Occur.MUST).build
-    
-    val scaling: Scaling.Value = p.get(prefix+"scaling"+suffix).map(v => Scaling.withName(v(0).toUpperCase)).getOrElse(Scaling.MIN)
-    /** minimum total frequency of term to filter resulting term vector */
-    val minTotalFreq: Int = p.get(prefix+"minTotalFreq"+suffix).map(_(0).toInt).getOrElse(2)
-    /** minimum per document frequency of term to be added to the term vector */
-    val minFreqInDoc: Int = p.get(prefix+"minFreqInDoc"+suffix).map(_(0).toInt).getOrElse(1)
-    /** minimum length of term to be included in the term vector */
-    val minTermLength: Int = p.get(prefix+"minTermLength"+suffix).map(_(0).toInt).getOrElse(4)
-    
- }
+    val defined = !terms.isEmpty || limitQuery.isDefined
+    override def toString() = s"${prefix}phrases$suffix:$phrases, ${prefix}limitQuery$suffix:$limitQuery"
+  }
   
-  private class QueryParameters(implicit request: Request[AnyContent]) extends GeneralParameters {
+  private class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) {
+    private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    private val minFreqInDocOpt = p.get(prefix+"minFreqInDoc"+suffix).map(_(0).toLong)
+    /** minimum per document frequency of term to be added to the term vector */
+    val minFreqInDoc: Long = minFreqInDocOpt.getOrElse(1l)
+    private val maxFreqInDocOpt = p.get(prefix+"maxFreqInDoc"+suffix).map(_(0).toLong)
+    /** maximum per document frequency of term to be added to the term vector */
+    val maxFreqInDoc: Long = maxFreqInDocOpt.getOrElse(Long.MaxValue)
+    private def freqInDocMatches(freq: Long): Boolean = freq>=minFreqInDoc && freq<=maxFreqInDoc
+    private val localScalingOpt = p.get(prefix+"localScaling"+suffix).map(v => LocalTermVectorScaling.withName(v(0).toUpperCase))
+    /** per-doc term vector scaling: absolute, min (w.r.t query term) or flat (1) */
+    val localScaling: LocalTermVectorScaling.Value = localScalingOpt.getOrElse(LocalTermVectorScaling.MIN)
+    private val minTotalTermFreqOpt = p.get(prefix+"minTotalTermFreq"+suffix).map(_(0).toLong)
+    /** minimum total term frequency of term to be added to the term vector */
+    val minTotalTermFreq: Long = minTotalTermFreqOpt.getOrElse(1l)
+    private val maxTotalTermFreqOpt = p.get(prefix+"maxTotalTermFreq"+suffix).map(_(0).toLong)
+    /** maximum total term frequency of term to be added to the term vector */
+    val maxTotalTermFreq: Long = maxTotalTermFreqOpt.getOrElse(Long.MaxValue)
+    private def totalTermFreqMatches(term: Long)(implicit ir: IndexReader): Boolean = {
+      if (minTotalTermFreq == 1 && maxTotalTermFreq==Long.MaxValue) return true
+      val ttfr = ttf(term)
+      return ttfr>=minTotalTermFreq && ttfr<=maxTotalTermFreq
+    }
+    private val minDocFreqOpt = p.get(prefix+"minDocFreq"+suffix).map(_(0).toInt)
+    /** minimum total document frequency of term to be added to the term vector */
+    val minDocFreq: Int = minDocFreqOpt.getOrElse(1)
+    private val maxDocFreqOpt = p.get(prefix+"maxDocFreq"+suffix).map(_(0).toInt)
+    /** maximum total document frequency of term to be added to the term vector */
+    val maxDocFreq: Int = maxDocFreqOpt.getOrElse(Int.MaxValue)
+    private def docFreqMatches(term: Long)(implicit ir: IndexReader): Boolean = {
+      if (minDocFreq == 1 && maxDocFreq==Int.MaxValue) return true
+      val dfr = df(term)
+      return dfr>=minDocFreq && dfr<=maxDocFreq
+    }
+    private val minTermLengthOpt = p.get(prefix+"minTermLength"+suffix).map(_(0).toInt)
+    /** minimum length of term to be included in the term vector */
+    val minTermLength: Int = minTermLengthOpt.getOrElse(1)
+    private val maxTermLengthOpt = p.get(prefix+"maxTermLength"+suffix).map(_(0).toInt)
+    /** maximum length of term to be included in the term vector */
+    val maxTermLength: Int = maxTermLengthOpt.getOrElse(Int.MaxValue)
+    private def termLengthMatches(term: Long)(implicit ir: IndexReader): Boolean = {
+      if (minTermLength == 1 && maxTermLength == Int.MaxValue) return true
+      val terms = getTerm(term)
+      return terms.length>=minTermLength && terms.length<=maxTermLength
+    }
+    final def matches(term: Long, freq: Long)(implicit ir: IndexReader): Boolean =
+      freqInDocMatches(freq) && docFreqMatches(term) && totalTermFreqMatches(term) && termLengthMatches(term)
+    val defined: Boolean = localScalingOpt.isDefined || minFreqInDocOpt.isDefined || maxFreqInDocOpt.isDefined || minTotalTermFreqOpt.isDefined || maxTotalTermFreqOpt.isDefined || minDocFreqOpt.isDefined || maxDocFreqOpt.isDefined || minTermLengthOpt.isDefined || maxTermLengthOpt.isDefined
+    override def toString() = s"${prefix}localScaling$suffix:$localScaling, ${prefix}minTotalTermFreq$suffix:$minTotalTermFreq, ${prefix}maxTotalTermFreq$suffix:$maxTotalTermFreq, ${prefix}minDocFreq$suffix:$minDocFreq, ${prefix}maxDocFreq$suffix:$maxDocFreq, ${prefix}minFreqInDoc$suffix:$minFreqInDoc, ${prefix}maxFreqInDoc$suffix:$maxFreqInDoc, ${prefix}minTermLength$suffix:$minTermLength, ${prefix}maxTermLength$suffix:$maxTermLength"
+  }
+  
+  private class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) {
+    private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    private val sumScalingOpt = p.get(prefix+"sumScaling"+suffix).map(v => SumTermVectorScaling.withName(v(0).toUpperCase))
+    val sumScaling: SumTermVectorScaling = sumScalingOpt.getOrElse(SumTermVectorScaling.TTF)
+    private val minSumFreqOpt = p.get(prefix+"minSumFreq"+suffix).map(_(0).toInt)
+    /** minimum sum frequency of term to filter resulting term vector */
+    val minSumFreq: Int = minSumFreqOpt.getOrElse(1)
+    private val maxSumFreqOpt = p.get(prefix+"maxSumFreq"+suffix).map(_(0).toInt)
+    /** maximum sum frequency of term to filter resulting term vector */
+    val maxSumFreq: Int = maxSumFreqOpt.getOrElse(Int.MaxValue)
+    final def matches(sumFreq: Int): Boolean = {
+      (minSumFreq == 1 && maxSumFreq == Int.MaxValue) || (minSumFreq <= sumFreq && maxSumFreq >= sumFreq)
+    }
+    private val mdsDimensionsOpt = p.get("mdsDimensions").map(_(0).toInt)
+    /** amount of dimensions for dimensionally reduced term vector coordinates */
+    val mdsDimensions: Int = mdsDimensionsOpt.getOrElse(-1)    
+    private val distanceOpt = p.get("distance").map(v => DistanceMetric.withName(v(0).toUpperCase))
+    /** distance metric used for term vector comparisons */
+    val distance: DistanceMetric = distanceOpt.getOrElse(DistanceMetric.COSINE)
+    val defined: Boolean = sumScalingOpt.isDefined || minSumFreqOpt.isDefined || maxSumFreqOpt.isDefined|| mdsDimensionsOpt.isDefined || distanceOpt.isDefined
+    override def toString() = s"${prefix}sumScaling$suffix:$sumScaling, ${prefix}minSumFreq$suffix:$minSumFreq, ${prefix}maxSumFreq$suffix:$maxSumFreq, ${prefix}mdsDimensions$suffix:$mdsDimensions, ${prefix}distance$suffix:$distance"
+  }
+  
+  private class QueryParameters(implicit request: Request[AnyContent]) {
     private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val query: Query = dqp.parse(p.get("query").get(0))
-    val fields: Seq[String] = p.get("field").getOrElse(Seq.empty)
     /** minimum query match frequency for doc to be included in query results */
     val minFreq: Int = p.get("minFreq").map(_(0).toInt).getOrElse(1)
-    val termVectorQuery: TermVectorQueryParameters = new TermVectorQueryParameters("compareTermVector_")
+    override def toString() = s"query:$query, minFreq: $minFreq"
+  }
+  
+  private class QueryReturnParameters(implicit request: Request[AnyContent]) {
+    private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    val fields: Seq[String] = p.get("field").getOrElse(Seq.empty)
     /** return explanations and norms in search */
     val returnNorms: Boolean = p.get("returnNorms").exists(v => v(0)=="" || v(0).toBoolean)
+    override def toString() = s"fields:$fields, returnNorms: $returnNorms"
+  }
+
+  private class GeneralParameters(implicit request: Request[AnyContent]) {
+    private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    val level: Level = p.get("level").map(v => Level.withName(v(0).toUpperCase)).getOrElse(Level.PARAGRAPH)
+    val pretty: Boolean = p.get("pretty").exists(v => v(0)=="" || v(0).toBoolean)
+    val limit: Int = p.get("limit").map(_(0).toInt).getOrElse(20)
+    override def toString() = s"level:$level, pretty: $pretty, limit: $limit"
   }
   
   def jsearch() = Action { implicit request =>
+    val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val qp = new QueryParameters
+    val gp = new GeneralParameters
+    implicit val ir = gp.level.reader
+    implicit val is = gp.level.searcher
+    val srp = new QueryReturnParameters
+    val ctv = new TermVectorQueryParameters()
+    val ctvpl = new LocalTermVectorProcessingParameters()
+    val ctvpa = new AggregateTermVectorProcessingParameters()
+    val termVectors = p.get("termVector").exists(v => v(0)=="" || v(0).toBoolean)
+    Logger.info(s"$qp, $srp, $ctv, $ctvpl, $ctvpa, $gp, termVectors:$termVectors")
     var total = 0
-    val maxHeap = PriorityQueue.empty[(Seq[String],ObjIntMap[String],Int)](new Ordering[(Seq[String],ObjIntMap[String],Int)] {
-      override def compare(x: (Seq[String],ObjIntMap[String],Int), y: (Seq[String],ObjIntMap[String],Int)) = y._3 compare x._3
+    val maxHeap = PriorityQueue.empty[(Seq[JsValue],LongDoubleMap,Int)](new Ordering[(Seq[JsValue],LongDoubleMap,Int)] {
+      override def compare(x: (Seq[JsValue],LongDoubleMap,Int), y: (Seq[JsValue],LongDoubleMap,Int)) = y._3 compare x._3
     })
-    val compareTermVector = if (!qp.termVectorQuery.terms.isEmpty || qp.termVectorQuery.limitQuery.isDefined) getAggregateContextVectorForTerms(Level.searcher(qp.level),qp.termVectorQuery.terms,qp.termVectorQuery.combinedQuery,qp.termVectorQuery.scaling, qp.termVectorQuery.minFreqInDoc, qp.termVectorQuery.minTermLength) 
-    doSearch(Level.searcher(qp.level), qp.query, qp.fields, (doc: Int, d: Document, scorer: Scorer, we: Weight, context: LeafReaderContext, terms: HashSet[Term]) => {
+    val compareTermVector = if (ctv.defined) getAggregateContextVectorForTerms(ctv.terms,ctv.combinedQuery,ctvpl,ctvpa) else null
+    doSearch(qp.query, srp.fields, (doc: Int, d: Document, scorer: Scorer, we: Weight, context: LeafReaderContext, terms: HashSet[Term]) => {
       if (scorer.score.toInt>=qp.minFreq) {
         total+=1
-        val add = if (maxHeap.head._3<scorer.score.toInt) {
+        val add = total<=gp.limit || (if (maxHeap.head._3<scorer.score.toInt) {
           maxHeap.dequeue()
           true
-        } else total<=qp.limit
+        } else false)
         if (add) {
-          val cv = if (qp.minTermVectorFreq != -1) {
-            val cv = HashObjIntMaps.getDefaultFactory[String].withNullKeyAllowed(false).newUpdatableMap[String]() 
-            val tvt = context.reader.getTermVector(doc, "content").iterator()
-            var term = tvt.next()
-            while (term!=null) {
-              if (tvt.totalTermFreq >= qp.minTermVectorFreq)
-                cv.addValue(term.utf8ToString, tvt.totalTermFreq.toInt)
-              term = tvt.next()
+          val cv = if (ctvpl.defined || ctvpa.defined || termVectors || ctv.defined) {
+            val cv = HashLongIntMaps.newUpdatableMap() 
+            val tvt = context.reader.getTermVector(doc, "content").iterator.asInstanceOf[TVTermsEnum]
+            var term = tvt.nextOrd()
+            while (term != -1l) {
+              if (ctvpl.matches(term, tvt.totalTermFreq))
+                cv.addValue(term, tvt.totalTermFreq.toInt)
+              term = tvt.nextOrd()
             }
-            cv
+            scaleAndFilterTermVector(cv, ctvpa)
           } else null
-          maxHeap += ((qp.fields.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString, cv, scorer.score.toInt))
+          var fields = srp.fields.map(f => Json.toJson(d.getValues(f).mkString(";"))) :+ Json.toJson(scorer.score().toInt)
+          if (ctv.defined) fields = fields :+ Json.toJson(ctvpa.distance(cv, compareTermVector._3))
+          maxHeap += ((fields, cv, scorer.score.toInt))
         }
       }
     })
-    val json = Json.toJson(Map("total"->Json.toJson(total),"fields"->Json.toJson(qp.fields :+ "Freq"),"results"->Json.toJson(Json.toJson(maxHeap.map(_._1)))))
-    if (qp.pretty)
-      Ok(Json.prettyPrint(json))
+    var fields = srp.fields :+ "Freq"
+    if (ctv.defined) fields = fields :+ "Distance"
+    val cvs = if (termVectors || ctvpa.mdsDimensions>0) {
+      fields = fields :+ "Term Vector"
+      if (ctvpa.mdsDimensions>0)
+        mds(maxHeap.map(_._2), ctvpa).map(Json.toJson(_)).toSeq 
+      else maxHeap.map(p => Json.toJson(toStringMap(p._2))).toSeq
+    } else null
+    var map = Map("total"->Json.toJson(total),"fields"->Json.toJson(fields),"results"->Json.toJson(maxHeap.zipWithIndex.map{ case ((fields, _, _),i) =>
+      if (cvs!=null) fields :+ cvs(i)
+      else fields
+    }))
+    if (gp.pretty)
+      Ok(Json.prettyPrint(Json.toJson(map)))
     else 
-      Ok(json)
+      Ok(Json.toJson(map))
   }
   
   def search() = Action { implicit request => 
+    val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    val gp = new GeneralParameters
     val qp = new QueryParameters
+    implicit val ir = gp.level.reader
+    implicit val is = gp.level.searcher
+    val srp = new QueryReturnParameters
+    val ctv = new TermVectorQueryParameters
+    val ctvpl = new LocalTermVectorProcessingParameters
+    val ctvpa = new AggregateTermVectorProcessingParameters
+    val termVectors = p.get("termVector").exists(v => v(0)=="" || v(0).toBoolean)
+    Logger.info(s"$qp, $srp, $ctv, $ctvpl, $ctvpa, $gp, termVectors:$termVectors")
+    val compareTermVector = if (ctv.defined) getAggregateContextVectorForTerms(ctv.terms,ctv.combinedQuery,ctvpl,ctvpa) else null
     Ok.chunked(Enumerator.outputStream { os => 
       val w = CSVWriter(os)
-      var headers = qp.fields :+ "Freq"
-      if (qp.minTermVectorFreq != -1) headers = headers :+ "Term Vector"      
-      if (qp.returnNorms) headers = headers :+ "Explanation" :+ "TermNorms"
+      var headers = srp.fields :+ "Freq"
+      if (ctv.defined) headers = headers :+ "Distance"
+      if (termVectors || ctvpa.mdsDimensions>0) headers = headers :+ "Term Vector"      
+      if (srp.returnNorms) headers = headers :+ "Explanation" :+ "TermNorms"
       w.write(headers)
-      doSearch(Level.searcher(qp.level), qp.query, qp.fields, (doc: Int, d: Document, scorer: Scorer, we: Weight, context: LeafReaderContext, terms: HashSet[Term]) => {
+      val termVectorsA = new ArrayBuffer[LongDoubleMap]
+      val rows = new ArrayBuffer[Seq[String]]
+      doSearch(qp.query, srp.fields, (doc: Int, d: Document, scorer: Scorer, we: Weight, context: LeafReaderContext, terms: HashSet[Term]) => {
         if (scorer.score().toInt>=qp.minFreq) {
-          var row = qp.fields.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString
-          if (qp.minTermVectorFreq != -1) {
-            val cv = HashObjIntMaps.getDefaultFactory[String].withNullKeyAllowed(false).newUpdatableMap[String]() 
-            val tvt = context.reader.getTermVector(doc, "content").iterator()
-            var term = tvt.next()
-            while (term!=null) {
-              if (tvt.totalTermFreq >= qp.minTermVectorFreq)
-                cv.addValue(term.utf8ToString, tvt.totalTermFreq.toInt)
-              term = tvt.next()
+          var row = srp.fields.map(f => d.getValues(f).mkString(";")) :+ scorer.score().toInt.toString
+          val cv = if (ctvpl.defined || ctvpa.defined || termVectors || ctv.defined) {
+            val cv = HashLongIntMaps.newUpdatableMap() 
+            val tvt = context.reader.getTermVector(doc, "content").iterator().asInstanceOf[TVTermsEnum]
+            var term = tvt.nextOrd()
+            while (term != -1l) {
+              if (ctvpl.matches(term,tvt.totalTermFreq))
+                cv.addValue(term, tvt.totalTermFreq.toInt)
+              term = tvt.nextOrd()
             }
-            row = row :+ cv.asScala.map(p => p._1+':'+p._2).mkString(";")
-          }
-          if (qp.returnNorms) row = row :+ we.explain(context, doc).toString :+ (terms.map(t => t.field+":"+t.text+":"+dir.docFreq(t)+":"+dir.totalTermFreq(t)).mkString(";"))
-          w.write(row)
+            val cv2 = scaleAndFilterTermVector(cv, ctvpa)
+            termVectorsA += cv2
+            cv2
+          } else null
+          if (ctv.defined) row = row :+ ctvpa.distance(cv, compareTermVector._3).toString
+          if (srp.returnNorms) row = row :+ we.explain(context, doc).toString :+ (terms.map(t => t.field+":"+t.text+":"+dir.docFreq(t)+":"+dir.totalTermFreq(t)).mkString(";"))
+          rows += row
         }
       })
+      val cvs = if (termVectors || ctvpa.mdsDimensions>0) {
+        if (ctvpa.mdsDimensions>0)
+          mds(termVectorsA, ctvpa).map(_.mkString(";")).toSeq 
+        else termVectorsA.map(toStringMap(_).map(p => p._1+":"+p._2).mkString(";")).toSeq
+      } else null
+      rows.zipWithIndex.foreach{ case (row,i) => w.write(if (cvs!=null) row :+ cvs(i) else row)} 
       w.close()
     }).as("text/csv")
   }
  
-  private def doSearch(is: IndexSearcher, q: Query, rf: Seq[String], collector: (Int,Document,Scorer,Weight,LeafReaderContext,HashSet[Term]) => Unit) {
-    val pq = q.rewrite(is.getIndexReader)
+  private def doSearch(q: Query, rf: Seq[String], collector: (Int,Document,Scorer,Weight,LeafReaderContext,HashSet[Term]) => Unit)(implicit is: IndexSearcher, ir: IndexReader) {
+    val pq = q.rewrite(ir)
     val fs = new java.util.HashSet[String]
     for (s<-rf) fs.add(s)
     val we = pq.createWeight(is, true)

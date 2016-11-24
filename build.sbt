@@ -2,21 +2,39 @@ name := """ecco-estc-search"""
 
 version := "1.1-SNAPSHOT"
 
-lazy val root = (project in file(".")).enablePlugins(PlayScala)
+maintainer := "Eetu Mäkelä <eetu.makela@aalto.fi>"
 
-scalaVersion := "2.11.7"
+packageSummary := "ecco-estc-search"
+
+packageDescription := "Search API on ECCO data, built using the Play framework"
+
+lazy val root = (project in file(".")).enablePlugins(
+  PlayScala,
+  DockerPlugin,
+  AshScriptPlugin)
+
+scalaVersion := "2.11.8"
 
 resolvers += Resolver.mavenLocal
+
+sources in (Compile, doc) := Seq.empty
+
+publishArtifact in (Compile, packageDoc) := false
+
+dockerBaseImage := "openjdk:alpine"
+
+dockerExposedPorts in Docker := Seq(9000, 9443)
 
 libraryDependencies ++= Seq(
   cache,
   ws,
   filters,
-  "org.apache.lucene" % "lucene-analyzers-common" % "6.2.1",
-  "org.apache.lucene" % "lucene-codecs" % "6.2.1",
-  "org.apache.lucene" % "lucene-queryparser" % "6.2.1",
+  "org.apache.lucene" % "lucene-analyzers-common" % "6.3.0",
+  "fi.seco" %% "ecco-codec" % "1.0.0",
+  "org.apache.lucene" % "lucene-queryparser" % "6.3.0",
   "com.koloboke" % "koloboke-api-jdk8" % "1.0.0",
   "com.koloboke" % "koloboke-impl-jdk8" % "1.0.0",
+  "com.beachape" %% "enumeratum" % "1.5.1",
   "com.bizo" %% "mighty-csv" % "0.2",
   "mdsj" % "mdsj" % "0.2"
 )
