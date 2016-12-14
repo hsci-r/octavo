@@ -32,6 +32,7 @@ libraryDependencies ++= Seq(
   "org.apache.lucene" % "lucene-analyzers-common" % "6.3.0",
   "fi.seco" %% "ecco-codec" % "1.0.0",
   "org.apache.lucene" % "lucene-queryparser" % "6.3.0",
+  "org.apache.lucene" % "lucene-highlighter" % "6.3.0",
   "com.koloboke" % "koloboke-api-jdk8" % "1.0.0",
   "com.koloboke" % "koloboke-impl-jdk8" % "1.0.0",
   "com.beachape" %% "enumeratum" % "1.5.1",

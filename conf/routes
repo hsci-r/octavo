@@ -4,7 +4,6 @@
 
 # An example controller showing a sample home page
 GET     /search                     controllers.SearchController.search
-GET     /jsearch                    controllers.SearchController.jsearch
 GET		/terms						controllers.SearchController.similarTerms(term: String, level: String ?= "paragraph", maxEditDistance: Int ?= 2, minCommonPrefix: Int ?= 0, transposeIsSingleEdit: Option[String])
 GET		/stats						controllers.SearchController.stats(query: String)
 GET		/collocations				controllers.SearchController.collocations
