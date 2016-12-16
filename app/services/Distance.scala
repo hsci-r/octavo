@@ -8,6 +8,7 @@ import com.koloboke.collect.set.hash.HashLongSets
 import java.util.function.LongConsumer
 import java.util.function.IntConsumer
 import java.util.function.DoubleConsumer
+import com.koloboke.function.LongDoubleToDoubleFunction
 
 
 object Distance {
@@ -38,18 +39,63 @@ object Distance {
     return (nom*2.0)/denom
   }
   
+  def normalize(x: LongDoubleMap): Unit = {
+    if (x.size == 0) return
+    var sum = 0.0
+    x.values.forEach(new DoubleConsumer() {
+      override def accept(freq: Double) {
+        sum += freq*freq
+      }
+    })
+    val length = math.sqrt(sum)
+    x.replaceAll(new LongDoubleToDoubleFunction() {
+      override def applyAsDouble(key: Long, value: Double): Double = value / length
+    })
+  }
+  
+  def euclideanDistance(x: LongDoubleMap, y: LongDoubleMap): Double = {
+    if (x.size==0) return Double.NaN
+    if (y.size==0) return Double.NaN
+    val keys = HashLongSets.newImmutableSet(x.keySet, y.keySet)
+    var sum = 0.0
+    keys.forEach(new LongConsumer {
+      override def accept(key: Long) {
+        val f1 = x.getOrDefault(key, 0.0)
+        val f2 = y.getOrDefault(key, 0.0)
+        val diff = f1 - f2
+        sum += diff*diff
+      }
+    })
+    return math.sqrt(sum)
+  }
+  
+  def manhattanDistance(x: LongDoubleMap, y: LongDoubleMap): Double = {
+    if (x.size==0) return Double.NaN
+    if (y.size==0) return Double.NaN
+    val keys = HashLongSets.newImmutableSet(x.keySet, y.keySet)
+    var sum = 0.0
+    keys.forEach(new LongConsumer {
+      override def accept(key: Long) {
+        val f1 = x.getOrDefault(key, 0.0)
+        val f2 = y.getOrDefault(key, 0.0)
+        sum += math.abs(f1 - f2)
+      }
+    })
+    return math.sqrt(sum)
+  }
+  
   def cosineSimilarity(x: LongDoubleMap, y: LongDoubleMap): Double = {
     //word, t1 freq, t2 freq
     val m = scala.collection.mutable.HashMap[String, (Double, Double)]()
 
-    if (x.size==0) return 0.0
+    if (x.size==0) return Double.NaN
     var sum1 = 0.0
     x.values.forEach(new DoubleConsumer() {
       override def accept(freq: Double) {
         sum1 += freq
       }
     })
-    if (y.size==0) return 0.0
+    if (y.size==0) return Double.NaN
     var sum2 = 0.0
     y.values.forEach(new DoubleConsumer() {
       override def accept(freq: Double) {
@@ -67,6 +113,6 @@ object Distance {
         s3 += f2 * f2
       }
     })
-    return s1 / (Math.sqrt(s2) * Math.sqrt(s3))
+    return s1 / (math.sqrt(s2) * math.sqrt(s3))
   }
 }
