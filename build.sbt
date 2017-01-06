@@ -1,6 +1,8 @@
 name := """ecco-estc-search"""
 
-version := "1.1-SNAPSHOT"
+version := "1.1"
+
+enablePlugins(SystemdPlugin)
 
 maintainer := "Eetu Mäkelä <eetu.makela@aalto.fi>"
 

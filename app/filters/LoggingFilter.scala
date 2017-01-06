@@ -11,15 +11,17 @@ class LoggingFilter @Inject() (implicit val mat: Materializer) extends Filter {
            (requestHeader: RequestHeader): Future[Result] = {
 
     val startTime = System.currentTimeMillis
+    val action = if (requestHeader.tags.contains(Tags.RouteActionMethod)) 
+      requestHeader.tags(Tags.RouteController) + "." + requestHeader.tags(Tags.RouteActionMethod)
+      else requestHeader.path
+    
+    Logger.info(f"${requestHeader.remoteAddress}%s requesting ${action}%s.")
 
     nextFilter(requestHeader).map { result =>
-      val action = if (requestHeader.tags.contains(Tags.RouteActionMethod)) 
-        requestHeader.tags(Tags.RouteController) + "." + requestHeader.tags(Tags.RouteActionMethod)
-        else requestHeader.path
       val endTime = System.currentTimeMillis
       val requestTime = endTime - startTime
 
-      Logger.info(f"${action}%s took ${requestTime}%,dms and returned ${result.header.status}%s")
+      Logger.info(f"${action}%s for ${requestHeader.remoteAddress}%s took ${requestTime}%,dms and returned ${result.header.status}%s")
 
       result.withHeaders("Request-Time" -> requestTime.toString)
     }

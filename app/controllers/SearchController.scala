@@ -101,17 +101,31 @@ import scala.concurrent.Future
 import scala.concurrent.duration.Duration
 import scala.concurrent.Await
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter
-import scala.collection.parallel.mutable.ParHashMap
 import com.koloboke.collect.set.LongSet
 import com.koloboke.collect.set.hash.HashLongSets
 import java.util.function.LongConsumer
+import play.api.libs.json.JsNull
+import org.apache.lucene.search.TimeLimitingCollector
+import java.io.File
+import java.io.PrintWriter
+import akka.stream.Materializer
+import java.io.StringWriter
+import java.util.concurrent.ConcurrentHashMap
+import scala.collection.parallel.mutable.ParHashMap
+import scala.collection.mutable.PriorityQueue
+import scala.sys.SystemProperties
+import java.io.ByteArrayOutputStream
+import play.api.libs.json.JsArray
+import org.apache.lucene.index.SortedSetDocValues
+import org.apache.lucene.index.SortedDocValues
+import org.apache.lucene.index.DocValues
 
 /**
  * This controller creates an `Action` to handle HTTP requests to the
  * application's home page.
  */
 @Singleton
-class SearchController @Inject() extends Controller {
+class SearchController @Inject() (materializer: Materializer, appProvider: Provider[Application]) extends Controller {
   
   BooleanQuery.setMaxClauseCount(Int.MaxValue)
 
@@ -126,26 +140,28 @@ class SearchController @Inject() extends Controller {
       ""
     }
   }
+  
+  private val path = sys.env.get("INDEX_PATH").getOrElse("/srv/ecco")
 
-  private val dir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath("/srv/ecco/dindex")))
+  private val dir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath(path+"/dindex")))
   private val dis = {
     val is = new IndexSearcher(dir)
     is.setSimilarity(sim)
     is
   }
-  private val dpir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath("/srv/ecco/dpindex")))
+  private val dpir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath(path+"/dpindex")))
   private val dpis = {
     val is = new IndexSearcher(dpir)
     is.setSimilarity(sim)
     is
   }
-  private val sir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath("/srv/ecco/sindex")))
+  private val sir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath(path+"/sindex")))
   private val sis = {
     val is = new IndexSearcher(sir)
     is.setSimilarity(sim)
     is
   }
-  private val pir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath("/srv/ecco/pindex")))
+  private val pir = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath(path+"/pindex")))
   private val pis = {
     val is = new IndexSearcher(pir)
     is.setSimilarity(sim)
@@ -327,36 +343,51 @@ class SearchController @Inject() extends Controller {
       Ok(Json.toJson(termMap))
     }
   }
+  
+  private def counts[T](xs: TraversableOnce[T]): Map[T, Int] = {
+    xs.foldLeft(HashMap.empty[T, Int].withDefaultValue(0))((acc, x) => { acc(x) += 1; acc}).toMap
+  }
 
-  def dump() = Action {
-    Logger.info("dump")
+  def dump() = Action { implicit request => 
     if (dir.hasDeletions()) throw new UnsupportedOperationException("Index should not have deletions!")
-    Ok.chunked(Enumerator.outputStream { os => 
-      val w = CSVWriter(os)
-      val dfields = Seq("ESTCID","documentID","fullTitle","language","module","pubDate","length","totalPages")
-      val pfields = Seq("type")
-      w.write(dfields ++ pfields)
-      var ld: Document = null
-      var ldid: String = null
-      val pfieldContents = pfields.map(f => new ArrayBuffer[String]())
-      for (
-        lrc<-dir.leaves().asScala;lr = lrc.reader;
-        i <- 0 until lr.maxDoc) {
-          val d = lr.document(i)
-          val did = d.get("documentID") 
-          if (ldid!=did) {
-            if (ldid!=null) { 
-              w.write(dfields.map(f => ld.get(f)) ++ pfieldContents.map(_.mkString(";")))
-              pfieldContents.foreach(_.clear)
+    val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    val pretty: Boolean = p.get("pretty").exists(v => v(0)=="" || v(0).toBoolean)
+    maybeQueue(s"dump: pretty:$pretty", () => {
+      val sdvfields = Seq("documentID","ESTCID","language","module")
+      val ndvfields = Seq("pubDateStart","pubDateEnd","documentLength","totalPages","totalParagraphs")
+      val sfields = Seq("fullTitle")
+      val sfieldsS = new java.util.HashSet[String]
+      sfields.foreach(sfieldsS.add(_))
+      val tvfields = Seq("containsGraphicOfType")
+      val output = new ArrayBuffer[JsValue]
+      for (lrc<-dir.leaves().asScala;lr = lrc.reader) {
+        val sdvs = sdvfields.map(p => (p,DocValues.getSorted(lr,p)))
+        val ndvs = ndvfields.map(p => (p,DocValues.getNumeric(lr,p)))
+        for (i <- 0 until lr.maxDoc) {
+          val values = new HashMap[String,JsValue]
+          for ((f,dv) <- sdvs) values += (f -> Json.toJson(dv.get(i).utf8ToString))
+          for ((f,dv) <- ndvs) values += (f -> Json.toJson(dv.get(i)))
+          val d = lr.document(i,sfieldsS)
+          for (f <- sfields) values += (f -> Json.toJson(d.get(f)))
+          for (f <- tvfields; tv = lr.getTermVector(i, f); if tv != null) {
+            val fte = tv.iterator
+            val vals = new HashMap[String,JsValue]
+            var br = fte.next()
+            while (br!=null) {
+              vals += (br.utf8ToString -> Json.toJson(fte.docFreq))
+              br = fte.next()
             }
-            ldid=did
-            ld=d
+            values += (f -> Json.toJson(vals))
           }
-          pfields.zip(pfieldContents).foreach{ case (p,c) => c += d.get(p) }
+          output += Json.toJson(values)
         }
-      w.write(dfields.map(f => ld.getValues(f).mkString(";")) ++ pfieldContents.map(_.mkString(";")))
-      w.close()
-    }).as("text/csv")
+      }
+      val json = Json.toJson(output)
+      if (pretty)
+        Ok(Json.prettyPrint(json))
+      else 
+        Ok(json)
+    })
   }
   
   private def getContextTermsForTerms(q: Query, ctvp: LocalTermVectorProcessingParameters, maxDocs: Int)(implicit is: IndexSearcher, ir: IndexReader): (Long,Long,LongSet) = {
@@ -398,50 +429,51 @@ class SearchController @Inject() extends Controller {
     (docFreq,totalTermFreq,cv)    
   }
   
-  private def getUnscaledAggregateContextVectorForTerms(q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int)(implicit is: IndexSearcher, ir: IndexReader): (Long,Long,LongIntMap) = {
-   val cv = HashLongIntMaps.newUpdatableMap() 
-   var aDocFreq = 0l
-   var docFreq = 0l
-   var t2 = 0l
-   var totalTermFreq = 0l
-   val sampleProbability = math.min(maxDocs.toDouble / getHitCount(q), 1.0)
-   //println(sampleProbability+", "+", "+maxDocs.toDouble+", "+getHitCount(q)+", "+q)
-   is.search(q, new SimpleCollector() {
+  private def getUnscaledAggregateContextVectorForTerms(q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int)(implicit is: IndexSearcher, ir: IndexReader, tlc: ThreadLocal[TimeLimitingCollector]): (Long,Long,LongIntMap) = {
+    val cv = HashLongIntMaps.newUpdatableMap() 
+    var aDocFreq = 0l
+    var docFreq = 0l
+    var t2 = 0l
+    var totalTermFreq = 0l
+    val sampleProbability = math.min(maxDocs.toDouble / getHitCount(q), 1.0)
+    //println(sampleProbability+", "+", "+maxDocs.toDouble+", "+getHitCount(q)+", "+q)
+    tlc.get.setCollector(new SimpleCollector() {
       override def needsScores: Boolean = false
       var context: LeafReaderContext = null
-
+      
       override def collect(doc: Int) {
         aDocFreq+=1
         if (maxDocs == -1 || sampleProbability == 1.0 || Math.random() < sampleProbability) {
           val tv = this.context.reader.getTermVector(doc, "content")
-          if (tv.size()>10000) println(tv.size())
-          val tvt = tv.iterator().asInstanceOf[TVTermsEnum]
-          val min = if (ctvp.localScaling!=LocalTermVectorScaling.MIN) 0 else if (minScalingTerms.isEmpty) Int.MaxValue else minScalingTerms.foldLeft(0)((f,term) => if (tvt.seekExact(new BytesRef(term))) f+tvt.totalTermFreq.toInt else f)
-          var term = tvt.nextOrd()
-          var anyMatches = false
-          while (term != -1l) {
-            t2+=1
-            if (ctvp.matches(term, tvt.totalTermFreq)) {
-              anyMatches = true
-              val d = ctvp.localScaling match {
-                case LocalTermVectorScaling.MIN => math.min(min,tvt.totalTermFreq.toInt)
-                case LocalTermVectorScaling.ABSOLUTE => tvt.totalTermFreq.toInt
-                case LocalTermVectorScaling.FLAT => 1
+            if (tv.size()>10000) println(tv.size())
+            val tvt = tv.iterator().asInstanceOf[TVTermsEnum]
+            val min = if (ctvp.localScaling!=LocalTermVectorScaling.MIN) 0 else if (minScalingTerms.isEmpty) Int.MaxValue else minScalingTerms.foldLeft(0)((f,term) => if (tvt.seekExact(new BytesRef(term))) f+tvt.totalTermFreq.toInt else f)
+            var term = tvt.nextOrd()
+            var anyMatches = false
+            while (term != -1l) {
+              t2+=1
+              if (ctvp.matches(term, tvt.totalTermFreq)) {
+                anyMatches = true
+                val d = ctvp.localScaling match {
+                  case LocalTermVectorScaling.MIN => math.min(min,tvt.totalTermFreq.toInt)
+                  case LocalTermVectorScaling.ABSOLUTE => tvt.totalTermFreq.toInt
+                  case LocalTermVectorScaling.FLAT => 1
+                }
+                totalTermFreq+=d
+                cv.addValue(term, d)
               }
-              totalTermFreq+=d
-              cv.addValue(term, d)
+              term = tvt.nextOrd()
             }
-            term = tvt.nextOrd()
+            if (anyMatches) docFreq+=1
           }
-          if (anyMatches) docFreq+=1
         }
-      }
-      override def doSetNextReader(context: LeafReaderContext) = {
-        this.context = context
-      }
-    })
-    Logger.info(f"$q%s, processed docs: $aDocFreq%,d, contributing docs: $docFreq%,d, processed terms: $t2%,d, terms in accepted term vector: ${cv.size}%,d, total accepted term freq: $totalTermFreq%,d")
-    (docFreq,totalTermFreq,cv)
+        override def doSetNextReader(context: LeafReaderContext) = {
+          this.context = context
+        }
+     })
+     is.search(q, tlc.get)
+     Logger.info(f"$q%s, processed docs: $aDocFreq%,d, contributing docs: $docFreq%,d, processed terms: $t2%,d, terms in accepted term vector: ${cv.size}%,d, total accepted term freq: $totalTermFreq%,d")
+     (docFreq,totalTermFreq,cv)
   }
   
   private def scaleAndFilterTermVector(cv: LongIntMap, ctvp: AggregateTermVectorProcessingParameters)(implicit ir: IndexReader): LongDoubleMap = {
@@ -454,12 +486,12 @@ class SearchController @Inject() extends Controller {
     m
   }
   
-  private def getAggregateContextVectorForTerms(q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit is: IndexSearcher, ir: IndexReader): (Long,Long,LongDoubleMap) = {
+  private def getAggregateContextVectorForTerms(q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit is: IndexSearcher, ir: IndexReader, tlc: ThreadLocal[TimeLimitingCollector]): (Long,Long,LongDoubleMap) = {
     val (docFreq, totalTermFreq, cv) = getUnscaledAggregateContextVectorForTerms(q, ctvpl, minScalingTerms, maxDocs)
     (docFreq, totalTermFreq, scaleAndFilterTermVector(cv, ctvpa))
   }
   
-  private def getBestCollocations(q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int, limit: Int)(implicit is: IndexSearcher, ir: IndexReader): (Long,Long,Map[Long,Double]) = {
+  private def getBestCollocations(q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int, limit: Int)(implicit is: IndexSearcher, ir: IndexReader, tlc: ThreadLocal[TimeLimitingCollector]): (Long,Long,Map[Long,Double]) = {
     val maxHeap = PriorityQueue.empty[(Long,Double)](new Ordering[(Long,Double)] {
       override def compare(x: (Long,Double), y: (Long,Double)) = y._2 compare x._2
     })
@@ -516,29 +548,48 @@ class SearchController @Inject() extends Controller {
     }
   }
   
-  private def getMatchingFields(is: IndexSearcher, q: Query, field: String): Iterable[BytesRef] = {
-    val fieldS = Collections.singleton(field)
-    val ret = new ArrayBuffer[BytesRef]
+  private def getMatchingValuesFromSortedDocValues(is: IndexSearcher, q: Query, field: String): Iterable[BytesRef] = {
+    val ret = new HashSet[BytesRef]
     is.search(q, new SimpleCollector() {
       
       override def needsScores: Boolean = false
       
-      var context: LeafReaderContext = null
+      var dv: SortedDocValues = null
 
       override def collect(doc: Int) {
-        ret += context.reader.document(doc, fieldS).getBinaryValue(field)
+        ret += BytesRef.deepCopyOf(this.dv.get(doc))
       }
       
       override def doSetNextReader(context: LeafReaderContext) = {
-        this.context = context
+        this.dv = DocValues.getSorted(context.reader, field)
+      }
+    })
+    ret
+  }
+
+  private def getMatchingValuesFromNumericDocValues(is: IndexSearcher, q: Query, field: String): Iterable[BytesRef] = {
+    val ret = new HashSet[BytesRef]
+    is.search(q, new SimpleCollector() {
+      
+      override def needsScores: Boolean = false
+      
+      var dv: NumericDocValues = null
+
+      override def collect(doc: Int) {
+        ret += new BytesRef(""+this.dv.get(doc))
+      }
+      
+      override def doSetNextReader(context: LeafReaderContext) = {
+        this.dv = DocValues.getNumeric(context.reader, field)
       }
     })
     ret
   }
   
-  private val didTerm = new Term("documentId","")
-  private val dpidTerm = new Term("partId","")
-  private val sidTerm = new Term("sectionId","")
+  
+  private val didTerm = new Term("documentID","")
+  private val dpidTerm = new Term("partID","")
+  private val sidTerm = new Term("sectionID","")
   
   private def getTermsFromQuery(q: Option[Query]): Seq[String] = {
     q.map(QueryTermExtractor.getTerms(_).map(_.getTerm).toSeq).getOrElse(Seq.empty)
@@ -550,6 +601,7 @@ class SearchController @Inject() extends Controller {
     val gp = new GeneralParameters
     implicit val ir = gp.resultLevel.reader
     implicit val is = gp.resultLevel.searcher
+    implicit val tlc = gp.tlc
     val tp = new QueryParameters
     val tppl = new LocalTermVectorProcessingParameters
     val tppa = new AggregateTermVectorProcessingParameters
@@ -557,25 +609,26 @@ class SearchController @Inject() extends Controller {
     val rtpl = new LocalTermVectorProcessingParameters("r_")
     val rtpa = new AggregateTermVectorProcessingParameters("r_")
     val termVectors = p.get("termVector").exists(v => v(0)=="" || v(0).toBoolean)
-    Logger.info(s"collocations: $gp, $tp, $tppl, $tppa, $rtpl, $rtpa")
-    val maxDocs = if (gp.maxDocs == -1 || gp.limit == -1) -1 else if (rtpa.mdsDimensions>0 || rtpl.defined || rtpa.defined || termVectors) gp.maxDocs / gp.limit else gp.maxDocs
-    val (docFreq, totalTermFreq, collocations) = getBestCollocations(tp.getCombinedQuery(gp.resultLevel).get,tppl,getTermsFromQuery(tp.getPrimaryQuery(gp.resultLevel)),tppa,maxDocs,gp.limit)
-    val json = Json.toJson(Map("docFreq"->Json.toJson(docFreq),"totalTermFreq"->Json.toJson(totalTermFreq),"collocations"->(if (rtpa.mdsDimensions>0) {
-      val mdsMatrix = mds(collocations.keys.toSeq.par.map{term => 
-        val termS = getTerm(term)
-        getAggregateContextVectorForTerms(new TermQuery(new Term("content",termS)), rtpl, Seq(termS), rtpa, maxDocs)._3
-      }.seq,rtpa)
-      Json.toJson(collocations.zipWithIndex.map{ case ((term,weight),i) => (getTerm(term),Json.toJson(Map("termVector"->Json.toJson(mdsMatrix(i)),"weight"->Json.toJson(weight))))})
-    } else if (rtpl.defined || rtpa.defined || termVectors) {
-      Json.toJson(collocations.par.map{ case (term, weight) => {
-        val termS = getTerm(term)
-        (termS,Json.toJson(Map("termVector"->Json.toJson(toStringMap(getAggregateContextVectorForTerms(new TermQuery(new Term("content",termS)), rtpl, Seq(termS), rtpa, maxDocs)._3)),"weight"->Json.toJson(weight))))
-      }}.seq)
-    } else Json.toJson(collocations.map(p => (getTerm(p._1),p._2))))))
-    if (gp.pretty)
-      Ok(Json.prettyPrint(json))
-    else 
-      Ok(json)
+    maybeQueue(s"collocations: $gp, $tp, $tppl, $tppa, $rtpl, $rtpa", () => {
+      val maxDocs = if (gp.maxDocs == -1 || gp.limit == -1) -1 else if (rtpa.mdsDimensions>0 || rtpl.defined || rtpa.defined || termVectors) gp.maxDocs / gp.limit else gp.maxDocs
+      val (docFreq, totalTermFreq, collocations) = getBestCollocations(tp.getCombinedQuery(gp.resultLevel).get,tppl,getTermsFromQuery(tp.getPrimaryQuery(gp.resultLevel)),tppa,maxDocs,gp.limit)
+      val json = Json.toJson(Map("docFreq"->Json.toJson(docFreq),"totalTermFreq"->Json.toJson(totalTermFreq),"collocations"->(if (rtpa.mdsDimensions>0) {
+        val mdsMatrix = mds(collocations.keys.toSeq.par.map{term => 
+          val termS = getTerm(term)
+          getAggregateContextVectorForTerms(new TermQuery(new Term("content",termS)), rtpl, Seq(termS), rtpa, maxDocs)._3
+        }.seq,rtpa)
+        Json.toJson(collocations.zipWithIndex.map{ case ((term,weight),i) => (getTerm(term),Json.toJson(Map("termVector"->Json.toJson(mdsMatrix(i)),"weight"->Json.toJson(weight))))})
+      } else if (rtpl.defined || rtpa.defined || termVectors) {
+        Json.toJson(collocations.par.map{ case (term, weight) => {
+          val termS = getTerm(term)
+          (termS,Json.toJson(Map("termVector"->Json.toJson(toStringMap(getAggregateContextVectorForTerms(new TermQuery(new Term("content",termS)), rtpl, Seq(termS), rtpa, maxDocs)._3)),"weight"->Json.toJson(weight))))
+        }}.seq)
+      } else Json.toJson(collocations.map(p => (getTerm(p._1),p._2))))))
+      if (gp.pretty)
+        Ok(Json.prettyPrint(json))
+      else 
+        Ok(json)
+    })
   }
   
   private final class UnscaledVectorInfo {
@@ -584,13 +637,13 @@ class SearchController @Inject() extends Controller {
     val cv: LongIntMap = HashLongIntMaps.getDefaultFactory.newUpdatableMap()
   }
   
-  private def getUnscaledAggregateContextVectorForGroupedTerms(q: Query, ctvp: LocalTermVectorProcessingParameters, terms: Seq[String], attr: String, attrLength: Int, maxDocs: Int)(implicit is: IndexSearcher, ir: IndexReader): collection.Map[String,UnscaledVectorInfo] = {
+  private def getUnscaledAggregateContextVectorForGroupedTerms(q: Query, ctvp: LocalTermVectorProcessingParameters, terms: Seq[String], attr: String, attrLength: Int, maxDocs: Int)(implicit is: IndexSearcher, ir: IndexReader, tlc: ThreadLocal[TimeLimitingCollector]): collection.Map[String,UnscaledVectorInfo] = {
     val cvm = new HashMap[String,UnscaledVectorInfo]
     var docFreq = 0l
     var t2 = 0l
     var totalTermFreq = 0l
     val attrs = Collections.singleton(attr)
-    is.search(q, new SimpleCollector() {
+    tlc.get.setCollector(new SimpleCollector() {
       override def needsScores: Boolean = false
       var context: LeafReaderContext = null
 
@@ -625,6 +678,7 @@ class SearchController @Inject() extends Controller {
         this.context = context
       }
     })
+    is.search(q, tlc.get)
     Logger.info(f"$q%s, processed docs: $docFreq%,d, processed terms: $t2%,d, attr groups: ${cvm.size}%,d, terms in accepted term vector: ${cvm.foldLeft(0)((total,cvi) => total+cvi._2.cv.size)}%,d, total accepted term freq: $totalTermFreq%,d")
     cvm
   }  
@@ -635,7 +689,7 @@ class SearchController @Inject() extends Controller {
     val cv: LongDoubleMap = scaleAndFilterTermVector(value.cv,ctvpa)
   }
 
-  private def getAggregateContextVectorForGroupedTerms(q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], attr: String, attrLength: Int, ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit is: IndexSearcher, ir: IndexReader): collection.Map[String,VectorInfo] = {
+  private def getAggregateContextVectorForGroupedTerms(q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], attr: String, attrLength: Int, ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit is: IndexSearcher, ir: IndexReader, tlc: ThreadLocal[TimeLimitingCollector]): collection.Map[String,VectorInfo] = {
     getUnscaledAggregateContextVectorForGroupedTerms(q, ctvpl, minScalingTerms, attr, attrLength, maxDocs).map{ case (key,value) => (key, new VectorInfo(value,ctvpa)) }
   }
   
@@ -651,6 +705,7 @@ class SearchController @Inject() extends Controller {
     val gp = new GeneralParameters
     implicit val ir = gp.resultLevel.reader
     implicit val is = gp.resultLevel.searcher
+    implicit val tlc = gp.tlc
     val tvq1 = new QueryParameters("t1_")
     val tvq2 = new QueryParameters("t2_")
     val tvlq = new QueryParameters("l_")
@@ -666,26 +721,82 @@ class SearchController @Inject() extends Controller {
     val bqb1 = new BooleanQuery.Builder().add(q1, Occur.MUST)
     for (q <- tvlqq) bqb1.add(q, Occur.MUST)
     if (excludeOther) bqb1.add(q2, Occur.MUST_NOT)
-    val bqb2 = new BooleanQuery.Builder().add(q1, Occur.MUST)
+    val bqb2 = new BooleanQuery.Builder().add(q2, Occur.MUST)
     for (q <- tvlqq) bqb2.add(q, Occur.MUST)
     if (excludeOther) bqb2.add(q2, Occur.MUST_NOT)
-    Logger.info(s"termVectorDiff: $gp, $tvq1, $tvq2, $tvlq, $tvpl, $tvpa, attr:$attr, attrLength:$attrLength, excludeOther:$excludeOther. ,meaningfulTerms:$meaningfulTerms, Going to process "+f"${getHitCount(bqb1.build)}%,d+${getHitCount(bqb2.build)}%,d documents.")
-    val tvm1f = Future { getAggregateContextVectorForGroupedTerms(bqb1.build,tvpl,getTermsFromQuery(tvq1.getPrimaryQuery(gp.resultLevel)),attr,attrLength,tvpa,gp.maxDocs/2) }
-    val tvm2f = Future { getAggregateContextVectorForGroupedTerms(bqb2.build,tvpl,getTermsFromQuery(tvq2.getPrimaryQuery(gp.resultLevel)),attr,attrLength,tvpa,gp.maxDocs/2) }
-    val tvm1 = Await.result(tvm1f, Duration.Inf)
-    val tvm2 = Await.result(tvm2f, Duration.Inf)
-    val obj = (tvm1.keySet ++ tvm2.keySet).map(key => Json.toJson({
-      if (!tvm1.contains(key) || !tvm2.contains(key)) Map("attr"->Json.toJson(key), "distance"->null,"df1"->Json.toJson(tvm1.get(key).map(_.docFreq).getOrElse(0l)),"df2"->Json.toJson(tvm2.get(key).map(_.docFreq).getOrElse(0l)),"tf1"->Json.toJson(tvm1.get(key).map(_.totalTermFreq).getOrElse(0l)),"tf2"->Json.toJson(tvm2.get(key).map(_.totalTermFreq).getOrElse(0l)))
-      else Map("attr"->Json.toJson(key), "distance"->Json.toJson(tvpa.distance(tvm1(key).cv,tvm2(key).cv)),"df1"->Json.toJson(tvm1(key).docFreq),"df2"->Json.toJson(tvm2(key).docFreq),"tf1"->Json.toJson(tvm1(key).totalTermFreq),"tf2"->Json.toJson(tvm2(key).totalTermFreq))
-    }))
-    val json = Json.toJson(obj)
-    if (gp.pretty)
-      Ok(Json.prettyPrint(json))
-    else 
-      Ok(json)
+    maybeQueue(s"termVectorDiff: $gp, $tvq1, $tvq2, $tvlq, $tvpl, $tvpa, attr:$attr, attrLength:$attrLength, excludeOther:$excludeOther ,meaningfulTerms:$meaningfulTerms", () => {
+      val tvm1f = Future { getAggregateContextVectorForGroupedTerms(bqb1.build,tvpl,getTermsFromQuery(tvq1.getPrimaryQuery(gp.resultLevel)),attr,attrLength,tvpa,gp.maxDocs/2) }
+      val tvm2f = Future { getAggregateContextVectorForGroupedTerms(bqb2.build,tvpl,getTermsFromQuery(tvq2.getPrimaryQuery(gp.resultLevel)),attr,attrLength,tvpa,gp.maxDocs/2) }
+      val tvm1 = Await.result(tvm1f, Duration.Inf)
+      val tvm2 = Await.result(tvm2f, Duration.Inf)
+      val obj = (tvm1.keySet ++ tvm2.keySet).map(key => {
+        var map = Map("attr"->Json.toJson(key),
+            "distance"->(if (!tvm1.contains(key) || !tvm2.contains(key)) JsNull else Json.toJson(tvpa.distance(tvm1(key).cv,tvm2(key).cv))), 
+            "df1"->Json.toJson(tvm1.get(key).map(_.docFreq).getOrElse(0l)),"df2"->Json.toJson(tvm2.get(key).map(_.docFreq).getOrElse(0l)),"tf1"->Json.toJson(tvm1.get(key).map(_.totalTermFreq).getOrElse(0l)),"tf2"->Json.toJson(tvm2.get(key).map(_.totalTermFreq).getOrElse(0l)))
+        if (tvm1.contains(key) && tvm2.contains(key) && meaningfulTerms!=0) {
+          val tv1 = tvm1(key).cv
+          val tv2 = tvm2(key).cv
+          Distance.normalize(tv1)
+          Distance.normalize(tv2)
+          val maxHeap = PriorityQueue.empty[(Long,Double)](new Ordering[(Long,Double)] {
+            override def compare(x: (Long,Double), y: (Long,Double)) = y._2 compare x._2
+          })
+          val maxHeap1 = PriorityQueue.empty[(Long,Double)](new Ordering[(Long,Double)] {
+            override def compare(x: (Long,Double), y: (Long,Double)) = y._2 compare x._2
+          })
+          val maxHeap2 = PriorityQueue.empty[(Long,Double)](new Ordering[(Long,Double)] {
+            override def compare(x: (Long,Double), y: (Long,Double)) = y._2 compare x._2
+          })
+          val minHeap = PriorityQueue.empty[(Long,Double)](new Ordering[(Long,Double)] {
+            override def compare(x: (Long,Double), y: (Long,Double)) = x._2 compare y._2
+          })
+          var total = 0
+          HashLongSets.newImmutableSet(tv1.keySet, tv2.keySet).forEach(new LongConsumer() {
+            override def accept(term: Long): Unit = {
+              val diff = tv1.getOrDefault(term, 0.0)-tv2.getOrDefault(term, 0.0)
+              val adiff = math.abs(diff)
+              total+=1
+              if (total<=meaningfulTerms) { 
+                maxHeap += ((term,adiff))
+                maxHeap1 += ((term,diff))
+                maxHeap2 += ((term,-diff))
+                minHeap += ((term,adiff))
+              } else {
+                if (maxHeap.head._2 < adiff) {
+                  maxHeap.dequeue()
+                  maxHeap += ((term,adiff))
+                }
+                if (maxHeap1.head._2 < diff) {
+                  maxHeap1.dequeue()
+                  maxHeap1 += ((term,diff))
+                }
+                if (maxHeap2.head._2 < -diff) {
+                  maxHeap2.dequeue()
+                  maxHeap2 += ((term,-diff))
+                }
+                if (minHeap.head._2 > adiff) {
+                  minHeap.dequeue()
+                  minHeap += ((term,adiff))
+                }
+              }
+            }
+          })
+          map = map + ("mostDifferentTerms"->Json.toJson(maxHeap.map(p => (getTerm(p._1),p._2)).toMap))
+          map = map + ("mostDistinctiveTermsForTerm1"->Json.toJson(maxHeap1.map(p => (getTerm(p._1),p._2)).toMap))
+          map = map + ("mostDistinctiveTermsForTerm2"->Json.toJson(maxHeap2.map(p => (getTerm(p._1),p._2)).toMap))
+          map = map + ("mostSimilarTerms"->Json.toJson(minHeap.map(p => (getTerm(p._1),p._2)).toMap))
+        }
+        Json.toJson(map)
+      })
+      val json = Json.toJson(obj)
+      if (gp.pretty)
+        Ok(Json.prettyPrint(json))
+      else 
+        Ok(json)
+    })
   }
 
-  private def getTermsWithMostSimilarCollocations(query: Query, limitQuery: Option[Query], ctvpl: LocalTermVectorProcessingParameters, terms: Seq[String], ctvpa: AggregateTermVectorProcessingParameters, excludeOriginal: Boolean, maxDocs: Int, limit: Int)(implicit is: IndexSearcher, ir: IndexReader): (Map[String,Double],Map[String,Double]) = {
+  private def getTermsWithMostSimilarCollocations(query: Query, limitQuery: Option[Query], ctvpl: LocalTermVectorProcessingParameters, terms: Seq[String], ctvpa: AggregateTermVectorProcessingParameters, excludeOriginal: Boolean, maxDocs: Int, limit: Int)(implicit is: IndexSearcher, ir: IndexReader, tlc: ThreadLocal[TimeLimitingCollector]): (Map[String,Double],Map[String,Double]) = {
     val bqb = new BooleanQuery.Builder()
     bqb.add(query, Occur.MUST)
     for (lq <- limitQuery) bqb.add(lq, Occur.MUST)
@@ -711,32 +822,23 @@ class SearchController @Inject() extends Controller {
         }
       })
     println("collocations of collocations: "+collocationCollocations.size)
-    val thirdOrderCollocations = new ParHashMap[String,LongDoubleMap]
     val maxDocs4 = if (maxDocs == -1) -1 else maxDocs2/collocationCollocations.size
-    val futures2 = new ArrayBuffer[Future[Unit]]
-    for (term2 <- toStringTraversable(collocationCollocations)) {
+    val thirdOrderCollocations = for (term2 <- toStringTraversable(collocationCollocations).par) yield {
       val bqp = new BooleanQuery.Builder().add(new TermQuery(new Term("content",term2)), Occur.MUST)
       if (excludeOriginal) bqp.add(query, Occur.MUST_NOT)
       for (lq <- limitQuery) bqb.add(lq, Occur.MUST)
-      futures2 += Future {
-        val (_,_,tv) = getAggregateContextVectorForTerms(bqp.build,ctvpl,Seq(term2),ctvpa, maxDocs4)
-        thirdOrderCollocations(term2) = tv
-      }
+      val (_,_,tv) = getAggregateContextVectorForTerms(bqp.build,ctvpl,Seq(term2),ctvpa, maxDocs4)
+      (term2,tv)
     }
-    Await.ready(Future.sequence(futures2), Duration.Inf)
     println("third order collocations:"+thirdOrderCollocations.size)
-    val maxHeap = PriorityQueue.empty[(String,(ObjIntMap[String],Double))](new Ordering[(String,(ObjIntMap[String],Double))] {
-      override def compare(x: (String,(ObjIntMap[String],Double)), y: (String,(ObjIntMap[String],Double))) = y._2._2 compare x._2._2
-    })
     val ordering = new Ordering[(String,Double)] {
       override def compare(x: (String,Double), y: (String,Double)) = y._2 compare x._2
     }
     val cmaxHeap = PriorityQueue.empty[(String,Double)](ordering)
     val dmaxHeap = PriorityQueue.empty[(String,Double)](ordering)
     var total = 0
-    for ((term,otv) <- thirdOrderCollocations;if (!otv.isEmpty)) {
-      val cscore = Distance.cosineSimilarity(collocations,otv)
-      val dscore = Distance.diceSimilarity(collocations,otv)
+    val termsToScores = thirdOrderCollocations.filter(!_._2.isEmpty).map(p => (p._1,Distance.cosineSimilarity(collocations,p._2),Distance.diceSimilarity(collocations,p._2)))
+    for ((term,cscore,dscore) <- termsToScores.seq) {
       total+=1
       if (limit == -1 || total<=limit) { 
         if (cscore!=0.0) cmaxHeap += ((term,cscore))
@@ -755,6 +857,59 @@ class SearchController @Inject() extends Controller {
     (cmaxHeap.toMap,dmaxHeap.toMap)
   } 
   
+  private lazy val tmpDir = {
+    val tmpDir = appProvider.get.getFile("tmp")
+    tmpDir.mkdir()
+    tmpDir.getPath
+  }
+  
+  private def getStackTraceAsString(t: Throwable) = {
+    val sw = new StringWriter
+    t.printStackTrace(new PrintWriter(sw))
+    sw.toString
+  }
+  
+  val sha1md = java.security.MessageDigest.getInstance("SHA-1")
+  
+  val processing = new ConcurrentHashMap[String,Future[Result]]
+  
+  def writeFile(file: File, content: String) {
+    val pw = new PrintWriter(file)
+    pw.write(content)
+    pw.close()
+  }
+  
+  private def maybeQueue(callId: String, call: () => Result): Result = {
+    Logger.info(callId)
+    val cn = play.api.libs.Codecs.sha1(sha1md.digest(callId.getBytes))
+    val tf = new File(tmpDir+"/result-"+cn+".json")
+    if (tf.createNewFile()) {
+      val tf2 = new File(tmpDir+"/result-"+cn+".parameters")
+      writeFile(tf2, callId)
+      val future = Future { call() } .flatMap(_.body.consumeData(materializer).map(c => c.decodeString("UTF-8"))).map(content => {
+        writeFile(tf, content)
+        processing.remove(cn)
+        Ok(content).as(JSON)
+      }).recover{ case cause =>
+        Logger.error("Error processing "+callId+": "+getStackTraceAsString(cause))
+        tf.delete()
+        processing.remove(cn)
+        if (cause.isInstanceOf[TimeLimitingCollector.TimeExceededException]) {
+          val tlcause = cause.asInstanceOf[TimeLimitingCollector.TimeExceededException]
+          BadRequest(s"Query timeout ${tlcause.getTimeAllowed/1000}s exceeded. If you want this to succeed, increase the timeout parameter.")
+        } else throw cause
+      }
+      processing.put(cn, future)
+    } else Logger.info("Reusing ready result for "+callId)
+    getQueuedResult(cn)
+  }
+  
+ def getQueuedResult(name: String): Result = {
+   val f = new File(tmpDir+"/result-"+name+".json")
+   if (!f.exists()) InternalServerError("\"An error has occurred, please try again.\"")
+   else Option(processing.get(name)).map(Await.result(_, Duration.Inf)).getOrElse(Ok.sendFile(f).as(JSON))
+ }
+  
   // get terms with similar collocations for a term - to find out what other words are talked about in a similar manner, for topic definition
   def similarCollocations() = Action { implicit request =>
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
@@ -762,17 +917,19 @@ class SearchController @Inject() extends Controller {
     val gp = new GeneralParameters
     implicit val ir = gp.resultLevel.reader
     implicit val is = gp.resultLevel.searcher
+    implicit val tlc = gp.tlc
     val ctv = new QueryParameters()
     val lq = new QueryParameters("l_")
     val ctvpl = new LocalTermVectorProcessingParameters()
     val ctvpa = new AggregateTermVectorProcessingParameters()
-    Logger.info(s"similarCollocations: $gp, $ctv, $ctvpl, $ctvpa, excludeOriginal:$excludeOriginal")
-    val (c,d) = getTermsWithMostSimilarCollocations(ctv.getCombinedQuery(gp.resultLevel).get,lq.getCombinedQuery(gp.resultLevel), ctvpl,getTermsFromQuery(ctv.getPrimaryQuery(gp.resultLevel)),ctvpa, excludeOriginal,gp.maxDocs, gp.limit)
-    val json = Json.toJson(Map("cosine"->c,"dice"->d)) 
-    if (gp.pretty)
-      Ok(Json.prettyPrint(json))
-    else 
-      Ok(json)
+    maybeQueue(s"similarCollocations: $gp, $ctv, $ctvpl, $ctvpa, excludeOriginal:$excludeOriginal", () => {
+      val (c,d) = getTermsWithMostSimilarCollocations(ctv.getCombinedQuery(gp.resultLevel).get,lq.getCombinedQuery(gp.resultLevel), ctvpl,getTermsFromQuery(ctv.getPrimaryQuery(gp.resultLevel)),ctvpa, excludeOriginal,gp.maxDocs, gp.limit)
+      val json = Json.toJson(Map("cosine"->c,"dice"->d)) 
+      if (gp.pretty)
+        Ok(Json.prettyPrint(json))
+      else 
+        Ok(json)
+    })
   }
   
   private class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) {
@@ -856,7 +1013,7 @@ class SearchController @Inject() extends Controller {
     val sectionQuery: Option[Query] = p.get(prefix+"sectionQuery"+suffix).map(v => dqp.parse(v(0)))
     val paragraphQuery: Option[Query] = p.get(prefix+"paragraphQuery"+suffix).map(v => dqp.parse(v(0)))
     /** minimum query match frequency for doc to be included in query results */
-    val minFreq: Int = p.get(prefix+"minFreq"+suffix).map(_(0).toInt).getOrElse(1)
+    val minFreq: Float = p.get(prefix+"minFreq"+suffix).map(_(0).toFloat).getOrElse(0.0f)
     def getPrimaryQuery(targetLevel: Level): Option[Query] = targetLevel match {
       case Level.PARAGRAPH => paragraphQuery
       case Level.DOCUMENT => documentQuery
@@ -870,34 +1027,34 @@ class SearchController @Inject() extends Controller {
         case Level.PARAGRAPH =>
           for (q <- paragraphQuery) bqb.add(q, Occur.MUST)
           for (q <- sectionQuery)
-            bqb.add(new AutomatonQuery(sidTerm,Automata.makeStringUnion(getMatchingFields(sis, q, "sectionId").asJavaCollection)),Occur.MUST)
+            bqb.add(new AutomatonQuery(sidTerm,Automata.makeStringUnion(getMatchingValuesFromNumericDocValues(sis, q, "sectionID").asJavaCollection)),Occur.MUST)
           for (q <- documentPartQuery)
-            bqb.add(new AutomatonQuery(dpidTerm,Automata.makeStringUnion(getMatchingFields(dpis, q, "partId").asJavaCollection)),Occur.MUST)
+            bqb.add(new AutomatonQuery(dpidTerm,Automata.makeStringUnion(getMatchingValuesFromNumericDocValues(dpis, q, "partID").asJavaCollection)),Occur.MUST)
           for (q <- documentQuery)
-            bqb.add(new AutomatonQuery(didTerm,Automata.makeStringUnion(getMatchingFields(dis, q, "documentId").asJavaCollection)),Occur.MUST)
+            bqb.add(new AutomatonQuery(didTerm,Automata.makeStringUnion(getMatchingValuesFromSortedDocValues(dis, q, "documentID").asJavaCollection)),Occur.MUST)
         case Level.SECTION => 
           for (q <- paragraphQuery)
-            bqb.add(new AutomatonQuery(sidTerm,Automata.makeStringUnion(getMatchingFields(pis, q, "sectionId").asJavaCollection)),Occur.MUST)
+            bqb.add(new AutomatonQuery(sidTerm,Automata.makeStringUnion(getMatchingValuesFromNumericDocValues(pis, q, "sectionID").asJavaCollection)),Occur.MUST)
           for (q <- sectionQuery) bqb.add(q, Occur.MUST)
           for (q <- documentPartQuery)
-            bqb.add(new AutomatonQuery(dpidTerm,Automata.makeStringUnion(getMatchingFields(dpis, q, "partId").asJavaCollection)),Occur.MUST)
+            bqb.add(new AutomatonQuery(dpidTerm,Automata.makeStringUnion(getMatchingValuesFromNumericDocValues(dpis, q, "partID").asJavaCollection)),Occur.MUST)
           for (q <- documentQuery)
-            bqb.add(new AutomatonQuery(didTerm,Automata.makeStringUnion(getMatchingFields(dis, q, "documentId").asJavaCollection)),Occur.MUST)
+            bqb.add(new AutomatonQuery(didTerm,Automata.makeStringUnion(getMatchingValuesFromSortedDocValues(dis, q, "documentID").asJavaCollection)),Occur.MUST)
         case Level.DOCUMENTPART => 
           for (q <- paragraphQuery)
-            bqb.add(new AutomatonQuery(dpidTerm,Automata.makeStringUnion(getMatchingFields(pis, q, "partId").asJavaCollection)),Occur.MUST)
+            bqb.add(new AutomatonQuery(dpidTerm,Automata.makeStringUnion(getMatchingValuesFromNumericDocValues(pis, q, "partID").asJavaCollection)),Occur.MUST)
           for (q <- sectionQuery)
-            bqb.add(new AutomatonQuery(dpidTerm,Automata.makeStringUnion(getMatchingFields(sis, q, "partId").asJavaCollection)),Occur.MUST)
+            bqb.add(new AutomatonQuery(dpidTerm,Automata.makeStringUnion(getMatchingValuesFromNumericDocValues(sis, q, "partID").asJavaCollection)),Occur.MUST)
           for (q <- documentPartQuery) bqb.add(q, Occur.MUST)          
           for (q <- documentQuery)
-            bqb.add(new AutomatonQuery(didTerm,Automata.makeStringUnion(getMatchingFields(dis, q, "documentId").asJavaCollection)),Occur.MUST)
+            bqb.add(new AutomatonQuery(didTerm,Automata.makeStringUnion(getMatchingValuesFromSortedDocValues(dis, q, "documentID").asJavaCollection)),Occur.MUST)
         case Level.DOCUMENT =>
           for (q <- paragraphQuery)
-            bqb.add(new AutomatonQuery(didTerm,Automata.makeStringUnion(getMatchingFields(pis, q, "documentId").asJavaCollection)),Occur.MUST)
+            bqb.add(new AutomatonQuery(didTerm,Automata.makeStringUnion(getMatchingValuesFromSortedDocValues(pis, q, "documentID").asJavaCollection)),Occur.MUST)
           for (q <- sectionQuery)
-            bqb.add(new AutomatonQuery(didTerm,Automata.makeStringUnion(getMatchingFields(sis, q, "documentId").asJavaCollection)),Occur.MUST)
+            bqb.add(new AutomatonQuery(didTerm,Automata.makeStringUnion(getMatchingValuesFromSortedDocValues(sis, q, "documentID").asJavaCollection)),Occur.MUST)
           for (q <- documentPartQuery)
-            bqb.add(new AutomatonQuery(didTerm,Automata.makeStringUnion(getMatchingFields(dpis, q, "documentId").asJavaCollection)),Occur.MUST)
+            bqb.add(new AutomatonQuery(didTerm,Automata.makeStringUnion(getMatchingValuesFromSortedDocValues(dpis, q, "documentID").asJavaCollection)),Occur.MUST)
           for (q <- documentQuery) bqb.add(q, Occur.MUST)
       }
       Some(bqb.build)
@@ -908,11 +1065,19 @@ class SearchController @Inject() extends Controller {
   
   private class QueryReturnParameters(implicit request: Request[AnyContent]) {
     private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    val fields: Seq[String] = p.get("field").getOrElse(Seq.empty)
+    val tvfields: Seq[String] = p.get("field").getOrElse(Seq.empty).filter(_ match {
+      case "containsGraphicOfType" => true
+      case _ => false
+    })
+    val sdvfields: Seq[String] = p.get("field").getOrElse(Seq.empty).filter(_ match {
+      case "documentPartType" | "headingLevel" | "collectionId" | "documentID" | "ESTCID" | "language" | "module" => true
+      case _ => false
+    })
+    val ndvfields: Seq[String] = p.get("field").getOrElse(Seq.empty).filter(f => !tvfields.contains(f) && !sdvfields.contains(f))
     /** return explanations and norms in search */
     val returnNorms: Boolean = p.get("returnNorms").exists(v => v(0)=="" || v(0).toBoolean)
     val returnMatches: Boolean = p.get("returnMatches").exists(v => v(0)=="" || v(0).toBoolean)
-    override def toString() = s"fields:$fields, returnMatches: $returnMatches, returnNorms: $returnNorms"
+    override def toString() = s"tvfields:$tvfields, sdvfields:$sdvfields, ndvfields:$ndvfields, returnMatches: $returnMatches, returnNorms: $returnNorms"
   }
 
   private class GeneralParameters(implicit request: Request[AnyContent]) {
@@ -921,11 +1086,20 @@ class SearchController @Inject() extends Controller {
     val pretty: Boolean = p.get("pretty").exists(v => v(0)=="" || v(0).toBoolean)
     val limit: Int = p.get("limit").map(_(0).toInt).getOrElse(20)
     val maxDocs: Int = p.get("maxDocs").map(_(0).toInt).getOrElse(resultLevel match {
-      case Level.PARAGRAPH => 50000
-      case Level.SECTION => 25000
-      case Level.DOCUMENTPART => 5000
-      case Level.DOCUMENT => 5000
+      case Level.PARAGRAPH => 100000
+      case Level.SECTION => 50000
+      case Level.DOCUMENTPART => 20000
+      case Level.DOCUMENT => 20000
     })
+    private val timeout = p.get("timeout").map(_(0).toLong).getOrElse(30l)*1000l
+    private val baseline = TimeLimitingCollector.getGlobalCounter.get
+    val tlc: ThreadLocal[TimeLimitingCollector] = new ThreadLocal[TimeLimitingCollector] {
+      override def initialValue(): TimeLimitingCollector = {
+        val tlc = new TimeLimitingCollector(null,TimeLimitingCollector.getGlobalCounter,timeout)
+        tlc.setBaseline(baseline)
+        tlc
+      }
+    }
     override def toString() = s"resultLevel:$resultLevel, maxDocs:$maxDocs, pretty: $pretty, limit: $limit"
   }
   
@@ -945,100 +1119,147 @@ class SearchController @Inject() extends Controller {
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val qp = new QueryParameters
     val gp = new GeneralParameters
-    implicit val ir = gp.resultLevel.reader
-    implicit val is = gp.resultLevel.searcher
     val srp = new QueryReturnParameters
     val ctv = new QueryParameters("ctv_")
     val ctvpl = new LocalTermVectorProcessingParameters()
     val ctvpa = new AggregateTermVectorProcessingParameters()
+    implicit val ir = gp.resultLevel.reader
+    implicit val is = if (ctvpa.sumScaling == SumTermVectorScaling.DF) new IndexSearcher(ir) else gp.resultLevel.searcher
+    implicit val tlc = gp.tlc
     val termVectors = p.get("termVector").exists(v => v(0)=="" || v(0).toBoolean)
-    Logger.info(s"$qp, $srp, $ctv, $ctvpl, $ctvpa, $gp, termVectors:$termVectors")
-    var total = 0
-    val maxHeap = PriorityQueue.empty[(Int,Int)](new Ordering[(Int,Int)] {
-      override def compare(x: (Int,Int), y: (Int,Int)) = y._2 compare x._2
-    })
-    val compareTermVector = if (ctv.defined) getAggregateContextVectorForTerms(ctv.getCombinedQuery(gp.resultLevel).get,ctvpl, getTermsFromQuery(ctv.getPrimaryQuery(gp.resultLevel)),ctvpa, gp.maxDocs) else null
-    var fields = srp.fields :+ "Freq"
-    val highlighter = if (srp.returnMatches) { 
-      fields = fields :+ "Matches"
-      new UnifiedHighlighter(null, analyzer)
-    } else null
-    if (ctv.defined) fields = fields :+ "Distance"
-    if (termVectors || ctvpa.mdsDimensions>0) fields = fields :+ "Term Vector"
-    val docFields = HashIntObjMaps.newUpdatableMap[Seq[JsValue]]
-    val docVectors = HashIntObjMaps.newUpdatableMap[LongDoubleMap]
-    val pq = qp.getCombinedQuery(gp.resultLevel).get
-    val (we, normTerms) = if (srp.returnNorms) {
-      fields = fields :+ "Explanation" :+ "TermNorms"
-      getTermsFromQuery(qp.getCombinedQuery(gp.resultLevel))
-      val we = pq.createWeight(is, true)
-      val terms = new HashSet[Term]
-      we.extractTerms(terms.asJava)
-      (we,  terms)
-    } else (null, null)
-    is.search(pq, new SimpleCollector() {
-    
-      override def needsScores: Boolean = true
-      var scorer: Scorer = null
-      var context: LeafReaderContext = null
-
-      override def setScorer(scorer: Scorer) {this.scorer=scorer}
-
-      override def collect(doc: Int) {
-        if (scorer.score.toInt>=qp.minFreq) {
-          total+=1
-          if (gp.limit == -1) {
-            val d = context.reader.document(doc)
-            var fields = srp.fields.map(f => Json.toJson(d.getValues(f).mkString(";"))) :+ Json.toJson(scorer.score().toInt)
-            if (srp.returnMatches)
-              fields = fields :+ Json.toJson(highlighter.highlightWithoutSearcher("content", pq, d.get("content"), 100).toString)
-            val cv = if (termVectors || ctvpa.mdsDimensions > 0 || ctv.defined) getTermVectorForDocument(doc, ctvpl, ctvpa) else null 
-            if (ctv.defined)
-              fields = fields :+ Json.toJson(ctvpa.distance(cv, compareTermVector._3))
-            if (srp.returnNorms)
-              fields = fields :+ Json.toJson(we.explain(context, doc).toString) :+ Json.toJson(normTerms.map(t => Json.toJson(Map("field"->t.field, "term"->t.text, "docFreq"->(""+dir.docFreq(t)), "totalTermFreq"->(""+dir.totalTermFreq(t))))))
-            if (termVectors && ctvpa.mdsDimensions == 0) fields :+ Json.toJson(toStringMap(cv))
-            else if (ctvpa.mdsDimensions > 0) docVectors.put(doc,cv)
-            docFields.put(doc, fields)
-            maxHeap += ((doc, scorer.score.toInt))
-          } else if (total<=gp.limit)
-            maxHeap += ((doc, scorer.score.toInt))
-          else if (maxHeap.head._2<scorer.score.toInt) {
-            maxHeap.dequeue()
-            maxHeap += ((doc, scorer.score.toInt))
+    maybeQueue(s"search: $qp, $srp, $ctv, $ctvpl, $ctvpa, $gp, termVectors:$termVectors", () => {
+      var total = 0
+      val maxHeap = PriorityQueue.empty[(Int,Float)](new Ordering[(Int,Float)] {
+        override def compare(x: (Int,Float), y: (Int,Float)) = y._2 compare x._2
+      })
+      val compareTermVector = if (ctv.defined) getAggregateContextVectorForTerms(ctv.getCombinedQuery(gp.resultLevel).get,ctvpl, getTermsFromQuery(ctv.getPrimaryQuery(gp.resultLevel)),ctvpa, gp.maxDocs) else null
+      val highlighter = if (srp.returnMatches)
+        new UnifiedHighlighter(null, analyzer) else null
+      val docFields = HashIntObjMaps.newUpdatableMap[collection.Map[String,JsValue]]
+      val docVectors = HashIntObjMaps.newUpdatableMap[LongDoubleMap]
+      val pq = qp.getCombinedQuery(gp.resultLevel).get
+      val (we, normTerms) = if (srp.returnNorms) {
+        getTermsFromQuery(qp.getCombinedQuery(gp.resultLevel))
+        val we = pq.createWeight(is, true)
+        val terms = new HashSet[Term]
+        we.extractTerms(terms.asJava)
+        (we,  terms)
+      } else (null, null)
+      tlc.get.setCollector(new SimpleCollector() {
+      
+        override def needsScores: Boolean = true
+        var scorer: Scorer = null
+        var context: LeafReaderContext = null
+        
+        var sdvs: Map[String,SortedDocValues] = null
+        var ndvs: Map[String,NumericDocValues] = null
+  
+        override def setScorer(scorer: Scorer) {this.scorer=scorer}
+  
+        override def collect(doc: Int) {
+          if (scorer.score.toInt>=qp.minFreq) {
+            total+=1
+            if (gp.limit == -1) {
+              val fields = new HashMap[String, JsValue]
+              for ((field, dv) <- this.sdvs) fields += ((field -> Json.toJson(dv.get(doc).utf8ToString)))
+              for ((field, dv) <- this.ndvs) fields += ((field -> Json.toJson(dv.get(doc))))
+              for (field <- srp.tvfields) {
+                val ft = context.reader.getTermVector(doc, field)
+                if (ft != null) {
+                  val fte = ft.iterator()
+                  var br = fte.next()
+                  val map = new HashMap[String,Int]
+                  while (br!=null) {
+                    map.put(br.utf8ToString, fte.docFreq)
+                    br = fte.next()
+                  }
+                  fields += ((field -> Json.toJson(map)))
+                }
+              }
+              if (srp.returnMatches)
+                fields += (("matches" -> Json.toJson(highlighter.highlightWithoutSearcher("content", pq, context.reader.document(doc).get("content"), 100).toString)))
+              val cv = if (termVectors || ctvpa.mdsDimensions > 0 || ctv.defined) getTermVectorForDocument(doc, ctvpl, ctvpa) else null 
+              if (ctv.defined)
+                fields += (("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._3))))
+              if (srp.returnNorms) {
+                fields += (("explanation" -> Json.toJson(we.explain(context, doc).toString)))
+                fields += (("norms" -> Json.toJson(normTerms.map(t => Json.toJson(Map("field"->t.field, "term"->t.text, "docFreq"->(""+dir.docFreq(t)), "totalTermFreq"->(""+dir.totalTermFreq(t))))))))
+              }
+              if (ctvpa.mdsDimensions > 0) docVectors.put(doc,cv)
+              else if (termVectors) fields += (("term_vector" -> Json.toJson(toStringMap(cv))))
+              docFields.put(doc, fields)
+              maxHeap += ((doc, scorer.score))
+            } else if (total<=gp.limit)
+              maxHeap += ((doc, scorer.score))
+            else if (maxHeap.head._2<scorer.score) {
+              maxHeap.dequeue()
+              maxHeap += ((doc, scorer.score))
+            }
           }
         }
-      }
-
-      override def doSetNextReader(context: LeafReaderContext) = {
-        this.context = context
-      }
-    })
-    if (gp.limit!= -1) {
-      maxHeap.foreach(p => {
-        val d = ir.document(p._1)
-        var fields = srp.fields.map(f => Json.toJson(d.getValues(f).mkString(";"))) :+ Json.toJson(p._2)
-        if (srp.returnMatches)
-          fields = fields :+ Json.toJson(highlighter.highlightWithoutSearcher("content", pq, d.get("content"), 100).toString)
-        val cv = if (termVectors || ctvpa.mdsDimensions > 0 || ctv.defined) getTermVectorForDocument(p._1, ctvpl, ctvpa) else null 
-        if (ctv.defined)
-          fields = fields :+ Json.toJson(ctvpa.distance(cv, compareTermVector._3))
-        if (srp.returnNorms) for (lr <- ir.leaves.asScala; if lr.docBase<p._1 && lr.docBase + lr.reader.maxDoc > p._1) 
-          fields = fields :+ Json.toJson(we.explain(lr, p._1 - lr.docBase).toString) :+ Json.toJson(normTerms.map(t => Json.toJson(Map("field"->t.field, "term"->t.text, "docFreq"->(""+dir.docFreq(t)), "totalTermFreq"->(""+dir.totalTermFreq(t))))))
-        if (termVectors && ctvpa.mdsDimensions == 0) fields :+ Json.toJson(toStringMap(cv))
-        else if (ctvpa.mdsDimensions > 0) docVectors.put(p._1,cv)
-        docFields.put(p._1, fields)
+  
+        override def doSetNextReader(context: LeafReaderContext) = {
+          this.context = context
+          if (gp.limit == -1) {
+            this.sdvs = srp.sdvfields.map(f => (f -> DocValues.getSorted(context.reader, f))).toMap
+            this.ndvs = srp.ndvfields.map(f => (f -> DocValues.getNumeric(context.reader, f))).toMap
+          }
+        }
       })
-    }
-    val cvs = if (ctvpa.mdsDimensions > 0) mds(maxHeap.map(p => docVectors.get(p._1)), ctvpa).map(Json.toJson(_)).toSeq else null
-    var map = Map("total"->Json.toJson(total),"fields"->Json.toJson(fields),"results"->Json.toJson(maxHeap.zipWithIndex.map{ case ((doc,_),i) =>
-      if (cvs!=null) docFields.get(doc) :+ cvs(i)
-      else docFields.get(doc)
-    }))
-    if (gp.pretty)
-      Ok(Json.prettyPrint(Json.toJson(map)))
-    else 
-      Ok(Json.toJson(map))
+      is.search(pq, gp.tlc.get)    
+      if (gp.limit!= -1) {
+        val dvs = new HashMap[Int,(Map[String,SortedDocValues],Map[String,NumericDocValues])]
+        for (lr <- ir.leaves.asScala) {
+          val sdvs = srp.sdvfields.map(f => (f -> DocValues.getSorted(lr.reader, f))).toMap
+          val ndvs = srp.ndvfields.map(f => (f -> DocValues.getNumeric(lr.reader, f))).toMap
+          dvs += ((lr.docBase, (sdvs, ndvs)))          
+        }
+        maxHeap.foreach(p => {
+          val d = ir.document(p._1)
+          val fields = new HashMap[String, JsValue]
+          if (srp.returnMatches)
+            fields += (("matches" -> Json.toJson(highlighter.highlightWithoutSearcher("content", pq, ir.document(p._1).get("content"), 100).toString)))
+          val cv = if (termVectors || ctvpa.mdsDimensions > 0 || ctv.defined) getTermVectorForDocument(p._1, ctvpl, ctvpa) else null 
+          if (ctv.defined)
+            fields += (("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._3))))
+          for (lr <- ir.leaves.asScala; if lr.docBase<p._1 && lr.docBase + lr.reader.maxDoc > p._1) {
+            val (sdvs,ndvs) = dvs(lr.docBase)
+            val doc = p._1 - lr.docBase
+            for (field <- srp.tvfields) {
+              val ft = lr.reader.getTermVector(doc, field)
+              if (ft != null) {
+                val fte = ft.iterator()
+                var br = fte.next()
+                val map = new HashMap[String,Int]
+                while (br!=null) {
+                  map.put(br.utf8ToString, fte.docFreq)
+                  br = fte.next()
+                }
+                fields += ((field -> Json.toJson(map)))
+              }
+            }
+            for ((field, dv) <- sdvs) fields += ((field -> Json.toJson(dv.get(doc).utf8ToString)))
+            for ((field, dv) <- ndvs) fields += ((field -> Json.toJson(dv.get(doc))))
+            if (srp.returnNorms) {
+              fields += (("explanation" -> Json.toJson(we.explain(lr, doc).toString)))
+              fields += (("norms" -> Json.toJson(normTerms.map(t => Json.toJson(Map("field"->t.field, "term"->t.text, "docFreq"->(""+dir.docFreq(t)), "totalTermFreq"->(""+dir.totalTermFreq(t))))))))
+            }
+          }
+          if (ctvpa.mdsDimensions > 0) docVectors.put(p._1,cv)
+          else if (termVectors) fields += (("term_vector" -> Json.toJson(toStringMap(cv))))
+          docFields.put(p._1, fields)
+        })
+      }
+      val cvs = if (ctvpa.mdsDimensions > 0) mds(maxHeap.map(p => docVectors.get(p._1)), ctvpa).map(Json.toJson(_)).toSeq else null
+      var map = Map("total"->Json.toJson(total),"results"->Json.toJson(maxHeap.zipWithIndex.map{ case ((doc,score),i) =>
+        if (cvs!=null) docFields.get(doc) ++ Map("term_vector"->cvs(i), "score" -> (if (ctvpa.sumScaling == SumTermVectorScaling.DF) Json.toJson(score) else Json.toJson(score.toInt))) 
+        else docFields.get(doc) ++ Map("score" -> (if (ctvpa.sumScaling == SumTermVectorScaling.DF) Json.toJson(score) else Json.toJson(score.toInt)))
+      }))
+      if (gp.pretty)
+        Ok(Json.prettyPrint(Json.toJson(map)))
+      else 
+        Ok(Json.toJson(map))
+    })
   }
  
 }
