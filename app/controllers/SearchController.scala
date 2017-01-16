@@ -165,6 +165,7 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
     getOrCreateResult(s"search: $qp, $srp, $ctv, $ctvpl, $ctvpa, $gp, termVectors:$termVectors", gp.force, () => {
       implicit val tlc = gp.tlc
       val (queryLevel,query) = buildFinalQueryRunningSubQueries(qp.query.get)
+      Logger.debug(f"Final query: $query%s, level: $queryLevel%s")
       val is = searcher(queryLevel,srp.sumScaling)
       val ir = is.getIndexReader
       var total = 0
@@ -213,7 +214,7 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
           }
         }
         if (srp.returnMatches)
-          fields += (("matches" -> Json.toJson(highlighter.highlightWithoutSearcher("content", query, document.get("content"), 100).asInstanceOf[Array[String]])))
+          fields += (("matches" -> Json.toJson(highlighter.highlightWithoutSearcher("content", query, document.get("content"), 100).asInstanceOf[Array[String]].filter(_.contains("<b>")))))
         val cv = if (termVectors || ctvpa.mdsDimensions > 0 || ctv.query.isDefined) getTermVectorForDocument(ir, doc, ctvpl, ctvpa) else null 
         if (ctv.query.isDefined)
           fields += (("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._3))))

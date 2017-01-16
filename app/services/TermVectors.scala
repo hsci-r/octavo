@@ -84,12 +84,15 @@ object TermVectors  {
   
   def getTermVectorForDocument(ir: IndexReader, doc: Int, ctvpl: LocalTermVectorProcessingParameters, ctvpa: AggregateTermVectorProcessingParameters): LongDoubleMap = {
     val cv = HashLongIntMaps.newUpdatableMap() 
-    val tvt = ir.getTermVector(doc, "content").iterator.asInstanceOf[TVTermsEnum]
-    var term = tvt.nextOrd()
-    while (term != -1l) {
-      if (ctvpl.matches(ir, term, tvt.totalTermFreq))
-        cv.addValue(term, tvt.totalTermFreq.toInt)
-      term = tvt.nextOrd()
+    val tv = ir.getTermVector(doc, "content")
+    if (tv != null) {
+      val tvt = tv.iterator.asInstanceOf[TVTermsEnum]
+      var term = tvt.nextOrd()
+      while (term != -1l) {
+        if (ctvpl.matches(ir, term, tvt.totalTermFreq))
+          cv.addValue(term, tvt.totalTermFreq.toInt)
+        term = tvt.nextOrd()
+      }
     }
     scaleAndFilterTermVector(ir, cv, ctvpa)
   }

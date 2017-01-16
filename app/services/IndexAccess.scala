@@ -187,6 +187,7 @@ class IndexAccess @Inject() (config: Configuration) {
         if (clause.getQuery.isInstanceOf[TermQuery]) {
           val tq = clause.getQuery.asInstanceOf[TermQuery]
           if (tq.getTerm.field == "MAGIC") bqb.add(replacements(tq.getTerm.text),clause.getOccur)
+          else bqb.add(clause)
         } else bqb.add(clause)
       (queryLevel,bqb.build,targetLevel)
     }
