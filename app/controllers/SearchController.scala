@@ -183,8 +183,6 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
         })
         highlighter
       } else null
-      val docFields = HashIntObjMaps.newUpdatableMap[collection.Map[String,JsValue]]
-      val docVectors = HashIntObjMaps.newUpdatableMap[LongDoubleMap]
       val (we, normTerms) = if (srp.returnNorms)
         (query.createWeight(is, true), extractContentTermsFromQuery(query))
       else (null, null)
@@ -223,10 +221,11 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
           fields += (("explanation" -> Json.toJson(we.explain(context, doc).toString)))
         fields += (("norms" -> Json.toJson(normTerms.map(t => Json.toJson(Map("term"->t, "docFreq"->(""+ir.docFreq(new Term("content", t))), "totalTermFreq"->(""+ir.totalTermFreq(new Term("content",t)))))))))
         }
-        if (ctvpa.mdsDimensions > 0) docVectors.put(doc,cv)
-        else if (termVectors) fields += (("term_vector" -> Json.toJson(termOrdMapToTermMap(ir, cv))))
-        fields    
+        if (termVectors && ctvpa.mdsDimensions == 0) fields += (("term_vector" -> Json.toJson(termOrdMapToTermMap(ir, cv))))
+        (fields, cv)    
       }
+      val docFields = HashIntObjMaps.newUpdatableMap[collection.Map[String,JsValue]]
+      val docVectors = HashIntObjMaps.newUpdatableMap[LongDoubleMap]
       val collector = new SimpleCollector() {
       
         override def needsScores: Boolean = true
@@ -238,11 +237,14 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
   
         override def setScorer(scorer: Scorer) {this.scorer=scorer}
   
-        override def collect(doc: Int) {
+        override def collect(ldoc: Int) {
+          val doc = context.docBase + ldoc
           if (scorer.score >= qp.minScore) {
             total+=1
             if (gp.limit == -1) {
-              docFields.put(doc, processDocFields(context, doc, sdvs, ndvs))
+              val (cdocFields, cdocVectors) = processDocFields(context, doc, sdvs, ndvs)
+              docFields.put(doc, cdocFields)
+              if (cdocVectors !=null) docVectors.put(doc, cdocVectors)
               maxHeap += ((doc, scorer.score))
             } else if (total<=gp.limit)
               maxHeap += ((doc, scorer.score))
@@ -258,6 +260,7 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
           if (gp.limit == -1) {
             this.sdvs = srp.sortedDocValuesFields.map(f => (f -> DocValues.getSorted(context.reader, f))).toMap
             this.ndvs = srp.numericDocValuesFields.map(f => (f -> DocValues.getNumeric(context.reader, f))).toMap
+            
           }
         }
       }
@@ -278,12 +281,19 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
           for (lr <- ir.leaves.asScala; if lr.docBase<p._1 && lr.docBase + lr.reader.maxDoc > p._1) {
             val (sdvs,ndvs) = dvs(lr.docBase)
             val doc = p._1 - lr.docBase
-            docFields.put(p._1, processDocFields(lr,doc,sdvs,ndvs))
+            val (cdocFields, cdocVectors) = processDocFields(lr, doc, sdvs, ndvs)
+            docFields.put(p._1, cdocFields)
+            if (cdocVectors != null) docVectors.put(p._1, cdocVectors)
           }
         })
       }
       val values = maxHeap.dequeueAll.reverse
-      val cvs = if (ctvpa.mdsDimensions > 0) mds(values.map(p => docVectors.get(p._1)), ctvpa).map(Json.toJson(_)).toSeq else null
+      val cvs = if (ctvpa.mdsDimensions > 0) {
+        val nonEmptyVectorsAndTheirOriginalIndices = values.map(p => docVectors.get(p._1)).zipWithIndex.filter(p => !p._1.isEmpty)
+        val mdsValues = mds(nonEmptyVectorsAndTheirOriginalIndices.map(p => p._1), ctvpa).map(Json.toJson(_)).toSeq
+        val originalIndicesToMDSValueIndices = nonEmptyVectorsAndTheirOriginalIndices.map(_._2).zipWithIndex.toMap
+        values.indices.map(i => originalIndicesToMDSValueIndices.get(i).map(vi => Json.toJson(mdsValues(vi))).getOrElse(JsNull))
+      } else null
       var map = Map("total"->Json.toJson(total),"results"->Json.toJson(values.zipWithIndex.map{ case ((doc,score),i) =>
         if (cvs!=null) docFields.get(doc) ++ Map("term_vector"->cvs(i), "score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt))) 
         else docFields.get(doc) ++ Map("score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt)))

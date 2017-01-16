@@ -46,6 +46,7 @@ import org.apache.lucene.index.Term
 import org.apache.lucene.util.automaton.Automaton
 import org.apache.lucene.search.highlight.QueryTermExtractor
 import org.apache.lucene.search.TotalHitCountCollector
+import play.api.Logger
 
 @Singleton
 class IndexAccess @Inject() (config: Configuration) {
@@ -341,6 +342,7 @@ object IndexAccess {
       }
     })
     is.search(q, tlc.get)
+    Logger.debug(f"SortedDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
     ret
   }
 
@@ -361,6 +363,7 @@ object IndexAccess {
       }
     })
     is.search(q, tlc.get)
+    Logger.debug(f"NumericDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
     ret
   }
   
