@@ -27,7 +27,7 @@ class DumpController @Inject() (ia: IndexAccess, mat: Materializer, env: Environ
     val gp = GeneralParameters()
     implicit val iec = shortTaskExecutionContext
     getOrCreateResult(s"dump: $gp", gp.force, () => {
-      val sdvfields = Seq("documentID","ESTCID","language","module")
+      val sdvfields = Seq("collectionID","documentID","ESTCID","language","module")
       val ndvfields = Seq("pubDateStart","pubDateEnd","documentLength","totalPages","totalParagraphs")
       val sfields = Seq("fullTitle")
       val sfieldsS = new java.util.HashSet[String]
