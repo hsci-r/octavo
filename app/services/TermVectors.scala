@@ -48,28 +48,30 @@ object TermVectors  {
       override def collect(doc: Int) {
         aDocFreq+=1
         if (maxDocs == -1 || sampleProbability == 1.0 || Math.random() < sampleProbability) {
-          docCollector(doc)
           val tv = this.context.reader.getTermVector(doc, "content")
-          if (tv.size()>10000) Logger.debug(s"Long term vector for doc $doc: ${tv.size}")
-          val tvt = tv.iterator().asInstanceOf[TVTermsEnum]
-          val min = if (ctvp.localScaling!=LocalTermVectorScaling.MIN) 0 else if (minScalingTerms.isEmpty) Int.MaxValue else minScalingTerms.foldLeft(0)((f,term) => if (tvt.seekExact(new BytesRef(term))) f+tvt.totalTermFreq.toInt else f)
-          var term = tvt.nextOrd()
-          var anyMatches = false
-          while (term != -1l) {
-            t2+=1
-            if (ctvp.matches(ir, term, tvt.totalTermFreq)) {
-              anyMatches = true
-              val d = ctvp.localScaling match {
-                case LocalTermVectorScaling.MIN => math.min(min,tvt.totalTermFreq.toInt)
-                case LocalTermVectorScaling.ABSOLUTE => tvt.totalTermFreq.toInt
-                case LocalTermVectorScaling.FLAT => 1
+          if (tv != null) {
+            docCollector(doc)
+            if (tv.size()>10000) Logger.debug(s"Long term vector for doc $doc: ${tv.size}")
+            val tvt = tv.iterator().asInstanceOf[TVTermsEnum]
+            val min = if (ctvp.localScaling!=LocalTermVectorScaling.MIN) 0 else if (minScalingTerms.isEmpty) Int.MaxValue else minScalingTerms.foldLeft(0)((f,term) => if (tvt.seekExact(new BytesRef(term))) f+tvt.totalTermFreq.toInt else f)
+            var term = tvt.nextOrd()
+            var anyMatches = false
+            while (term != -1l) {
+              t2+=1
+              if (ctvp.matches(ir, term, tvt.totalTermFreq)) {
+                anyMatches = true
+                val d = ctvp.localScaling match {
+                  case LocalTermVectorScaling.MIN => math.min(min,tvt.totalTermFreq.toInt)
+                  case LocalTermVectorScaling.ABSOLUTE => tvt.totalTermFreq.toInt
+                  case LocalTermVectorScaling.FLAT => 1
+                }
+                termCollector(term, d)
+                totalTermFreq += d
               }
-              termCollector(term, d)
-              totalTermFreq += d
+              term = tvt.nextOrd()
             }
-            term = tvt.nextOrd()
+            if (anyMatches) docFreq+=1
           }
-          if (anyMatches) docFreq+=1
         }
       }
       override def doSetNextReader(context: LeafReaderContext) = {
@@ -128,12 +130,16 @@ object TermVectors  {
     val cvm = new HashMap[String,UnscaledVectorInfo]
     var cv: UnscaledVectorInfo = null
     var attrGetter: (Int) => String = null
+    var anyMatches = false
     runTermVectorQuery(is, q, ctvp, minScalingTerms, maxDocs, (nlrc: LeafReaderContext) => {
       attrGetter = QueryReturnParameters.getter(nlrc.reader, attr).andThen(_.iterator.next)
     }, (doc: Int) => {
+      if (anyMatches) cv.docFreq += 1
       val cattr = attrGetter(doc)
       cv = cvm.getOrElseUpdate(if (attrLength == -1) cattr else cattr.substring(0,attrLength), new UnscaledVectorInfo)
+      anyMatches = false
     }, (term: Long, freq: Int) => {
+        anyMatches = true
        cv.cv.put(term, freq)
        cv.totalTermFreq += freq
      })
