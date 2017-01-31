@@ -127,28 +127,49 @@ class IndexAccess @Inject() (config: Configuration) {
     var values: Iterable[BytesRef] = null
     targetLevel match {
       case Level.PARAGRAPH =>
-        idTerm = paragraphIDTerm
         values = queryLevel match {
-          case Level.DOCUMENT => getMatchingValuesFromSortedDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "documentID")
-          case Level.DOCUMENTPART => getMatchingValuesFromNumericDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "partID")
-          case Level.SECTION => getMatchingValuesFromNumericDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "sectionID")
-          case Level.PARAGRAPH => getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "paragraphID")
+          case Level.DOCUMENT =>
+            idTerm = documentIDTerm
+            getMatchingValuesFromSortedDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "documentID")
+          case Level.DOCUMENTPART =>
+            idTerm = documentPartIDTerm
+            getMatchingValuesFromNumericDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "partID")
+          case Level.SECTION =>
+            idTerm = sectionIDTerm
+            getMatchingValuesFromNumericDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "sectionID")
+          case Level.PARAGRAPH => 
+            idTerm = paragraphIDTerm
+            getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "paragraphID")
         }
       case Level.SECTION => 
-        idTerm = sectionIDTerm
         values = queryLevel match {
-          case Level.DOCUMENT => getMatchingValuesFromSortedDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "documentID")
-          case Level.DOCUMENTPART => getMatchingValuesFromNumericDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "partID")
-          case Level.SECTION => getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "sectionID")
-          case Level.PARAGRAPH => getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "sectionID")
+          case Level.DOCUMENT =>
+            idTerm = documentIDTerm
+            getMatchingValuesFromSortedDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "documentID")
+          case Level.DOCUMENTPART =>
+            idTerm = documentPartIDTerm
+            getMatchingValuesFromNumericDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "partID")
+          case Level.SECTION =>
+            idTerm = sectionIDTerm
+            getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "sectionID")
+          case Level.PARAGRAPH =>
+            idTerm = sectionIDTerm
+            getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "sectionID")
         }
       case Level.DOCUMENTPART =>
-        idTerm = documentPartIDTerm
         values = queryLevel match {
-          case Level.DOCUMENT => getMatchingValuesFromSortedDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "documentID")
-          case Level.DOCUMENTPART => getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "partID")
-          case Level.SECTION => getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "partID")
-          case Level.PARAGRAPH => getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "partID")
+          case Level.DOCUMENT =>
+            idTerm = documentIDTerm
+            getMatchingValuesFromSortedDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "documentID")
+          case Level.DOCUMENTPART => 
+            idTerm = documentPartIDTerm
+            getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "partID")
+          case Level.SECTION => 
+            idTerm = documentPartIDTerm
+            getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "partID")
+          case Level.PARAGRAPH => 
+            idTerm = documentPartIDTerm
+            getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "partID")
         }
       case Level.DOCUMENT => 
         idTerm = documentIDTerm
@@ -176,9 +197,10 @@ class IndexAccess @Inject() (config: Configuration) {
       val (subQueryQueryLevel, subQuery, subQueryTargetLevel) = processQueryInternal(query.substring(firstStart.get.start, curEnd + 1))
       val processedSubQuery = if (subQueryQueryLevel == queryLevel && subQueryTargetLevel == targetLevel) subQuery else runSubQuery(subQueryQueryLevel,subQuery,subQueryTargetLevel)
       replacements += (("" + (replacements.size + 1)) -> processedSubQuery)
-      query = query.substring(0, firstStart.get.start) + " MAGIC:" + replacements.size + query.substring(curEnd + 1)
+      query = query.substring(0, firstStart.get.start) + "MAGIC:" + replacements.size + query.substring(curEnd + 1)
       firstStart = queryPartStart.findFirstMatchIn(query)
     }
+    Logger.debug(s"Query ${queryIn} rewritten to $query with replacements $replacements.")
     val q = queryParsers.get.parse(query)
     if (replacements.isEmpty) (queryLevel,q,targetLevel) 
     else {

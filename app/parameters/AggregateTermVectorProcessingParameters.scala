@@ -16,12 +16,14 @@ case class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: 
   final def matches(sumFreq: Int): Boolean = {
     (minSumFreq == 1 && maxSumFreq == Int.MaxValue) || (minSumFreq <= sumFreq && maxSumFreq >= sumFreq)
   }
+  val limitOpt = p.get(prefix+"tvlimit"+suffix).map(_(0).toInt)
+  val limit: Int = limitOpt.getOrElse(-1)
   private val mdsDimensionsOpt = p.get("mdsDimensions").map(_(0).toInt)
   /** amount of dimensions for dimensionally reduced term vector coordinates */
-  val mdsDimensions: Int = mdsDimensionsOpt.getOrElse(-1)    
+  val mdsDimensions: Int = mdsDimensionsOpt.getOrElse(0)    
   private val distanceOpt = p.get("distance").map(v => DistanceMetric.withName(v(0).toUpperCase))
   /** distance metric used for term vector comparisons */
   val distance: DistanceMetric = distanceOpt.getOrElse(DistanceMetric.COSINE)
-  val defined: Boolean = sumScalingOpt.isDefined || minSumFreqOpt.isDefined || maxSumFreqOpt.isDefined|| mdsDimensionsOpt.isDefined || distanceOpt.isDefined
-  override def toString() = s"${prefix}sumScaling$suffix:$sumScaling, ${prefix}minSumFreq$suffix:$minSumFreq, ${prefix}maxSumFreq$suffix:$maxSumFreq, ${prefix}mdsDimensions$suffix:$mdsDimensions, ${prefix}distance$suffix:$distance"
+  val defined: Boolean = sumScalingOpt.isDefined || minSumFreqOpt.isDefined || maxSumFreqOpt.isDefined || limitOpt.isDefined || mdsDimensionsOpt.isDefined || distanceOpt.isDefined
+  override def toString() = s"${prefix}sumScaling$suffix:$sumScaling, ${prefix}minSumFreq$suffix:$minSumFreq, ${prefix}maxSumFreq$suffix:$maxSumFreq, ${prefix}tvlimit$suffix:${limit}, ${prefix}mdsDimensions$suffix:$mdsDimensions, ${prefix}distance$suffix:$distance"
 }

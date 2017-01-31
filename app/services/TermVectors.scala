@@ -40,7 +40,7 @@ object TermVectors  {
    val totalHits = getHitCountForQuery(is, q)
    val sampleProbability = math.min(maxDocs.toDouble / totalHits, 1.0)
    val ir = is.getIndexReader
-   Logger.info(f"q: $q%s, sampleProbability:${sampleProbability}%,.4f <- maxDocs:$maxDocs%,d, hits:${totalHits}")
+   Logger.info(f"q: $q%s, sampleProbability:${sampleProbability}%,.4f <- maxDocs:$maxDocs%,d, hits:${totalHits}%,d")
    tlc.get.setCollector(new SimpleCollector() {
       override def needsScores: Boolean = false
       var context: LeafReaderContext = null
@@ -51,7 +51,7 @@ object TermVectors  {
           val tv = this.context.reader.getTermVector(doc, "content")
           if (tv != null) {
             docCollector(doc)
-            if (tv.size()>10000) Logger.debug(s"Long term vector for doc $doc: ${tv.size}")
+            if (tv.size()>10000) Logger.debug(f"Long term vector for doc $doc%d: ${tv.size}%,d")
             val tvt = tv.iterator().asInstanceOf[TVTermsEnum]
             val min = if (ctvp.localScaling!=LocalTermVectorScaling.MIN) 0 else if (minScalingTerms.isEmpty) Int.MaxValue else minScalingTerms.foldLeft(0)((f,term) => if (tvt.seekExact(new BytesRef(term))) f+tvt.totalTermFreq.toInt else f)
             var term = tvt.nextOrd()
@@ -112,7 +112,14 @@ object TermVectors  {
          if (ctvp.matches(v)) m.put(k, ctvp.sumScaling(ir, k, v))
        }
     })
-    m
+    if (ctvp.limit == -1)
+      m
+    else {
+      val best = filterHighestScores(m, ctvp.limit)
+      val m2 = HashLongDoubleMaps.newMutableMap()
+      for ((key,value) <- best) m2.put(key, value)
+      m2
+    }
   }
   
   def getAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (Long,Long,LongDoubleMap) = {
