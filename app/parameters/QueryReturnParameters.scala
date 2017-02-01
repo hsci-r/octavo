@@ -30,7 +30,7 @@ object QueryReturnParameters {
     case _ => false
   }
   def isSortedDocValuesField(field: String) = field match {
-    case "documentPartType" | "headingLevel" | "collectionId" | "documentID" | "ESTCID" | "language" | "module" => true
+    case "documentPartType" | "headingLevel" | "collectionID" | "documentID" | "ESTCID" | "language" | "module" => true
     case _ => false
   }
   def isStoredSingularField(field: String) = field match {
