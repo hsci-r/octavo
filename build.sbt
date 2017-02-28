@@ -1,4 +1,4 @@
-name := """ecco-estc-search"""
+name := """octavo"""
 
 version := "1.1"
 
@@ -6,9 +6,9 @@ enablePlugins(SystemdPlugin)
 
 maintainer := "Eetu Mäkelä <eetu.makela@aalto.fi>"
 
-packageSummary := "ecco-estc-search"
+packageSummary := "octavo"
 
-packageDescription := "Search API on ECCO data, built using the Play framework"
+packageDescription := "Octavo - Open API for Text and Metadata, built using the Play framework"
 
 lazy val root = (project in file(".")).enablePlugins(
   PlayScala,
