@@ -254,7 +254,7 @@ object IndexAccess {
     override def initialValue(): QueryParser = new QueryParser("content",analyzer) {
       override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
         field match {
-          case "pubDate" | "contentTokens" | "length" | "totalPages" =>
+          case "pubDateStart" | "pubDateEnd" | "contentTokens" | "length" | "totalPages" =>
             val low = Try(if (startInclusive) part1.toInt else part1.toInt + 1).getOrElse(Int.MinValue)
             val high = Try(if (endInclusive) part2.toInt else part2.toInt - 1).getOrElse(Int.MaxValue)
             IntPoint.newRangeQuery(field, low, high)
