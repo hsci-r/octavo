@@ -85,7 +85,7 @@ object TermVectors  {
   }
   
   def getTermVectorForDocument(ir: IndexReader, doc: Int, ctvpl: LocalTermVectorProcessingParameters, ctvpa: AggregateTermVectorProcessingParameters): LongDoubleMap = {
-    val cv = HashLongIntMaps.newUpdatableMap() 
+    val cv = HashLongIntMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap() 
     val tv = ir.getTermVector(doc, "content")
     if (tv != null) {
       val tvt = tv.iterator.asInstanceOf[TVTermsEnum]
@@ -100,13 +100,13 @@ object TermVectors  {
   }
 
   private def getUnscaledAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (Long,Long,LongIntMap) = {
-     val cv = HashLongIntMaps.newUpdatableMap()
+     val cv = HashLongIntMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
      val (docFreq, totalTermFreq) = runTermVectorQuery(is, q, ctvp, minScalingTerms, maxDocs, (_: LeafReaderContext) => Unit, (_: Int) => Unit, (term: Long, freq: Int) => cv.addValue(term, freq))
      (docFreq,totalTermFreq,cv)
   }
   
   private def scaleAndFilterTermVector(ir: IndexReader, cv: LongIntMap, ctvp: AggregateTermVectorProcessingParameters): LongDoubleMap = {
-    val m = HashLongDoubleMaps.newUpdatableMap()
+    val m = HashLongDoubleMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
     cv.forEach(new LongIntConsumer {
        override def accept(k: Long, v: Int) {
          if (ctvp.matches(v)) m.put(k, ctvp.sumScaling(ir, k, v))
@@ -116,7 +116,7 @@ object TermVectors  {
       m
     else {
       val best = filterHighestScores(m, ctvp.limit)
-      val m2 = HashLongDoubleMaps.newMutableMap()
+      val m2 = HashLongDoubleMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
       for ((key,value) <- best) m2.put(key, value)
       m2
     }
@@ -130,7 +130,7 @@ object TermVectors  {
   private final class UnscaledVectorInfo {
     var docFreq = 0l
     var totalTermFreq = 0l
-    val cv: LongIntMap = HashLongIntMaps.getDefaultFactory.newUpdatableMap()
+    val cv: LongIntMap = HashLongIntMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
   }
   
   private def getGroupedUnscaledAggregateContextVectorsForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], attr: String, attrLength: Int, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Map[String,UnscaledVectorInfo] = {
@@ -165,7 +165,7 @@ object TermVectors  {
   }
   
   def getContextTermsForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (Long,Long,LongSet) = {
-     val cv = HashLongSets.newUpdatableSet()
+     val cv = HashLongSets.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableSet()
      val (docFreq, totalTermFreq) = runTermVectorQuery(is, q, ctvp, Seq.empty, maxDocs, (_: LeafReaderContext) => Unit, (_: Int) => Unit, (term: Long, _) => cv.add(term))
      (docFreq,totalTermFreq,cv)
   }  

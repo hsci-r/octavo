@@ -225,8 +225,8 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
         if (cv != null && ctvpa.mdsDimensions == 0) fields += (("term_vector" -> Json.toJson(termOrdMapToTermMap(ir, cv))))
         (fields, if (ctvpa.mdsDimensions >0) cv else null)    
       }
-      val docFields = HashIntObjMaps.newUpdatableMap[collection.Map[String,JsValue]]
-      val docVectorsForMDS = if (ctvpa.mdsDimensions>0) HashIntObjMaps.newUpdatableMap[LongDoubleMap] else null
+      val docFields = HashIntObjMaps.getDefaultFactory[collection.Map[String,JsValue]]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[collection.Map[String,JsValue]]
+      val docVectorsForMDS = if (ctvpa.mdsDimensions>0) HashIntObjMaps.getDefaultFactory[LongDoubleMap]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[LongDoubleMap] else null
       val collector = new SimpleCollector() {
       
         override def needsScores: Boolean = true
@@ -275,7 +275,7 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
           dvs += ((lr.docBase, (sdvs, ndvs)))          
         }
         maxHeap.foreach(p =>
-          for (lr <- ir.leaves.asScala; if lr.docBase<p._1 && lr.docBase + lr.reader.maxDoc > p._1) {
+          for (lr <- ir.leaves.asScala; if lr.docBase<=p._1 && lr.docBase + lr.reader.maxDoc > p._1) {            
             val (sdvs,ndvs) = dvs(lr.docBase)
             val doc = p._1 - lr.docBase
             val (cdocFields, cdocVectors) = processDocFields(lr, doc, sdvs, ndvs)
@@ -294,7 +294,7 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
       } else null
       var map = Map("total"->Json.toJson(total),"results"->Json.toJson(values.zipWithIndex.map{ case ((doc,score),i) =>
         if (cvs!=null) docFields.get(doc) ++ Map("term_vector"->cvs(i), "score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt))) 
-        else docFields.get(doc) ++ Map("score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt)))
+        else docFields.get(doc) ++ Map("score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt))) 
       }))
       if (gp.pretty)
         Ok(Json.prettyPrint(Json.toJson(map)))

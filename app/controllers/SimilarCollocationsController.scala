@@ -74,7 +74,7 @@ class SimilarCollocationsController @Inject() (ia: IndexAccess, materializer: Ma
           }
         }
       })
-      val collocationCollocations = HashLongSets.newUpdatableSet() // tvs for all terms in the tv of the query
+      val collocationCollocations = HashLongSets.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableSet() // tvs for all terms in the tv of the query
       for (set <- Await.result(Future.sequence(futures), Duration.Inf))
         set.forEach(new LongConsumer() {
           override def accept(term: Long) {
