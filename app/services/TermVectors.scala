@@ -101,7 +101,7 @@ object TermVectors  {
 
   private def getUnscaledAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (Long,Long,LongIntMap) = {
      val cv = HashLongIntMaps.newUpdatableMap()
-     val (docFreq, totalTermFreq) = runTermVectorQuery(is, q, ctvp, minScalingTerms, maxDocs, (_: LeafReaderContext) => Unit, (_: Int) => Unit, (term: Long, freq: Int) => cv.put(term, freq))
+     val (docFreq, totalTermFreq) = runTermVectorQuery(is, q, ctvp, minScalingTerms, maxDocs, (_: LeafReaderContext) => Unit, (_: Int) => Unit, (term: Long, freq: Int) => cv.addValue(term, freq))
      (docFreq,totalTermFreq,cv)
   }
   
@@ -147,7 +147,7 @@ object TermVectors  {
       anyMatches = false
     }, (term: Long, freq: Int) => {
         anyMatches = true
-       cv.cv.put(term, freq)
+       cv.cv.addValue(term, freq)
        cv.totalTermFreq += freq
      })
     cvm
