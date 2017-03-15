@@ -27,18 +27,35 @@ import scala.collection.mutable.HashMap
 import com.koloboke.collect.set.LongSet
 import java.util.function.LongConsumer
 import com.koloboke.collect.set.hash.HashLongSets
+import play.api.libs.json.Json
+import play.api.libs.json.JsValue
+import scala.collection.mutable.ArrayBuffer
 
 object TermVectors  {
   
   import IndexAccess.{getHitCountForQuery,termOrdToTerm}
   
-  private def runTermVectorQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int, contextSetter: (LeafReaderContext) => Unit, docCollector: (Int) => Unit, termCollector: (Long,Int) => Unit)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (Long,Long) = {
-   var aDocFreq = 0l
-   var docFreq = 0l
-   var t2 = 0l
-   var totalTermFreq = 0l
+  case class TermVectorQueryMetadata(val totalDocs: Long, val processedDocs: Long, val samplePercentage: Double, val contributingDocs: Long, val processedTerms: Long, val acceptedTerms: Long, val totalAcceptedTermFreq: Long) {
+    def toJson(): JsValue = Json.toJson(Map(
+        "totalDocsMatchingQuery"->Json.toJson(totalDocs),
+        "processedDocs"->Json.toJson(processedDocs),
+        "samplePercentage"->Json.toJson(samplePercentage),
+        "contributingDocs"->Json.toJson(contributingDocs),
+        "processedTerms"->Json.toJson(processedTerms),
+        "acceptedTerms"->Json.toJson(acceptedTerms),
+        "totalAcceptedTermFreq"->Json.toJson(totalAcceptedTermFreq)
+    ))
+            
+  }
+  
+  private def runTermVectorQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int, contextSetter: (LeafReaderContext) => Unit, docCollector: (Int) => Unit, termCollector: (Long,Int) => Unit)(implicit tlc: ThreadLocal[TimeLimitingCollector]): TermVectorQueryMetadata = {
+   var processedDocs = 0l
+   var contributingDocs = 0l
+   var processedTerms = 0l
+   var acceptedTerms = 0l
+   var totalAcceptedTermFreq = 0l
    val totalHits = getHitCountForQuery(is, q)
-   val sampleProbability = math.min(maxDocs.toDouble / totalHits, 1.0)
+   val sampleProbability = if (maxDocs == -1) 1.0 else math.min(maxDocs.toDouble / totalHits, 1.0)
    val ir = is.getIndexReader
    Logger.info(f"q: $q%s, sampleProbability:${sampleProbability}%,.4f <- maxDocs:$maxDocs%,d, hits:${totalHits}%,d")
    tlc.get.setCollector(new SimpleCollector() {
@@ -46,8 +63,8 @@ object TermVectors  {
       var context: LeafReaderContext = null
 
       override def collect(doc: Int) {
-        aDocFreq+=1
         if (maxDocs == -1 || sampleProbability == 1.0 || Math.random() < sampleProbability) {
+          processedDocs+=1          
           val tv = this.context.reader.getTermVector(doc, "content")
           if (tv != null) {
             docCollector(doc)
@@ -57,8 +74,9 @@ object TermVectors  {
             var term = tvt.nextOrd()
             var anyMatches = false
             while (term != -1l) {
-              t2+=1
+              processedTerms += 1
               if (ctvp.matches(ir, term, tvt.totalTermFreq)) {
+                acceptedTerms += 1
                 anyMatches = true
                 val d = ctvp.localScaling match {
                   case LocalTermVectorScaling.MIN => math.min(min,tvt.totalTermFreq.toInt)
@@ -66,11 +84,11 @@ object TermVectors  {
                   case LocalTermVectorScaling.FLAT => 1
                 }
                 termCollector(term, d)
-                totalTermFreq += d
+                totalAcceptedTermFreq += d
               }
               term = tvt.nextOrd()
             }
-            if (anyMatches) docFreq+=1
+            if (anyMatches) contributingDocs+=1
           }
         }
       }
@@ -80,8 +98,8 @@ object TermVectors  {
       }
     })
     is.search(q, tlc.get)
-    Logger.info(f"$q%s, processed docs: $aDocFreq%,d, contributing docs: $docFreq%,d, processed terms: $t2%,d, total accepted term freq: $totalTermFreq%,d")
-    (docFreq, totalTermFreq)
+    Logger.info(f"$q%s, total docs: $totalHits%,d, processed docs: $processedDocs%,d, sample probability: $sampleProbability%,.2f. Contributing docs: $contributingDocs%,d, processed terms: $processedTerms%,d, accepted terms: $acceptedTerms%,d, total accepted term freq: $totalAcceptedTermFreq%,d")
+    TermVectorQueryMetadata(totalHits, processedDocs, sampleProbability, contributingDocs, processedTerms, acceptedTerms, totalAcceptedTermFreq)
   }
   
   def getTermVectorForDocument(ir: IndexReader, doc: Int, ctvpl: LocalTermVectorProcessingParameters, ctvpa: AggregateTermVectorProcessingParameters): LongDoubleMap = {
@@ -99,10 +117,9 @@ object TermVectors  {
     scaleAndFilterTermVector(ir, cv, ctvpa)
   }
 
-  private def getUnscaledAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (Long,Long,LongIntMap) = {
-     val cv = HashLongIntMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
-     val (docFreq, totalTermFreq) = runTermVectorQuery(is, q, ctvp, minScalingTerms, maxDocs, (_: LeafReaderContext) => Unit, (_: Int) => Unit, (term: Long, freq: Int) => cv.addValue(term, freq))
-     (docFreq,totalTermFreq,cv)
+  private def getUnscaledAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (TermVectorQueryMetadata,LongIntMap) = {
+     val cv = HashLongIntMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()     val md = runTermVectorQuery(is, q, ctvp, minScalingTerms, maxDocs, (_: LeafReaderContext) => Unit, (_: Int) => Unit, (term: Long, freq: Int) => cv.addValue(term, freq))
+     (md,cv)
   }
   
   private def scaleAndFilterTermVector(ir: IndexReader, cv: LongIntMap, ctvp: AggregateTermVectorProcessingParameters): LongDoubleMap = {
@@ -122,9 +139,9 @@ object TermVectors  {
     }
   }
   
-  def getAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (Long,Long,LongDoubleMap) = {
-    val (docFreq, totalTermFreq, cv) = getUnscaledAggregateContextVectorForQuery(is, q, ctvpl, minScalingTerms, maxDocs)
-    (docFreq, totalTermFreq, scaleAndFilterTermVector(is.getIndexReader, cv, ctvpa))
+  def getAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (TermVectorQueryMetadata,LongDoubleMap) = {
+    val (md, cv) = getUnscaledAggregateContextVectorForQuery(is, q, ctvpl, minScalingTerms, maxDocs)
+    (md, scaleAndFilterTermVector(is.getIndexReader, cv, ctvpa))
   }
   
   private final class UnscaledVectorInfo {
@@ -212,6 +229,16 @@ object TermVectors  {
       }
     })
     rm
+  }
+  
+  def termOrdMapToOrderedTermSeq(ir: IndexReader, m: LongDoubleMap): Seq[(String,Double)] = {
+    val rm = new ArrayBuffer[(String,Double)]
+    m.forEach(new LongDoubleConsumer {
+      override def accept(term: Long, freq: Double) {
+        rm += ((termOrdToTerm(ir, term),freq))
+      }
+    })
+    rm.sortBy(-_._2)
   }
   
   def termOrdsToTerms(ir: IndexReader, m: LongSet): Traversable[String] = {

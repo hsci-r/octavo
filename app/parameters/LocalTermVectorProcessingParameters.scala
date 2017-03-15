@@ -3,6 +3,7 @@ package parameters
 import play.api.mvc.Request
 import play.api.mvc.AnyContent
 import org.apache.lucene.index.IndexReader
+import play.api.libs.json.Json
 
 case class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) {
   import services.IndexAccess.{totalTermFreq,docFreq,termOrdToTerm}
@@ -54,5 +55,6 @@ case class LocalTermVectorProcessingParameters(prefix: String = "", suffix: Stri
     freqInDocMatches(freq) && docFreqMatches(ir,term) && totalTermFreqMatches(ir,term) && termLengthMatches(ir,term)
   val defined: Boolean = localScalingOpt.isDefined || minFreqInDocOpt.isDefined || maxFreqInDocOpt.isDefined || minTotalTermFreqOpt.isDefined || maxTotalTermFreqOpt.isDefined || minDocFreqOpt.isDefined || maxDocFreqOpt.isDefined || minTermLengthOpt.isDefined || maxTermLengthOpt.isDefined
   override def toString() = s"${prefix}localScaling$suffix:$localScaling, ${prefix}minTotalTermFreq$suffix:$minTotalTermFreq, ${prefix}maxTotalTermFreq$suffix:$maxTotalTermFreq, ${prefix}minDocFreq$suffix:$minDocFreq, ${prefix}maxDocFreq$suffix:$maxDocFreq, ${prefix}minFreqInDoc$suffix:$minFreqInDoc, ${prefix}maxFreqInDoc$suffix:$maxFreqInDoc, ${prefix}minTermLength$suffix:$minTermLength, ${prefix}maxTermLength$suffix:$maxTermLength"
+  def toJson() = Json.obj(prefix+"localScaling"+suffix->localScaling, prefix+"minTotalTermFreq"+suffix->minTotalTermFreq, prefix+"maxTotalTermFreq"+suffix->maxTotalTermFreq, prefix+"minDocFreq"+suffix->minDocFreq, prefix+"maxDocFreq"+suffix->maxDocFreq, prefix+"minFreqInDoc"+suffix -> minFreqInDoc, prefix+"maxFreqInDoc"+suffix -> maxFreqInDoc, prefix + "minTermLength" + suffix -> minTermLength, prefix + "maxTermLength" + suffix -> maxTermLength)
 }
 

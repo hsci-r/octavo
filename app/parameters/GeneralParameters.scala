@@ -5,6 +5,10 @@ import scala.concurrent.ExecutionContext
 import org.apache.lucene.search.TimeLimitingCollector
 import play.api.mvc.AnyContent
 import services.IndexAccess
+import play.api.libs.json.JsValue
+import play.api.libs.json.Json
+import scala.collection.immutable.Map
+import play.api.libs.json.JsObject
 
 case class GeneralParameters(implicit request: Request[AnyContent]) {
   import IndexAccess.{longTaskExecutionContext,shortTaskExecutionContext}
@@ -25,4 +29,5 @@ case class GeneralParameters(implicit request: Request[AnyContent]) {
   }
   val force: Boolean  = p.get("force").exists(v => v(0)=="" || v(0).toBoolean)
   override def toString() = s"maxDocs:$maxDocs, pretty: $pretty, limit: $limit"
+  def toJson(): JsObject = Json.obj("maxDocs"->maxDocs,"pretty"->pretty,"limit"->limit)
 }

@@ -162,7 +162,8 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
     val ctvpa = AggregateTermVectorProcessingParameters()
     val termVectors = p.get("termVectors").exists(v => v(0)=="" || v(0).toBoolean)
     implicit val iec = gp.executionContext
-    getOrCreateResult(s"search: $qp, $srp, $ctv, $ctvpl, $ctvpa, $gp, termVectors:$termVectors", gp.force, () => {
+    val callId = s"search: $qp, $srp, $ctv, $ctvpl, $ctvpa, $gp, termVectors:$termVectors"
+    getOrCreateResult(callId, gp.force, () => {
       implicit val tlc = gp.tlc
       val (queryLevel,query) = buildFinalQueryRunningSubQueries(qp.query.get)
       Logger.debug(f"Final query: $query%s, level: $queryLevel%s")
@@ -217,7 +218,7 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
           fields += (("matches" -> Json.toJson(highlighter.highlightWithoutSearcher("content", query, document.get("content"), 100).asInstanceOf[Array[String]].filter(_.contains("<b>")))))
         val cv = if (termVectors || ctvpa.defined || ctvpl.defined || ctvpa.mdsDimensions > 0 || ctv.query.isDefined) getTermVectorForDocument(ir, doc, ctvpl, ctvpa) else null 
         if (ctv.query.isDefined)
-          fields += (("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._3))))
+          fields += (("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._2))))
         if (srp.returnNorms) {
           fields += (("explanation" -> Json.toJson(we.explain(context, doc).toString)))
         fields += (("norms" -> Json.toJson(normTerms.map(t => Json.toJson(Map("term"->t, "docFreq"->(""+ir.docFreq(new Term("content", t))), "totalTermFreq"->(""+ir.totalTermFreq(new Term("content",t)))))))))
@@ -280,7 +281,7 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
             val doc = p._1 - lr.docBase
             val (cdocFields, cdocVectors) = processDocFields(lr, doc, sdvs, ndvs)
             if (ctv.query.isDefined)
-              cdocFields += (("distance" -> Json.toJson(ctvpa.distance(cdocVectors, compareTermVector._3))))
+              cdocFields += (("distance" -> Json.toJson(ctvpa.distance(cdocVectors, compareTermVector._2))))
             docFields.put(p._1, cdocFields)
             if (cdocVectors != null) docVectorsForMDS.put(p._1, cdocVectors)
         })

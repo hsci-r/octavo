@@ -9,6 +9,8 @@ import org.apache.lucene.index.Term
 import org.apache.lucene.search.BooleanClause.Occur
 import org.apache.lucene.util.automaton.Automata
 import services.IndexAccess
+import play.api.libs.json.Json
+import play.api.libs.json.JsObject
 
 case class QueryParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) {
   protected val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
@@ -16,4 +18,5 @@ case class QueryParameters(prefix: String = "", suffix: String = "")(implicit re
   /** minimum query score (by default term match frequency) for doc to be included in query results */
   val minScore: Float = p.get(prefix+"minScore"+suffix).map(_(0).toFloat).getOrElse(0.0f)
   override def toString() = s"${prefix}query$suffix:$query, ${prefix}minScore$suffix: $minScore"
+  def toJson(): JsObject = Json.obj(prefix+"query"+suffix->query,prefix+"minScore"+suffix->minScore)
 }

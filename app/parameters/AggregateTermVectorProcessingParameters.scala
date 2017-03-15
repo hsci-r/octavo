@@ -2,6 +2,8 @@ package parameters
 
 import play.api.mvc.Request
 import play.api.mvc.AnyContent
+import play.api.libs.json.JsObject
+import play.api.libs.json.Json
 
 case class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) {
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
@@ -26,4 +28,5 @@ case class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: 
   val distance: DistanceMetric = distanceOpt.getOrElse(DistanceMetric.COSINE)
   val defined: Boolean = sumScalingOpt.isDefined || minSumFreqOpt.isDefined || maxSumFreqOpt.isDefined || limitOpt.isDefined || mdsDimensionsOpt.isDefined || distanceOpt.isDefined
   override def toString() = s"${prefix}sumScaling$suffix:$sumScaling, ${prefix}minSumFreq$suffix:$minSumFreq, ${prefix}maxSumFreq$suffix:$maxSumFreq, ${prefix}tvlimit$suffix:${limit}, ${prefix}mdsDimensions$suffix:$mdsDimensions, ${prefix}distance$suffix:$distance"
+  def toJson(): JsObject = Json.obj(prefix+"sumScaling"+suffix->sumScaling.entryName,prefix+"minSumFreq"+suffix->minSumFreq,prefix+"maxSumFreq"+suffix->maxSumFreq,prefix+"tvlimit"+suffix->limit, prefix+"mdsDimensions"+suffix->mdsDimensions, prefix+"distance"+suffix->distance.entryName) 
 }

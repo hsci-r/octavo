@@ -58,7 +58,7 @@ class SimilarCollocationsController @Inject() (ia: IndexAccess, materializer: Ma
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
       val maxDocs2 = if (gp.maxDocs == -1) -1 else gp.maxDocs / 3
-      val (_,_,collocations) = getAggregateContextVectorForQuery(is, termVectorQuery, termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters, maxDocs2)
+      val (_,collocations) = getAggregateContextVectorForQuery(is, termVectorQuery, termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters, maxDocs2)
       println("collocations: "+collocations.size)
       val futures = new ArrayBuffer[Future[LongSet]]
       val maxDocs3 = if (gp.maxDocs == -1) -1 else maxDocs2/collocations.size
@@ -69,7 +69,7 @@ class SimilarCollocationsController @Inject() (ia: IndexAccess, materializer: Ma
           val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term("content",termS)), Occur.MUST)
           for (q <- intermediaryLimitQuery) bqb.add(q, Occur.MUST)
           futures += Future {
-            val (_,_,tv) = getContextTermsForQuery(is, bqb.build, intermediaryTermVectorLocalProcessingParameters, maxDocs3)
+            val (_,tv) = getContextTermsForQuery(is, bqb.build, intermediaryTermVectorLocalProcessingParameters, maxDocs3)
             tv
           }
         }
@@ -87,7 +87,7 @@ class SimilarCollocationsController @Inject() (ia: IndexAccess, materializer: Ma
       val thirdOrderCollocations = for (term2 <- termOrdsToTerms(ir, collocationCollocations).par) yield {
         val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term("content",term2)), Occur.MUST)
         for (q <- finalLimitQuery) bqb.add(q, Occur.MUST)
-        val (_,_,tv) = getAggregateContextVectorForQuery(is, bqb.build,finalTermVectorLocalProcessingParameters,Seq(term2), finalTermVectorAggregateProcessingParameters, maxDocs4)
+        val (_,tv) = getAggregateContextVectorForQuery(is, bqb.build,finalTermVectorLocalProcessingParameters,Seq(term2), finalTermVectorAggregateProcessingParameters, maxDocs4)
         (term2,tv)
       }
       println("third order collocations:"+thirdOrderCollocations.size)
