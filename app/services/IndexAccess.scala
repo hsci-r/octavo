@@ -34,7 +34,6 @@ import scala.concurrent.ExecutionContext
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ArrayBlockingQueue
-import parameters.Level
 import parameters.SumScaling
 import org.apache.lucene.search.TimeLimitingCollector
 import scala.collection.mutable.HashMap
@@ -47,181 +46,15 @@ import org.apache.lucene.util.automaton.Automaton
 import org.apache.lucene.search.highlight.QueryTermExtractor
 import org.apache.lucene.search.TotalHitCountCollector
 import play.api.Logger
-
-@Singleton
-class IndexAccess @Inject() (config: Configuration) {
-  
-  import IndexAccess._
- 
-  private val path = config.getString("index.path").getOrElse("/srv/ecco")
-
-  private val documentReader = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath(path+"/dindex")))
-  private val documentTermFrequencySearcher = {
-    val is = new IndexSearcher(documentReader)
-    is.setSimilarity(termFrequencySimilarity)
-    is
-  }
-  private val documentTFIDFSearcher = new IndexSearcher(documentReader)
-  
-  private val documentPartReader = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath(path+"/dpindex")))
-  private val documentPartTermFrequencySearcher = {
-    val is = new IndexSearcher(documentPartReader)
-    is.setSimilarity(termFrequencySimilarity)
-    is
-  }
-  private val documentPartTFIDFSearcher = new IndexSearcher(documentPartReader)
-  
-  private val sectionReader = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath(path+"/sindex")))
-  private val sectionTermFrequencySearcher = {
-    val is = new IndexSearcher(sectionReader)
-    is.setSimilarity(termFrequencySimilarity)
-    is
-  }
-  private val sectionTFIDFSearcher = new IndexSearcher(sectionReader)
-  
-  private val paragraphReader = DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath(path+"/pindex")))
-  private val paragraphTermFrequencySearcher = {
-    val is = new IndexSearcher(paragraphReader)
-    is.setSimilarity(termFrequencySimilarity)
-    is
-  }
-  private val paragraphTFIDFSearcher = new IndexSearcher(paragraphReader)
-  
-  def reader(level: Level.Value): IndexReader = level match {
-    case Level.DOCUMENT => documentReader
-    case Level.DOCUMENTPART => documentPartReader
-    case Level.SECTION => sectionReader
-    case Level.PARAGRAPH => paragraphReader
-  }
-  
-  def searcher(level: Level.Value, sumScaling: SumScaling): IndexSearcher = {
-    sumScaling match {
-      case SumScaling.DF => 
-        level match {
-          case Level.DOCUMENT => documentTFIDFSearcher
-          case Level.DOCUMENTPART => documentPartTFIDFSearcher
-          case Level.SECTION => sectionTFIDFSearcher
-          case Level.PARAGRAPH => paragraphTFIDFSearcher
-        }
-      case _ =>
-        level match {
-          case Level.DOCUMENT => documentTermFrequencySearcher
-          case Level.DOCUMENTPART => documentPartTermFrequencySearcher
-          case Level.SECTION => sectionTermFrequencySearcher
-          case Level.PARAGRAPH => paragraphTermFrequencySearcher
-        }
-    }
-  }
-  
-  private val queryPartStart = "(?<!\\\\)<".r
-  private val queryPartEnd = "(?<!\\\\)>".r
-  
-  private val documentIDTerm = new Term("documentID","")
-  private val documentPartIDTerm = new Term("partID","")
-  private val sectionIDTerm = new Term("sectionID","")
-  private val paragraphIDTerm = new Term("paragraphID","")
-
-  
-  private def runSubQuery(queryLevel: Level.Value, query: Query, targetLevel: Level.Value)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Query = {
-    var idTerm: Term = null
-    var values: Iterable[BytesRef] = null
-    targetLevel match {
-      case Level.PARAGRAPH =>
-        values = queryLevel match {
-          case Level.DOCUMENT =>
-            idTerm = documentIDTerm
-            getMatchingValuesFromSortedDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "documentID")
-          case Level.DOCUMENTPART =>
-            idTerm = documentPartIDTerm
-            getMatchingValuesFromNumericDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "partID")
-          case Level.SECTION =>
-            idTerm = sectionIDTerm
-            getMatchingValuesFromNumericDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "sectionID")
-          case Level.PARAGRAPH => 
-            idTerm = paragraphIDTerm
-            getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "paragraphID")
-        }
-      case Level.SECTION => 
-        values = queryLevel match {
-          case Level.DOCUMENT =>
-            idTerm = documentIDTerm
-            getMatchingValuesFromSortedDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "documentID")
-          case Level.DOCUMENTPART =>
-            idTerm = documentPartIDTerm
-            getMatchingValuesFromNumericDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "partID")
-          case Level.SECTION =>
-            idTerm = sectionIDTerm
-            getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "sectionID")
-          case Level.PARAGRAPH =>
-            idTerm = sectionIDTerm
-            getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "sectionID")
-        }
-      case Level.DOCUMENTPART =>
-        values = queryLevel match {
-          case Level.DOCUMENT =>
-            idTerm = documentIDTerm
-            getMatchingValuesFromSortedDocValues(searcher(targetLevel, SumScaling.ABSOLUTE), query, "documentID")
-          case Level.DOCUMENTPART => 
-            idTerm = documentPartIDTerm
-            getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "partID")
-          case Level.SECTION => 
-            idTerm = documentPartIDTerm
-            getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "partID")
-          case Level.PARAGRAPH => 
-            idTerm = documentPartIDTerm
-            getMatchingValuesFromNumericDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "partID")
-        }
-      case Level.DOCUMENT => 
-        idTerm = documentIDTerm
-        values = queryLevel match {
-          case Level.DOCUMENT => getMatchingValuesFromSortedDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "documentID")
-          case Level.DOCUMENTPART => getMatchingValuesFromSortedDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "documentID")
-          case Level.SECTION => getMatchingValuesFromSortedDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "documentID")
-          case Level.PARAGRAPH => getMatchingValuesFromSortedDocValues(searcher(queryLevel, SumScaling.ABSOLUTE), query, "documentID")
-        }
-    }
-    new AutomatonQuery(idTerm,Automata.makeStringUnion(values.asJavaCollection))
-  }
-  
-  private def processQueryInternal(queryIn: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (Level.Value,Query,Level.Value) = {
-    val queryLevel = Level.withName(queryIn.substring(1,queryIn.indexOf('|')).toUpperCase)
-    val targetLevel = Level.withName(queryIn.substring(queryIn.lastIndexOf('|') + 1, queryIn.length - 1).toUpperCase)
-    var query = queryIn.substring(queryIn.indexOf('|') + 1, queryIn.lastIndexOf('|'))
-    val replacements = new HashMap[String,Query]
-    var firstStart = queryPartStart.findFirstMatchIn(query)
-    while (firstStart.isDefined) { // we have (more) subqueries
-      val ends = queryPartEnd.findAllMatchIn(query)
-      var curEnd = ends.next().start
-      var neededEnds = queryPartStart.findAllIn(query.substring(0, curEnd)).size - 1
-      while (neededEnds > 0) curEnd = ends.next().start
-      val (subQueryQueryLevel, subQuery, subQueryTargetLevel) = processQueryInternal(query.substring(firstStart.get.start, curEnd + 1))
-      val processedSubQuery = if (subQueryQueryLevel == queryLevel && subQueryTargetLevel == targetLevel) subQuery else runSubQuery(subQueryQueryLevel,subQuery,subQueryTargetLevel)
-      replacements += (("" + (replacements.size + 1)) -> processedSubQuery)
-      query = query.substring(0, firstStart.get.start) + "MAGIC:" + replacements.size + query.substring(curEnd + 1)
-      firstStart = queryPartStart.findFirstMatchIn(query)
-    }
-    Logger.debug(s"Query ${queryIn} rewritten to $query with replacements $replacements.")
-    val q = queryParsers.get.parse(query)
-    if (replacements.isEmpty) (queryLevel,q,targetLevel) 
-    else {
-      val bqb = new BooleanQuery.Builder()
-      for (clause <- q.asInstanceOf[BooleanQuery].clauses.asScala)
-        if (clause.getQuery.isInstanceOf[TermQuery]) {
-          val tq = clause.getQuery.asInstanceOf[TermQuery]
-          if (tq.getTerm.field == "MAGIC") bqb.add(replacements(tq.getTerm.text),clause.getOccur)
-          else bqb.add(clause)
-        } else bqb.add(clause)
-      (queryLevel,bqb.build,targetLevel)
-    }
-  }
-  
-  def buildFinalQueryRunningSubQueries(query: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (Level.Value, Query) = {
-    val (queryLevel, q, targetLevel) = processQueryInternal(query)
-    if (queryLevel==targetLevel) (targetLevel,q)
-    else (targetLevel,runSubQuery(queryLevel,q,targetLevel))
-  }
-  
-}
+import java.io.File
+import java.io.FileInputStream
+import play.api.libs.json._
+import play.api.libs.json.Reads._
+import play.api.libs.functional.syntax._
+import enumeratum.EnumEntry
+import enumeratum.Enum
+import org.apache.lucene.index.LeafReader
+import java.util.Collections
 
 object IndexAccess {
   
@@ -247,24 +80,6 @@ object IndexAccess {
 
   private val standardAnalyzer = new StandardAnalyzer()
   
-  val analyzer = new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),Map[String,Analyzer]("content"->standardAnalyzer,"fullTitle"->standardAnalyzer).asJava)
-  
-  val queryParsers = new ThreadLocal[QueryParser] {
-    
-    override def initialValue(): QueryParser = new QueryParser("content",analyzer) {
-      override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
-        field match {
-          case "pubDateStart" | "pubDateEnd" | "contentTokens" | "length" | "totalPages" | "documentLength" =>
-            val low = Try(if (startInclusive) part1.toInt else part1.toInt + 1).getOrElse(Int.MinValue)
-            val high = Try(if (endInclusive) part2.toInt else part2.toInt - 1).getOrElse(Int.MaxValue)
-            IntPoint.newRangeQuery(field, low, high)
-          case _ => super.getRangeQuery(field,part1,part2,startInclusive,endInclusive) 
-        }
-      } 
-    }
-
-  }
-   
   private val termFrequencySimilarity = new SimilarityBase() {
     override def score(stats: BasicStats, freq: Float, docLen: Float): Float = {
       return freq
@@ -392,4 +207,181 @@ object IndexAccess {
   
   def extractContentTermsFromQuery(q: Query): Seq[String] = QueryTermExtractor.getTerms(q, false, "content").map(_.getTerm).toSeq
 
+}
+
+@Singleton
+class IndexAccess @Inject() (config: Configuration) {
+  
+  import IndexAccess._
+ 
+  private val path = config.getString("index.path").getOrElse("/srv/ecco")
+  
+  private val readers: collection.mutable.Map[String,IndexReader] = new HashMap[String,IndexReader]  
+  private val tfSearchers: collection.mutable.Map[String,IndexSearcher] = new HashMap[String,IndexSearcher]
+  private val tfidfSearchers: collection.mutable.Map[String,IndexSearcher] = new HashMap[String,IndexSearcher]
+  
+  sealed abstract class QueryByType extends EnumEntry {
+    def apply(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] 
+  }  
+  
+  object QueryByType extends Enum[QueryByType] {
+    case object NUMERIC extends QueryByType {
+      def apply(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = getMatchingValuesFromNumericDocValues(is, q, field)
+    }
+    case object SORTED extends QueryByType {
+      def apply(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = getMatchingValuesFromSortedDocValues(is, q, field)
+    }
+    val values = findValues
+  }
+  
+  case class LevelMetadata(
+    id: String,
+    term: String,
+    index: String) {
+    val termAsTerm = new Term(term,"")
+  }
+
+  case class IndexMetadata(
+    levels: Seq[LevelMetadata],
+    intPointFields: Set[String],
+    termVectorFields: Set[String],
+    sortedDocValuesFields: Set[String],
+    storedSingularFields: Set[String],
+    storedMultiFields: Set[String],
+    numericDocValuesFields: Set[String]
+  ) {
+    val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap
+    val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
+    val levelType: Map[String,QueryByType] = levels.map(l => (l.id,if (numericDocValuesFields.contains(l.term)) QueryByType.NUMERIC else QueryByType.SORTED)).toMap
+    def getter(lr: LeafReader, field: String): (Int) => Iterable[String] = {
+      if (storedSingularFields.contains(field) || storedMultiFields.contains(field)) {
+        val fieldS = Collections.singleton(field)
+        return (doc: Int) => lr.document(doc,fieldS).getValues(field).toSeq
+      }
+      if (sortedDocValuesFields.contains(field)) {
+        val dvs = DocValues.getSorted(lr, field)
+        return (doc: Int) => Seq(dvs.get(doc).utf8ToString())
+      }
+      if (numericDocValuesFields.contains(field)) {
+        val dvs = DocValues.getNumeric(lr, field)
+        return (doc: Int) => Seq(""+dvs.get(doc))
+      }
+      if (termVectorFields.contains(field))
+        return (doc: Int) => lr.getTermVector(doc, field).asBytesRefIterable().map(_.utf8ToString)
+      return null
+    }
+  }
+  
+  def readLevelMetadata(c: JsValue) = LevelMetadata(
+      (c \ "id").as[String],
+      (c \ "term").as[String],
+      (c \ "index").as[String]
+  )
+  
+  def readIndexMetadata(c: JsValue) = IndexMetadata(
+    (c \ "levels").as[Seq[JsValue]].map(readLevelMetadata(_)),
+    (c \ "intPointFields").as[Set[String]],
+    (c \ "termVectorFields").as[Set[String]],
+    (c \ "sortedDocValuesFields").as[Set[String]],
+    (c \ "storedSingularFields").as[Set[String]],
+    (c \ "storedMultiFields").as[Set[String]],
+    (c \ "numericDocValuesFields").as[Set[String]]
+  )
+  
+  val indexMetadata: IndexMetadata = readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
+  
+  for (level <- indexMetadata.levels) {
+    readers.put(level.id, DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath(path+"/"+level.index))))
+    tfSearchers.put(level.id, {
+      val is = new IndexSearcher(readers(level.id))
+      is.setSimilarity(termFrequencySimilarity)
+      is
+    })
+    tfidfSearchers.put(level.id, new IndexSearcher(readers(level.id)))
+  }
+
+  def reader(level: String): IndexReader = readers(level)
+  
+  def searcher(level: String, sumScaling: SumScaling): IndexSearcher = {
+    sumScaling match {
+      case SumScaling.DF =>
+        tfidfSearchers(level)
+      case _ =>
+        tfSearchers(level)
+    }
+  }
+  
+  val analyzer = new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),
+      (indexMetadata.storedMultiFields ++ indexMetadata.storedSingularFields).map((_,standardAnalyzer)).toMap[String,Analyzer].asJava)
+  
+  val queryParsers = new ThreadLocal[QueryParser] {
+    
+    override def initialValue(): QueryParser = new QueryParser("content",analyzer) {
+      override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
+        if (indexMetadata.intPointFields.contains(field)) {
+          val low = Try(if (startInclusive) part1.toInt else part1.toInt + 1).getOrElse(Int.MinValue)
+          val high = Try(if (endInclusive) part2.toInt else part2.toInt - 1).getOrElse(Int.MaxValue)
+          IntPoint.newRangeQuery(field, low, high)
+        } else super.getRangeQuery(field,part1,part2,startInclusive,endInclusive) 
+      } 
+    }
+
+  }
+   
+  private val queryPartStart = "(?<!\\\\)<".r
+  private val queryPartEnd = "(?<!\\\\)>".r
+  
+  private val documentIDTerm = new Term("documentID","")
+  private val documentPartIDTerm = new Term("partID","")
+  private val sectionIDTerm = new Term("sectionID","")
+  private val paragraphIDTerm = new Term("paragraphID","")
+
+  
+  private def runSubQuery(queryLevel: String, query: Query, targetLevel: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Query = {
+    val (idTerm: Term, values: Iterable[BytesRef]) = 
+      if (indexMetadata.levelOrder(queryLevel)<indexMetadata.levelOrder(targetLevel)) 
+        (indexMetadata.levelMap(targetLevel).termAsTerm, indexMetadata.levelType(queryLevel)(searcher(queryLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(targetLevel).term)) 
+      else 
+        (indexMetadata.levelMap(queryLevel).termAsTerm, indexMetadata.levelType(targetLevel)(searcher(targetLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(queryLevel).term))
+    new AutomatonQuery(idTerm,Automata.makeStringUnion(values.asJavaCollection))
+  }
+  
+  private def processQueryInternal(queryIn: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (String,Query,String) = {
+    val queryLevel = queryIn.substring(1,queryIn.indexOf('|')).toUpperCase
+    val targetLevel = queryIn.substring(queryIn.lastIndexOf('|') + 1, queryIn.length - 1).toUpperCase
+    var query = queryIn.substring(queryIn.indexOf('|') + 1, queryIn.lastIndexOf('|'))
+    val replacements = new HashMap[String,Query]
+    var firstStart = queryPartStart.findFirstMatchIn(query)
+    while (firstStart.isDefined) { // we have (more) subqueries
+      val ends = queryPartEnd.findAllMatchIn(query)
+      var curEnd = ends.next().start
+      var neededEnds = queryPartStart.findAllIn(query.substring(0, curEnd)).size - 1
+      while (neededEnds > 0) curEnd = ends.next().start
+      val (subQueryQueryLevel, subQuery, subQueryTargetLevel) = processQueryInternal(query.substring(firstStart.get.start, curEnd + 1))
+      val processedSubQuery = if (subQueryQueryLevel == queryLevel && subQueryTargetLevel == targetLevel) subQuery else runSubQuery(subQueryQueryLevel,subQuery,subQueryTargetLevel)
+      replacements += (("" + (replacements.size + 1)) -> processedSubQuery)
+      query = query.substring(0, firstStart.get.start) + "MAGIC:" + replacements.size + query.substring(curEnd + 1)
+      firstStart = queryPartStart.findFirstMatchIn(query)
+    }
+    Logger.debug(s"Query ${queryIn} rewritten to $query with replacements $replacements.")
+    val q = queryParsers.get.parse(query)
+    if (replacements.isEmpty) (queryLevel,q,targetLevel) 
+    else {
+      val bqb = new BooleanQuery.Builder()
+      for (clause <- q.asInstanceOf[BooleanQuery].clauses.asScala)
+        if (clause.getQuery.isInstanceOf[TermQuery]) {
+          val tq = clause.getQuery.asInstanceOf[TermQuery]
+          if (tq.getTerm.field == "MAGIC") bqb.add(replacements(tq.getTerm.text),clause.getOccur)
+          else bqb.add(clause)
+        } else bqb.add(clause)
+      (queryLevel,bqb.build,targetLevel)
+    }
+  }
+  
+  def buildFinalQueryRunningSubQueries(query: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (String, Query) = {
+    val (queryLevel, q, targetLevel) = processQueryInternal(query)
+    if (queryLevel==targetLevel) (targetLevel,q)
+    else (targetLevel,runSubQuery(queryLevel,q,targetLevel))
+  }
+  
 }

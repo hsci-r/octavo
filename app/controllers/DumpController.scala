@@ -9,7 +9,6 @@ import scala.collection.mutable.HashMap
 import play.api.libs.json.JsValue
 import scala.collection.mutable.ArrayBuffer
 import play.api.mvc.Action
-import parameters.Level
 import akka.stream.Materializer
 import play.api.Environment
 import scala.collection.JavaConverters._
@@ -23,7 +22,7 @@ class DumpController @Inject() (ia: IndexAccess, mat: Materializer, env: Environ
   import IndexAccess.shortTaskExecutionContext
   
   def dump() = Action { implicit request => 
-    if (reader(Level.DOCUMENT).hasDeletions()) throw new UnsupportedOperationException("Index should not have deletions!")
+    if (reader(ia.indexMetadata.levels(0).id).hasDeletions()) throw new UnsupportedOperationException("Index should not have deletions!")
     val gp = GeneralParameters()
     implicit val iec = shortTaskExecutionContext
     getOrCreateResult(s"dump: $gp", gp.force, () => {
@@ -34,7 +33,7 @@ class DumpController @Inject() (ia: IndexAccess, mat: Materializer, env: Environ
       sfields.foreach(sfieldsS.add(_))
       val tvfields = Seq("containsGraphicOfType")
       val output = new ArrayBuffer[JsValue]
-      for (lrc<-reader(Level.DOCUMENT).leaves().asScala;lr = lrc.reader) {
+      for (lrc<-reader(ia.indexMetadata.levels(0).id).leaves().asScala;lr = lrc.reader) {
         val sdvs = sdvfields.map(p => (p,DocValues.getSorted(lr,p)))
         val ndvs = ndvfields.map(p => (p,DocValues.getNumeric(lr,p)))
         for (i <- 0 until lr.maxDoc) {

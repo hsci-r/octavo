@@ -123,7 +123,6 @@ import java.util.concurrent.ArrayBlockingQueue
 import org.apache.lucene.index.LeafReader
 import org.apache.lucene.index.TermsEnum
 import org.apache.lucene.index.Terms
-import parameters.Level
 import services.IndexAccess
 import services.TermVectors
 import parameters.SumScaling
@@ -142,7 +141,7 @@ import org.apache.lucene.search.uhighlight.DefaultPassageFormatter
  * application's home page.
  */
 @Singleton
-class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, env: Environment) extends QueuingController(materializer, env) {
+class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends QueuingController(materializer, env) {
   
   import ia._
   import IndexAccess._
@@ -158,8 +157,8 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
     val gp = GeneralParameters()
     val srp = QueryReturnParameters()
     val ctv = QueryParameters("ctv_")
-    val ctvpl = LocalTermVectorProcessingParameters()
-    val ctvpa = AggregateTermVectorProcessingParameters()
+    val ctvpl = LocalTermVectorProcessingParameters("r_")
+    val ctvpa = AggregateTermVectorProcessingParameters("r_")
     val termVectors = p.get("termVectors").exists(v => v(0)=="" || v(0).toBoolean)
     implicit val iec = gp.executionContext
     val callId = s"search: $qp, $srp, $ctv, $ctvpl, $ctvpa, $gp, termVectors:$termVectors"
@@ -243,12 +242,12 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
           val doc = context.docBase + ldoc
           if (scorer.score >= qp.minScore) {
             total+=1
-            if (gp.limit == -1) {
+            if (srp.limit == -1) {
               val (cdocFields, cdocVectors) = processDocFields(context, doc, sdvs, ndvs)
               docFields.put(doc, cdocFields)
               if (cdocVectors != null) docVectorsForMDS.put(doc, cdocVectors)
               maxHeap += ((doc, scorer.score))
-            } else if (total<=gp.limit)
+            } else if (total<=srp.limit)
               maxHeap += ((doc, scorer.score))
             else if (maxHeap.head._2<scorer.score) {
               maxHeap.dequeue()
@@ -259,7 +258,7 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
   
         override def doSetNextReader(context: LeafReaderContext) = {
           this.context = context
-          if (gp.limit == -1) {
+          if (srp.limit == -1) {
             this.sdvs = srp.sortedDocValuesFields.map(f => (f -> DocValues.getSorted(context.reader, f))).toMap
             this.ndvs = srp.numericDocValuesFields.map(f => (f -> DocValues.getNumeric(context.reader, f))).toMap
             
@@ -268,7 +267,7 @@ class SearchController @Inject() (ia: IndexAccess, materializer: Materializer, e
       }
       tlc.get.setCollector(collector)
       is.search(query, gp.tlc.get)    
-      if (gp.limit!= -1) {
+      if (srp.limit!= -1) {
         val dvs = new HashMap[Int,(Map[String,SortedDocValues],Map[String,NumericDocValues])]
         for (lr <- ir.leaves.asScala) {
           val sdvs = srp.sortedDocValuesFields.map(f => (f -> DocValues.getSorted(lr.reader, f))).toMap

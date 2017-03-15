@@ -19,7 +19,7 @@ import org.apache.lucene.search.BooleanClause.Occur
 import services.TermVectors
 
 @Singleton
-class CollocationsController @Inject() (ia: IndexAccess, materializer: Materializer, env: Environment) extends QueuingController(materializer, env) {
+class CollocationsController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends QueuingController(materializer, env) {
   
   import IndexAccess._
   import ia._
@@ -41,16 +41,15 @@ class CollocationsController @Inject() (ia: IndexAccess, materializer: Materiali
     val termVectors = p.get("termVector").exists(v => v(0)=="" || v(0).toBoolean)
     implicit val iec = gp.executionContext
     val callId = s"collocations: $gp, $termVectorQueryParameters, $termVectorLocalProcessingParameters, $termVectorAggregateProcessingParameters, $resultTermVectorLimitQueryParameters, $resultTermVectorLocalProcessingParameters, $resultTermVectorAggregateProcessingParameters"
-    
     val qm = Json.obj("method"->"collocations","callId"->callId,"termVector"->termVectors) ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ resultTermVectorLimitQueryParameters.toJson ++ resultTermVectorLocalProcessingParameters.toJson ++ resultTermVectorAggregateProcessingParameters.toJson
     getOrCreateResult(callId, gp.force, () => {
       implicit val tlc = gp.tlc
       val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(termVectorQueryParameters.query.get)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
-      val maxDocs = if (gp.maxDocs == -1 || gp.limit == -1) -1 else if (resultTermVectorAggregateProcessingParameters.mdsDimensions>0 || resultTermVectorLocalProcessingParameters.defined || resultTermVectorAggregateProcessingParameters.defined || termVectors) gp.maxDocs / (gp.limit + 1) else gp.maxDocs / 2
+      val maxDocs = if (gp.maxDocs == -1 || termVectorAggregateProcessingParameters.limit == -1) -1 else if (resultTermVectorAggregateProcessingParameters.mdsDimensions>0 || resultTermVectorLocalProcessingParameters.defined || resultTermVectorAggregateProcessingParameters.defined || termVectors) gp.maxDocs / (termVectorAggregateProcessingParameters.limit + 1) else gp.maxDocs / 2
       val (md, allCollocations) = getAggregateContextVectorForQuery(is, termVectorQuery,termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters,maxDocs)
-      val collocations = filterHighestScores(allCollocations, gp.limit)
+      val collocations = filterHighestScores(allCollocations, termVectorAggregateProcessingParameters.limit)
       val json = Json.obj("queryMetadata"->qm, "results"->Json.obj("metadata"->md.toJson,"terms"->(if (resultTermVectorAggregateProcessingParameters.mdsDimensions>0) {
         val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(_)._2)
         val ctermVectors = collocations.keys.toSeq.par.map{term => 

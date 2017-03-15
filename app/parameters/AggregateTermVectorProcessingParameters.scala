@@ -18,7 +18,7 @@ case class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: 
   final def matches(sumFreq: Int): Boolean = {
     (minSumFreq == 1 && maxSumFreq == Int.MaxValue) || (minSumFreq <= sumFreq && maxSumFreq >= sumFreq)
   }
-  val limitOpt = p.get(prefix+"tvlimit"+suffix).map(_(0).toInt)
+  val limitOpt = p.get(prefix+"limit"+suffix).map(_(0).toInt)
   val limit: Int = limitOpt.getOrElse(-1)
   private val mdsDimensionsOpt = p.get("mdsDimensions").map(_(0).toInt)
   /** amount of dimensions for dimensionally reduced term vector coordinates */

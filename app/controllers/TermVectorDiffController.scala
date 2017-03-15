@@ -27,7 +27,7 @@ import com.koloboke.collect.set.hash.HashLongSets
 import java.util.function.LongConsumer
 
 @Singleton
-class TermVectorDiffController @Inject() (ia: IndexAccess, materializer: Materializer, env: Environment) extends QueuingController(materializer, env) {
+class TermVectorDiffController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends QueuingController(materializer, env) {
   
   import IndexAccess._
   import ia._

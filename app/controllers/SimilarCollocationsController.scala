@@ -30,7 +30,7 @@ import java.util.function.LongConsumer
 import services.Distance
 
 @Singleton
-class SimilarCollocationsController @Inject() (ia: IndexAccess, materializer: Materializer, env: Environment) extends QueuingController(materializer, env) {
+class SimilarCollocationsController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends QueuingController(materializer, env) {
   
   import IndexAccess._
   import ia._
@@ -100,7 +100,7 @@ class SimilarCollocationsController @Inject() (ia: IndexAccess, materializer: Ma
       val termsToScores = thirdOrderCollocations.filter(!_._2.isEmpty).map(p => (p._1,Distance.cosineSimilarity(collocations,p._2),Distance.diceSimilarity(collocations,p._2)))
       for ((term,cscore,dscore) <- termsToScores.seq) {
         total+=1
-        if (gp.limit == -1 || total<=gp.limit) { 
+        if (finalTermVectorAggregateProcessingParameters.limit == -1 || total<=finalTermVectorAggregateProcessingParameters.limit) { 
           if (cscore!=0.0) cmaxHeap += ((term,cscore))
           if (dscore!=0.0) dmaxHeap += ((term,dscore))
         } else {

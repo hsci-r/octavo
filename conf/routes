@@ -4,9 +4,14 @@
 
 # An example controller showing a sample home page
 GET     /search                     controllers.SearchController.search
+POST	/search						controllers.SearchController.search
 GET		/terms						controllers.SimilarTermsController.similarTerms(term: String, level: String ?= "paragraph", maxEditDistance: Int ?= 2, minCommonPrefix: Int ?= 0, transposeIsSingleEdit: Option[String])
-GET		/stats						controllers.StatsController.stats(query: String, termFreqs: Option[String])
+GET		/stats						controllers.StatsController.stats(quantile: Int ?= 10)
+GET		/termstats					controllers.TermStatsController.stats(query: String, termFreqs: Option[String])
 GET		/collocations				controllers.CollocationsController.collocations
+POST	/collocations				controllers.CollocationsController.collocations
 GET		/termVectorDiff				controllers.TermVectorDiffController.termVectorDiff
+POST	/termVectorDiff				controllers.TermVectorDiffController.termVectorDiff
 GET		/similarCollocations		controllers.SimilarCollocationsController.similarCollocations
+POST	/similarCollocations		controllers.SimilarCollocationsController.similarCollocations
 GET		/dump						controllers.DumpController.dump

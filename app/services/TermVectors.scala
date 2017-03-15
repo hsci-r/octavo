@@ -151,13 +151,13 @@ object TermVectors  {
     val cv: LongIntMap = HashLongIntMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
   }
   
-  private def getGroupedUnscaledAggregateContextVectorsForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], attr: String, attrLength: Int, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Map[String,UnscaledVectorInfo] = {
+  private def getGroupedUnscaledAggregateContextVectorsForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], attr: String, attrLength: Int, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): collection.Map[String,UnscaledVectorInfo] = {
     val cvm = new HashMap[String,UnscaledVectorInfo]
     var cv: UnscaledVectorInfo = null
     var attrGetter: (Int) => String = null
     var anyMatches = false
     runTermVectorQuery(is, q, ctvp, minScalingTerms, maxDocs, (nlrc: LeafReaderContext) => {
-      attrGetter = QueryReturnParameters.getter(nlrc.reader, attr).andThen(_.iterator.next)
+      attrGetter = ia.indexMetadata.getter(nlrc.reader, attr).andThen(_.iterator.next)
     }, (doc: Int) => {
       if (anyMatches) cv.docFreq += 1
       val cattr = attrGetter(doc)
@@ -177,7 +177,7 @@ object TermVectors  {
     val cv: LongDoubleMap = scaleAndFilterTermVector(ir, value.cv,ctvpa)
   }
 
-  def getGroupedAggregateContextVectorsForQuery(is: IndexSearcher, q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], attr: String, attrLength: Int, ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Map[String,VectorInfo] = {
+  def getGroupedAggregateContextVectorsForQuery(is: IndexSearcher, q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], attr: String, attrLength: Int, ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): collection.Map[String,VectorInfo] = {
     val ir = is.getIndexReader()
     getGroupedUnscaledAggregateContextVectorsForQuery(is, q, ctvpl, minScalingTerms, attr, attrLength, maxDocs).map{ case (key,value) => (key, new VectorInfo(ir, value,ctvpa)) }
   }

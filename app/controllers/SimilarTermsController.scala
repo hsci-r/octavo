@@ -16,7 +16,6 @@ import play.api.mvc.Controller
 import javax.inject.Named
 import services.IndexAccess
 import parameters.SumScaling
-import parameters.Level
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
 import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
 import scala.collection.mutable.HashMap
@@ -47,7 +46,7 @@ class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
     val ts = analyzer.tokenStream("content", q)
     val ta = ts.addAttribute(classOf[CharTermAttribute])
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
-    val level = Level.withName(levelg.toUpperCase)
+    val level = levelg.toUpperCase
     val transposeIsSingleEdit: Boolean = transposeIsSingleEditg.exists(v => v=="" || v.toBoolean)
     ts.reset()
     val parts = new ArrayBuffer[(Int,String)]
@@ -76,7 +75,7 @@ class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
           pqb.add(new Term("content",q),position)
         }
         bqb.add(pqb.build,BooleanClause.Occur.SHOULD)
-        searcher(Level.DOCUMENT, SumScaling.ABSOLUTE).search(bqb.build, hc)
+        searcher(ia.indexMetadata.levels(0).id, SumScaling.ABSOLUTE).search(bqb.build, hc)
         if (hc.getTotalHits>0) termMap.put(terms.zip(parts.map(_._1)).map(t => "a " * (t._2 - 1) + t._1 ).mkString(" "),hc.getTotalHits)
       }
       Ok(Json.toJson(termMap))
