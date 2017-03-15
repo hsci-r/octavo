@@ -121,8 +121,24 @@ object IndexAccess {
   private case class TermsToBytesRefAndDocFreqIterable(te: Terms) extends Iterable[(BytesRef,Int)] {
     def iterator(): Iterator[(BytesRef,Int)] = te.iterator
   }
-
+  
   private implicit def termsEnumToBytesRefAndDocFreqIterator(te: TermsEnum): Iterator[(BytesRef,Int)] = TermsEnumToBytesRefAndDocFreqIterator(te)
+
+  private case class TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te: TermsEnum) extends Iterator[(BytesRef,Int,Long)] {
+    var br = te.next()
+    def next(): (BytesRef,Int,Long) = {
+      val ret = (br, te.docFreq, te.totalTermFreq)
+      br = te.next()
+      return ret
+    }
+    def hasNext() = br != null
+  }
+
+  private case class TermsToBytesRefAndDocFreqAndTotalTermFreqIterable(te: Terms) extends Iterable[(BytesRef,Int,Long)] {
+    def iterator(): Iterator[(BytesRef,Int,Long)] = te.iterator
+  }
+
+  private implicit def termsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te: TermsEnum): Iterator[(BytesRef,Int,Long)] = TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te)
 
   case class RichTermsEnum(te: TermsEnum) {
     def asBytesRefIterator(): Iterator[BytesRef] = TermsEnumToBytesRefIterator(te)
@@ -134,6 +150,7 @@ object IndexAccess {
   case class RichTerms(te: Terms) {
     def asBytesRefIterable(): Iterable[BytesRef] = TermsToBytesRefIterable(te)
     def asBytesRefAndDocFreqIterable(): Iterable[(BytesRef,Int)] = TermsToBytesRefAndDocFreqIterable(te)
+    def asBytesRefAndDocFreqAndTotalTermFreqIterable(): Iterable[(BytesRef,Int,Long)] = TermsToBytesRefAndDocFreqAndTotalTermFreqIterable(te)
   }
   
   implicit def termsToRichTerms(te: Terms) = RichTerms(te)
@@ -214,7 +231,7 @@ class IndexAccess @Inject() (config: Configuration) {
   
   import IndexAccess._
  
-  private val path = config.getString("index.path").getOrElse("/srv/ecco")
+  val path = config.getString("index.path").getOrElse("/srv/ecco")
   
   private val readers: collection.mutable.Map[String,IndexReader] = new HashMap[String,IndexReader]  
   private val tfSearchers: collection.mutable.Map[String,IndexSearcher] = new HashMap[String,IndexSearcher]

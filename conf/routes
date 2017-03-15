@@ -6,7 +6,7 @@
 GET     /search                     controllers.SearchController.search
 POST	/search						controllers.SearchController.search
 GET		/terms						controllers.SimilarTermsController.similarTerms(term: String, level: String ?= "paragraph", maxEditDistance: Int ?= 2, minCommonPrefix: Int ?= 0, transposeIsSingleEdit: Option[String])
-GET		/stats						controllers.StatsController.stats(quantile: Int ?= 10)
+GET		/stats						controllers.StatsController.stats(quantile: Int ?= 100, from: Int ?= 0, to: Option[Int], by: Int ?= 10)
 GET		/termstats					controllers.TermStatsController.stats(query: String, termFreqs: Option[String])
 GET		/collocations				controllers.CollocationsController.collocations
 POST	/collocations				controllers.CollocationsController.collocations

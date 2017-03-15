@@ -39,6 +39,7 @@ libraryDependencies ++= Seq(
   "com.koloboke" % "koloboke-impl-jdk8" % "1.0.0",
   "com.beachape" %% "enumeratum" % "1.5.1",
   "com.bizo" %% "mighty-csv" % "0.2",
+  "com.tdunning" % "t-digest" % "3.1",
   "mdsj" % "mdsj" % "0.2"
 )
 
