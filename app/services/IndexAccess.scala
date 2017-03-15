@@ -260,6 +260,7 @@ class IndexAccess @Inject() (config: Configuration) {
 
   case class IndexMetadata(
     levels: Seq[LevelMetadata],
+    textFields: Set[String],
     intPointFields: Set[String],
     termVectorFields: Set[String],
     sortedDocValuesFields: Set[String],
@@ -297,6 +298,7 @@ class IndexAccess @Inject() (config: Configuration) {
   
   def readIndexMetadata(c: JsValue) = IndexMetadata(
     (c \ "levels").as[Seq[JsValue]].map(readLevelMetadata(_)),
+    (c \ "textFields").as[Set[String]],
     (c \ "intPointFields").as[Set[String]],
     (c \ "termVectorFields").as[Set[String]],
     (c \ "sortedDocValuesFields").as[Set[String]],
@@ -329,7 +331,7 @@ class IndexAccess @Inject() (config: Configuration) {
   }
   
   val analyzer = new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),
-      (indexMetadata.storedMultiFields ++ indexMetadata.storedSingularFields).map((_,standardAnalyzer)).toMap[String,Analyzer].asJava)
+      (indexMetadata.textFields).map((_,standardAnalyzer)).toMap[String,Analyzer].asJava)
   
   val queryParsers = new ThreadLocal[QueryParser] {
     
@@ -356,10 +358,10 @@ class IndexAccess @Inject() (config: Configuration) {
   
   private def runSubQuery(queryLevel: String, query: Query, targetLevel: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Query = {
     val (idTerm: Term, values: Iterable[BytesRef]) = 
-      if (indexMetadata.levelOrder(queryLevel)<indexMetadata.levelOrder(targetLevel)) 
-        (indexMetadata.levelMap(targetLevel).termAsTerm, indexMetadata.levelType(queryLevel)(searcher(queryLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(targetLevel).term)) 
+      if (indexMetadata.levelOrder(queryLevel)<indexMetadata.levelOrder(targetLevel)) // DOCUMENT < PARAGRAPH
+        (indexMetadata.levelMap(queryLevel).termAsTerm, indexMetadata.levelType(queryLevel)(searcher(targetLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(queryLevel).term))
       else 
-        (indexMetadata.levelMap(queryLevel).termAsTerm, indexMetadata.levelType(targetLevel)(searcher(targetLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(queryLevel).term))
+        (indexMetadata.levelMap(targetLevel).termAsTerm, indexMetadata.levelType(targetLevel)(searcher(queryLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(targetLevel).term)) 
     new AutomatonQuery(idTerm,Automata.makeStringUnion(values.asJavaCollection))
   }
   

@@ -22,6 +22,6 @@ case class QueryReturnParameters(implicit request: Request[AnyContent], ia: Inde
   private val sumScalingOpt = p.get("sumScaling").map(v => SumScaling.withName(v(0).toUpperCase))
   val sumScaling: SumScaling = sumScalingOpt.getOrElse(SumScaling.TTF)
   val limit: Int = p.get("limit").map(_(0).toInt).getOrElse(20)
-  override def toString() = s"limit:$limit, sumScaling:$sumScaling, termVectorFields:$termVectorFields, sortedDocValuesFields:$sortedDocValuesFields, storedSingularFields:$storedSingularFields, storedMultiFields:$storedMultiFields, numericDocValuesFields:$numericDocValuesFields, returnMatches: $returnMatches, returnNorms: $returnNorms"
-  def toJson() = Json.obj("limit"->limit,"sumScaling"->sumScaling.entryName,"termVectorFields"->termVectorFields,"sortedDocValuesFields"->sortedDocValuesFields,"storedSingularFields"->storedSingularFields,"storedMultiFields"->storedMultiFields,"numericDocValuesFields"->numericDocValuesFields,"returnMatches"->returnMatches,"returnNorms"->returnNorms)
+  override def toString() = s"limit:$limit, sumScaling:$sumScaling, fields:${termVectorFields++sortedDocValuesFields++storedSingularFields++storedMultiFields++numericDocValuesFields}, returnMatches: $returnMatches, returnNorms: $returnNorms"
+  def toJson() = Json.obj("limit"->limit,"sumScaling"->sumScaling.entryName,"fields"->(termVectorFields++sortedDocValuesFields++storedSingularFields++storedMultiFields++numericDocValuesFields),"returnMatches"->returnMatches,"returnNorms"->returnNorms)
 }
