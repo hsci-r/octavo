@@ -163,6 +163,7 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
     implicit val iec = gp.executionContext
     val callId = s"search: $qp, $srp, $ctv, $ctvpl, $ctvpa, $gp, termVectors:$termVectors"
     getOrCreateResult(callId, gp.force, () => {
+      val qm = Json.obj("method"->"search","callId"->callId,"termVector"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ ctvpl.toJson ++ ctvpa.toJson
       implicit val tlc = gp.tlc
       val (queryLevel,query) = buildFinalQueryRunningSubQueries(qp.query.get)
       Logger.debug(f"Final query: $query%s, level: $queryLevel%s")
@@ -222,7 +223,7 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
           fields += (("explanation" -> Json.toJson(we.explain(context, doc).toString)))
         fields += (("norms" -> Json.toJson(normTerms.map(t => Json.toJson(Map("term"->t, "docFreq"->(""+ir.docFreq(new Term("content", t))), "totalTermFreq"->(""+ir.totalTermFreq(new Term("content",t)))))))))
         }
-        if (cv != null && ctvpa.mdsDimensions == 0) fields += (("term_vector" -> Json.toJson(termOrdMapToTermMap(ir, cv))))
+        if (cv != null && ctvpa.mdsDimensions == 0) fields += (("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, cv).map(p=>Json.obj("term" -> p._1, "weight" -> p._2)))))
         (fields, if (ctvpa.mdsDimensions >0) cv else null)    
       }
       val docFields = HashIntObjMaps.getDefaultFactory[collection.Map[String,JsValue]]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[collection.Map[String,JsValue]]
@@ -292,14 +293,16 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
         val originalIndicesToMDSValueIndices = nonEmptyVectorsAndTheirOriginalIndices.map(_._2).zipWithIndex.toMap
         values.indices.map(i => originalIndicesToMDSValueIndices.get(i).map(vi => Json.toJson(mdsValues(vi))).getOrElse(JsNull))
       } else null
-      var map = Map("total"->Json.toJson(total),"results"->Json.toJson(values.zipWithIndex.map{ case ((doc,score),i) =>
-        if (cvs!=null) docFields.get(doc) ++ Map("term_vector"->cvs(i), "score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt))) 
+      var obj = Json.obj("queryMetadata"->qm, "results"->Json.obj(
+	      "total"->total,
+	      "docs"->values.zipWithIndex.map{ case ((doc,score),i) =>
+        if (cvs!=null) docFields.get(doc) ++ Map("termVector"->cvs(i), "score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt))) 
         else docFields.get(doc) ++ Map("score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt))) 
       }))
       if (gp.pretty)
-        Ok(Json.prettyPrint(Json.toJson(map)))
+        Ok(Json.prettyPrint(obj))
       else 
-        Ok(Json.toJson(map))
+        Ok(Json.toJson(obj))
     })
   }
  

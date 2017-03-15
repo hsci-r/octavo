@@ -6,6 +6,7 @@ import org.apache.lucene.index.LeafReader
 import java.util.Collections
 import org.apache.lucene.index.DocValues
 import services.IndexAccess
+import play.api.libs.json.Json
 
 case class QueryReturnParameters(implicit request: Request[AnyContent], ia: IndexAccess) {
   import ia._
@@ -22,4 +23,5 @@ case class QueryReturnParameters(implicit request: Request[AnyContent], ia: Inde
   val sumScaling: SumScaling = sumScalingOpt.getOrElse(SumScaling.TTF)
   val limit: Int = p.get("limit").map(_(0).toInt).getOrElse(20)
   override def toString() = s"limit:$limit, sumScaling:$sumScaling, termVectorFields:$termVectorFields, sortedDocValuesFields:$sortedDocValuesFields, storedSingularFields:$storedSingularFields, storedMultiFields:$storedMultiFields, numericDocValuesFields:$numericDocValuesFields, returnMatches: $returnMatches, returnNorms: $returnNorms"
+  def toJson() = Json.obj("limit"->limit,"sumScaling"->sumScaling.entryName,"termVectorFields"->termVectorFields,"sortedDocValuesFields"->sortedDocValuesFields,"storedSingularFields"->storedSingularFields,"storedMultiFields"->storedMultiFields,"numericDocValuesFields"->numericDocValuesFields,"returnMatches"->returnMatches,"returnNorms"->returnNorms)
 }

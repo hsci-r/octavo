@@ -38,11 +38,11 @@ class CollocationsController @Inject() (implicit ia: IndexAccess, materializer: 
     val resultTermVectorLimitQueryParameters = QueryParameters("r_")
     val resultTermVectorLocalProcessingParameters = LocalTermVectorProcessingParameters("r_")
     val resultTermVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters("r_")
-    val termVectors = p.get("termVector").exists(v => v(0)=="" || v(0).toBoolean)
+    val termVectors = p.get("termVectors").exists(v => v(0)=="" || v(0).toBoolean)
     implicit val iec = gp.executionContext
     val callId = s"collocations: $gp, $termVectorQueryParameters, $termVectorLocalProcessingParameters, $termVectorAggregateProcessingParameters, $resultTermVectorLimitQueryParameters, $resultTermVectorLocalProcessingParameters, $resultTermVectorAggregateProcessingParameters"
-    val qm = Json.obj("method"->"collocations","callId"->callId,"termVector"->termVectors) ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ resultTermVectorLimitQueryParameters.toJson ++ resultTermVectorLocalProcessingParameters.toJson ++ resultTermVectorAggregateProcessingParameters.toJson
     getOrCreateResult(callId, gp.force, () => {
+      val qm = Json.obj("method"->"collocations","callId"->callId,"termVectors"->termVectors) ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ resultTermVectorLimitQueryParameters.toJson ++ resultTermVectorLocalProcessingParameters.toJson ++ resultTermVectorAggregateProcessingParameters.toJson
       implicit val tlc = gp.tlc
       val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(termVectorQueryParameters.query.get)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
