@@ -62,8 +62,10 @@ class StatsController @Inject() (ia: IndexAccess) extends Controller {
         "from"->from,
         "to"->to,
         "by"->by,
-        "totalDocs" -> ia.reader(ia.indexMetadata.levels(0).id).getSumDocFreq("content"),
-        "totalTerms" -> ia.reader(ia.indexMetadata.levels(0).id).getSumTotalTermFreq("content"),
+        "totalDocs" -> ia.reader(ia.indexMetadata.levels(0).id).getDocCount("content"),
+        "totalTerms" -> ia.reader(ia.indexMetadata.levels(0).id).leaves.get(0).reader().terms("content").size(),
+        "totalDocFreq" -> ia.reader(ia.indexMetadata.levels(0).id).getSumDocFreq("content"),
+        "totalTermFreq" -> ia.reader(ia.indexMetadata.levels(0).id).getSumTotalTermFreq("content"),
         "termFreqQuantiles"-> (from to to by by).map(q => Json.obj(""+q -> ttft.quantile(q).toLong)),
         "docFreqQuantiles" -> (from to to by by).map(q => Json.obj(""+q -> dft.quantile(q).toLong)))))
   }  
