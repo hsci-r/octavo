@@ -40,8 +40,8 @@ class StatsController @Inject() (ia: IndexAccess) extends Controller {
     synchronized {
       if (dft == null) {
         val ir = ia.reader(ia.indexMetadata.levels(0).id)
-        dft = TDigest.createDigest(100)
-        ttft = TDigest.createDigest(100)
+        dft = TDigest.createDigest(1000)
+        ttft = TDigest.createDigest(1000)
         val f1 = Future {
           for (lr <- ir.leaves.asScala; (term,df) <- lr.reader.terms("content").asBytesRefAndDocFreqIterable()) dft.add(df)
         }
