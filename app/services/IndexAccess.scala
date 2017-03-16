@@ -124,6 +124,23 @@ object IndexAccess {
   
   private implicit def termsEnumToBytesRefAndDocFreqIterator(te: TermsEnum): Iterator[(BytesRef,Int)] = TermsEnumToBytesRefAndDocFreqIterator(te)
 
+  private case class TermsEnumToBytesRefAndTotalTermFreqIterator(te: TermsEnum) extends Iterator[(BytesRef,Long)] {
+    var br = te.next()
+    def next(): (BytesRef,Long) = {
+      val ret = (br, te.totalTermFreq)
+      br = te.next()
+      return ret
+    }
+    def hasNext() = br != null
+  }
+  
+  private case class TermsToBytesRefAndTotalTermFreqIterable(te: Terms) extends Iterable[(BytesRef,Long)] {
+    def iterator(): Iterator[(BytesRef,Long)] = te.iterator
+  }
+  
+  private implicit def termsEnumToBytesRefAndTotalTermFreqIterator(te: TermsEnum): Iterator[(BytesRef,Long)] = TermsEnumToBytesRefAndTotalTermFreqIterator(te)
+
+  
   private case class TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te: TermsEnum) extends Iterator[(BytesRef,Int,Long)] {
     var br = te.next()
     def next(): (BytesRef,Int,Long) = {
@@ -143,6 +160,8 @@ object IndexAccess {
   case class RichTermsEnum(te: TermsEnum) {
     def asBytesRefIterator(): Iterator[BytesRef] = TermsEnumToBytesRefIterator(te)
     def asBytesRefAndDocFreqIterator(): Iterator[(BytesRef,Int)] = TermsEnumToBytesRefAndDocFreqIterator(te)
+    def asBytesRefAndDocFreqAndTotalTermFreqIterator(): Iterator[(BytesRef,Int,Long)] = TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te)
+    def asBytesRefAndTotalTermFreqIterator(): Iterator[(BytesRef,Long)] = TermsEnumToBytesRefAndTotalTermFreqIterator(te)
   }
   
   implicit def termsEnumToRichTermsEnum(te: TermsEnum) = RichTermsEnum(te)
@@ -150,6 +169,7 @@ object IndexAccess {
   case class RichTerms(te: Terms) {
     def asBytesRefIterable(): Iterable[BytesRef] = TermsToBytesRefIterable(te)
     def asBytesRefAndDocFreqIterable(): Iterable[(BytesRef,Int)] = TermsToBytesRefAndDocFreqIterable(te)
+    def asBytesRefAndTotalTermFreqIterable(): Iterable[(BytesRef,Long)] = TermsToBytesRefAndTotalTermFreqIterable(te)
     def asBytesRefAndDocFreqAndTotalTermFreqIterable(): Iterable[(BytesRef,Int,Long)] = TermsToBytesRefAndDocFreqAndTotalTermFreqIterable(te)
   }
   

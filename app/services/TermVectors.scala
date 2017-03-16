@@ -39,7 +39,7 @@ object TermVectors  {
     def toJson(): JsValue = Json.toJson(Map(
         "totalDocsMatchingQuery"->Json.toJson(totalDocs),
         "processedDocs"->Json.toJson(processedDocs),
-        "samplePercentage"->Json.toJson(samplePercentage),
+        "sample"->Json.toJson(samplePercentage),
         "contributingDocs"->Json.toJson(contributingDocs),
         "processedTerms"->Json.toJson(processedTerms),
         "acceptedTerms"->Json.toJson(acceptedTerms),

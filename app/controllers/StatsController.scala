@@ -23,6 +23,10 @@ import org.apache.commons.lang3.SerializationUtils
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import scala.concurrent.Future
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Await
+import scala.concurrent.duration.Duration
 
 @Singleton
 class StatsController @Inject() (ia: IndexAccess) extends Controller {
@@ -33,12 +37,20 @@ class StatsController @Inject() (ia: IndexAccess) extends Controller {
   var ttft: TDigest = null
   
   def calc(): Unit = {
-    val ir = ia.reader(ia.indexMetadata.levels(0).id)
-    dft = TDigest.createDigest(100)
-    ttft = TDigest.createDigest(100)
-    for (lr <- ir.leaves.asScala; (term,df,ttf) <- lr.reader.terms("content").asBytesRefAndDocFreqAndTotalTermFreqIterable()) {
-      dft.add(df)
-      ttft.add(ttf)
+    synchronized {
+      if (dft == null) {
+        val ir = ia.reader(ia.indexMetadata.levels(0).id)
+        dft = TDigest.createDigest(100)
+        ttft = TDigest.createDigest(100)
+        val f1 = Future {
+          for (lr <- ir.leaves.asScala; (term,df) <- lr.reader.terms("content").asBytesRefAndDocFreqIterable()) dft.add(df)       
+        }
+        val f2 = Future {
+          for (lr <- ir.leaves.asScala; (term,ttf) <- lr.reader.terms("content").asBytesRefAndTotalTermFreqIterable()) ttft.add(ttf)
+        }
+        Await.ready(f1, Duration.Inf)
+        Await.ready(f2, Duration.Inf)
+      }
     }
   }
   
