@@ -43,7 +43,7 @@ class StatsController @Inject() (ia: IndexAccess) extends Controller {
         dft = TDigest.createDigest(100)
         ttft = TDigest.createDigest(100)
         val f1 = Future {
-          for (lr <- ir.leaves.asScala; (term,df) <- lr.reader.terms("content").asBytesRefAndDocFreqIterable()) dft.add(df)       
+          for (lr <- ir.leaves.asScala; (term,df) <- lr.reader.terms("content").asBytesRefAndDocFreqIterable()) dft.add(df)
         }
         val f2 = Future {
           for (lr <- ir.leaves.asScala; (term,ttf) <- lr.reader.terms("content").asBytesRefAndTotalTermFreqIterable()) ttft.add(ttf)
@@ -54,16 +54,15 @@ class StatsController @Inject() (ia: IndexAccess) extends Controller {
     }
   }
   
-  def stats(quantile: Int, from: Int, toO: Option[Int], by: Int) = Action {
+  def stats(from: Double, to: Double, by: Double) = Action {
     if (dft == null) calc()
-    val tq = quantile.toDouble
-    val to = toO.getOrElse(quantile)
     Ok(Json.prettyPrint(Json.obj(
-        "quantile"->quantile,
         "from"->from,
         "to"->to,
         "by"->by,
-        "termFreqQuantiles"-> (from to to by by).map(q => Json.obj(""+q.toDouble/tq -> ttft.quantile(q.toDouble/tq).toInt)),
-        "docFreqQuantiles" -> (from to to by by).map(q => Json.obj(""+q.toDouble/tq ->dft.quantile(q.toDouble/tq).toLong)))))
+        "totalDocs" -> ia.reader(ia.indexMetadata.levels(0).id).getSumDocFreq("content"),
+        "totalTerms" -> ia.reader(ia.indexMetadata.levels(0).id).getSumTotalTermFreq("content"),
+        "termFreqQuantiles"-> (from to to by by).map(q => Json.obj(""+q -> ttft.quantile(q).toLong)),
+        "docFreqQuantiles" -> (from to to by by).map(q => Json.obj(""+q -> dft.quantile(q).toLong)))))
   }  
 }
