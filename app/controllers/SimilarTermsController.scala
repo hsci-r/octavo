@@ -41,13 +41,14 @@ class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
   }
   
   // get terms lexically similar to a query term - used in topic definition to get past OCR errors
-  def similarTerms(q: String, levelg: String, maxEditDistance:Int, minCommonPrefix:Int,transposeIsSingleEditg : Option[String]) = Action {
-    Logger.info(s"b:similarTerms(query:$q, level:$levelg, maxEditdistance:$maxEditDistance, minCommonPrefix:$minCommonPrefix, transposeIsSingleEdit:$transposeIsSingleEditg)")
+  def similarTerms(q: String, maxEditDistance:Int, minCommonPrefix:Int,transposeIsSingleEditg : Option[String]) = Action {
+    val transposeIsSingleEdit: Boolean = transposeIsSingleEditg.exists(v => v=="" || v.toBoolean)
+    val callId = s"similarTerms: query:$q, maxEditdistance:$maxEditDistance, minCommonPrefix:$minCommonPrefix, transposeIsSingleEdit:$transposeIsSingleEdit"
+    Logger.info(callId)
+    val qm = Json.obj("method"->"similarTerms","callId"->callId,"term"->q,"maxEditDistance"->maxEditDistance,"minCommonPrefix"->minCommonPrefix,"transposeIsSingleEdit"->transposeIsSingleEdit)
     val ts = analyzer.tokenStream("content", q)
     val ta = ts.addAttribute(classOf[CharTermAttribute])
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
-    val level = levelg.toUpperCase
-    val transposeIsSingleEdit: Boolean = transposeIsSingleEditg.exists(v => v=="" || v.toBoolean)
     ts.reset()
     val parts = new ArrayBuffer[(Int,String)]
     while (ts.incrementToken()) {
@@ -59,10 +60,11 @@ class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
     for (((so,qt),termMap) <- parts.zip(termMaps)) {
       val as = new AttributeSource()
       val t = new Term("content",qt)
-      for (lrc <- reader(level).leaves.asScala; terms = lrc.reader.terms("content"); if terms!=null; (br,docFreq) <- new FuzzyTermsEnum(terms,as,t,maxEditDistance,minCommonPrefix,transposeIsSingleEdit).asBytesRefAndDocFreqIterator) termMap(br.utf8ToString) += docFreq
+      for (lrc <- reader(ia.indexMetadata.defaultLevel.id).leaves.asScala; terms = lrc.reader.terms("content"); if terms!=null; (br,docFreq) <- new FuzzyTermsEnum(terms,as,t,maxEditDistance,minCommonPrefix,transposeIsSingleEdit).asBytesRefAndDocFreqIterator)
+        termMap(br.utf8ToString) += docFreq
     }
     if (parts.length==1)
-      Ok(Json.toJson(termMaps(0)))
+      Ok(Json.obj("queryMetadata"->qm,"results"->termMaps(0).toSeq.sortBy(-_._2).map(p => Json.obj("term"->p._1,"count"->p._2))))
     else {
       val termMap = new HashMap[String, Long]()
       for (terms <- permutations(termMaps.map(_.keys.toSeq))) {
@@ -75,10 +77,10 @@ class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
           pqb.add(new Term("content",q),position)
         }
         bqb.add(pqb.build,BooleanClause.Occur.SHOULD)
-        searcher(ia.indexMetadata.levels(0).id, SumScaling.ABSOLUTE).search(bqb.build, hc)
+        searcher(ia.indexMetadata.defaultLevel.id, SumScaling.ABSOLUTE).search(bqb.build, hc)
         if (hc.getTotalHits>0) termMap.put(terms.zip(parts.map(_._1)).map(t => "a " * (t._2 - 1) + t._1 ).mkString(" "),hc.getTotalHits)
       }
-      Ok(Json.toJson(termMap))
+      Ok(Json.obj("queryMetadata"->qm,"results"->termMap.toSeq.sortBy(-_._2).map(p => Json.obj("term"->p._1,"count"->p._2))))
     }
   }
 

@@ -55,6 +55,7 @@ import enumeratum.EnumEntry
 import enumeratum.Enum
 import org.apache.lucene.index.LeafReader
 import java.util.Collections
+import org.apache.lucene.analysis.CharArraySet
 
 object IndexAccess {
   
@@ -78,7 +79,7 @@ object IndexAccess {
   
   BooleanQuery.setMaxClauseCount(Int.MaxValue)
 
-  private val standardAnalyzer = new StandardAnalyzer()
+  private val standardAnalyzer = new StandardAnalyzer(CharArraySet.EMPTY_SET)
   
   private val termFrequencySimilarity = new SimilarityBase() {
     override def score(stats: BasicStats, freq: Float, docLen: Float): Float = {
@@ -93,13 +94,20 @@ object IndexAccess {
   }
   
   private case class TermsEnumToBytesRefIterator(te: TermsEnum) extends Iterator[BytesRef] {
-    var br = te.next()
+    var br: BytesRef = te.next()
+    var nextFetched: Boolean = true
     def next(): BytesRef = {
-      val ret = br
-      br = te.next()
-      return ret
+      if (!nextFetched) br = te.next()
+      else nextFetched = false
+      return br
     }
-    def hasNext() = br != null
+    def hasNext() = {
+      if (!nextFetched) {
+        br = te.next()
+        nextFetched = true
+      }
+      br != null
+    }
   }
   
   private case class TermsToBytesRefIterable(te: Terms) extends Iterable[BytesRef] {
@@ -109,13 +117,21 @@ object IndexAccess {
   private implicit def termsEnumToBytesRefIterator(te: TermsEnum): Iterator[BytesRef] = TermsEnumToBytesRefIterator(te)
 
   private case class TermsEnumToBytesRefAndDocFreqIterator(te: TermsEnum) extends Iterator[(BytesRef,Int)] {
-    var br = te.next()
+    var br: BytesRef = te.next()
+    var nextFetched: Boolean = true
     def next(): (BytesRef,Int) = {
+      if (!nextFetched) br = te.next()
+      else nextFetched = false
       val ret = (br, te.docFreq)
-      br = te.next()
       return ret
     }
-    def hasNext() = br != null
+    def hasNext() = {
+      if (!nextFetched) {
+        br = te.next()
+        nextFetched = true
+      }
+      br != null
+    }
   }
   
   private case class TermsToBytesRefAndDocFreqIterable(te: Terms) extends Iterable[(BytesRef,Int)] {
@@ -125,13 +141,21 @@ object IndexAccess {
   private implicit def termsEnumToBytesRefAndDocFreqIterator(te: TermsEnum): Iterator[(BytesRef,Int)] = TermsEnumToBytesRefAndDocFreqIterator(te)
 
   private case class TermsEnumToBytesRefAndTotalTermFreqIterator(te: TermsEnum) extends Iterator[(BytesRef,Long)] {
-    var br = te.next()
+    var br: BytesRef = te.next()
+    var nextFetched: Boolean = true
     def next(): (BytesRef,Long) = {
+      if (!nextFetched) br = te.next()
+      else nextFetched = false
       val ret = (br, te.totalTermFreq)
-      br = te.next()
       return ret
     }
-    def hasNext() = br != null
+    def hasNext() = {
+      if (!nextFetched) {
+        br = te.next()
+        nextFetched = true
+      }
+      br != null
+    }
   }
   
   private case class TermsToBytesRefAndTotalTermFreqIterable(te: Terms) extends Iterable[(BytesRef,Long)] {
@@ -142,13 +166,21 @@ object IndexAccess {
 
   
   private case class TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te: TermsEnum) extends Iterator[(BytesRef,Int,Long)] {
-    var br = te.next()
+    var br: BytesRef = te.next()
+    var nextFetched: Boolean = true
     def next(): (BytesRef,Int,Long) = {
+      if (!nextFetched) br = te.next()
+      else nextFetched = false
       val ret = (br, te.docFreq, te.totalTermFreq)
-      br = te.next()
       return ret
     }
-    def hasNext() = br != null
+    def hasNext() = {
+      if (!nextFetched) {
+        br = te.next()
+        nextFetched = true
+      }
+      br != null
+    }
   }
 
   private case class TermsToBytesRefAndDocFreqAndTotalTermFreqIterable(te: Terms) extends Iterable[(BytesRef,Int,Long)] {
@@ -288,6 +320,7 @@ class IndexAccess @Inject() (config: Configuration) {
     storedMultiFields: Set[String],
     numericDocValuesFields: Set[String]
   ) {
+    val defaultLevel: LevelMetadata = levels.last
     val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap
     val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
     val levelType: Map[String,QueryByType] = levels.map(l => (l.id,if (numericDocValuesFields.contains(l.term)) QueryByType.NUMERIC else QueryByType.SORTED)).toMap

@@ -39,7 +39,7 @@ class StatsController @Inject() (ia: IndexAccess) extends Controller {
   def calc(): Unit = {
     synchronized {
       if (dft == null) {
-        val ir = ia.reader(ia.indexMetadata.levels(0).id)
+        val ir = ia.reader(ia.indexMetadata.defaultLevel.id)
         val dft = TDigest.createDigest(100)
         val ttft = TDigest.createDigest(100)
         val f1 = Future {
@@ -62,10 +62,10 @@ class StatsController @Inject() (ia: IndexAccess) extends Controller {
         "from"->from,
         "to"->to,
         "by"->by,
-        "totalDocs" -> ia.reader(ia.indexMetadata.levels(0).id).getDocCount("content"),
-        "totalTerms" -> ia.reader(ia.indexMetadata.levels(0).id).leaves.get(0).reader().terms("content").size(),
-        "totalDocFreq" -> ia.reader(ia.indexMetadata.levels(0).id).getSumDocFreq("content"),
-        "totalTermFreq" -> ia.reader(ia.indexMetadata.levels(0).id).getSumTotalTermFreq("content"),
+        "totalDocs" -> ia.reader(ia.indexMetadata.defaultLevel.id).getDocCount("content"),
+        "totalTerms" -> ia.reader(ia.indexMetadata.defaultLevel.id).leaves.get(0).reader().terms("content").size(),
+        "totalDocFreq" -> ia.reader(ia.indexMetadata.defaultLevel.id).getSumDocFreq("content"),
+        "totalTermFreq" -> ia.reader(ia.indexMetadata.defaultLevel.id).getSumTotalTermFreq("content"),
         "termFreqQuantiles"-> (from to to by by).map(q => Json.obj(""+q -> ttft.quantile(q).toLong)),
         "docFreqQuantiles" -> (from to to by by).map(q => Json.obj(""+q -> dft.quantile(q).toLong)))))
   }  
