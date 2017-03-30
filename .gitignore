@@ -1,4 +1,6 @@
 logs
+/.cache-main
+/tmp
 target
 /.idea
 /.idea_modules
