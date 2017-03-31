@@ -56,6 +56,7 @@ import enumeratum.Enum
 import org.apache.lucene.index.LeafReader
 import java.util.Collections
 import org.apache.lucene.analysis.CharArraySet
+import scala.language.implicitConversions
 
 object IndexAccess {
   
