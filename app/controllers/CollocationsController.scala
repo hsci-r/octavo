@@ -54,7 +54,7 @@ class CollocationsController @Inject() (implicit ia: IndexAccess, materializer: 
         val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(_)._2)
         val ctermVectors = collocations.keys.toSeq.par.map{term => 
           val termS = termOrdToTerm(ir,term)
-          val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term("content",termS)), Occur.MUST)
+          val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,termS)), Occur.MUST)
           for (q <- resultLimitQuery) bqb.add(q, Occur.MUST)
           getAggregateContextVectorForQuery(is, bqb.build(), resultTermVectorLocalProcessingParameters, Seq(termS), resultTermVectorAggregateProcessingParameters, maxDocs)
         }.seq
@@ -64,7 +64,7 @@ class CollocationsController @Inject() (implicit ia: IndexAccess, materializer: 
         val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(_)._2)
         collocations.toSeq.sortBy(-_._2).par.map{ case (term, weight) => {
           val termS = termOrdToTerm(ir,term)
-          val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term("content",termS)), Occur.MUST)
+          val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,termS)), Occur.MUST)
           for (q <- resultLimitQuery) bqb.add(q, Occur.MUST)
           val (md, ctermVector) = getAggregateContextVectorForQuery(is, bqb.build(), resultTermVectorLocalProcessingParameters, Seq(termS), resultTermVectorAggregateProcessingParameters, maxDocs) 
           Json.obj("term" -> termS, "termVector"->Json.obj("metadata"->md.toJson, "terms"->termOrdMapToOrderedTermSeq(ir, ctermVector).map(p=>Json.obj("term" -> p._1, "weight" -> p._2)),"weight"->weight))

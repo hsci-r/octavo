@@ -215,24 +215,6 @@ object IndexAccess {
   }
 
   
-  def docFreq(ir: IndexReader, term: Long): Int = {
-    val it = ir.leaves.get(0).reader.terms("content").iterator
-    it.seekExact(term)
-    return it.docFreq
-  }
-
-  def totalTermFreq(ir: IndexReader, term: Long): Long = {
-    val it = ir.leaves.get(0).reader.terms("content").iterator
-    it.seekExact(term)
-    return it.totalTermFreq
-  }
-
-  def termOrdToTerm(ir: IndexReader, term: Long): String = {
-    val it = ir.leaves.get(0).reader.terms("content").iterator
-    it.seekExact(term)
-    return it.term.utf8ToString
-  }
-  
   private def getMatchingValuesFromSortedDocValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = {
     val ret = new HashSet[BytesRef]
     tlc.get.setCollector(new SimpleCollector() {
@@ -275,8 +257,6 @@ object IndexAccess {
     ret
   }
   
-  def extractContentTermsFromQuery(q: Query): Seq[String] = QueryTermExtractor.getTerms(q, false, "content").map(_.getTerm).toSeq
-
 }
 
 @Singleton
@@ -312,6 +292,7 @@ class IndexAccess @Inject() (config: Configuration) {
   }
 
   case class IndexMetadata(
+    contentField: String,
     levels: Seq[LevelMetadata],
     textFields: Set[String],
     intPointFields: Set[String],
@@ -351,6 +332,7 @@ class IndexAccess @Inject() (config: Configuration) {
   )
   
   def readIndexMetadata(c: JsValue) = IndexMetadata(
+    (c \ "contentField").as[String],
     (c \ "levels").as[Seq[JsValue]].map(readLevelMetadata(_)),
     (c \ "textFields").as[Set[String]],
     (c \ "intPointFields").as[Set[String]],
@@ -389,7 +371,7 @@ class IndexAccess @Inject() (config: Configuration) {
   
   val queryParsers = new ThreadLocal[QueryParser] {
     
-    override def initialValue(): QueryParser = new QueryParser("content",analyzer) {
+    override def initialValue(): QueryParser = new QueryParser(indexMetadata.contentField,analyzer) {
       override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
         if (indexMetadata.intPointFields.contains(field)) {
           val low = Try(if (startInclusive) part1.toInt else part1.toInt + 1).getOrElse(Int.MinValue)
@@ -404,11 +386,25 @@ class IndexAccess @Inject() (config: Configuration) {
   private val queryPartStart = "(?<!\\\\)<".r
   private val queryPartEnd = "(?<!\\\\)>".r
   
-  private val documentIDTerm = new Term("documentID","")
-  private val documentPartIDTerm = new Term("partID","")
-  private val sectionIDTerm = new Term("sectionID","")
-  private val paragraphIDTerm = new Term("paragraphID","")
+  def docFreq(ir: IndexReader, term: Long): Int = {
+    val it = ir.leaves.get(0).reader.terms(indexMetadata.contentField).iterator
+    it.seekExact(term)
+    return it.docFreq
+  }
 
+  def totalTermFreq(ir: IndexReader, term: Long): Long = {
+    val it = ir.leaves.get(0).reader.terms(indexMetadata.contentField).iterator
+    it.seekExact(term)
+    return it.totalTermFreq
+  }
+
+  def termOrdToTerm(ir: IndexReader, term: Long): String = {
+    val it = ir.leaves.get(0).reader.terms(indexMetadata.contentField).iterator
+    it.seekExact(term)
+    return it.term.utf8ToString
+  }
+  
+  def extractContentTermsFromQuery(q: Query): Seq[String] = QueryTermExtractor.getTerms(q, false, indexMetadata.contentField).map(_.getTerm).toSeq
   
   private def runSubQuery(queryLevel: String, query: Query, targetLevel: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Query = {
     val (idTerm: Term, values: Iterable[BytesRef]) = 

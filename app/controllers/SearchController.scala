@@ -196,7 +196,7 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
           val fields = new java.util.HashSet[String]
           for (field <- srp.storedSingularFields) fields.add(field)
           for (field <- srp.storedMultiFields) fields.add(field)
-          if (srp.returnMatches) fields.add("content")
+          if (srp.returnMatches) fields.add(indexMetadata.contentField)
           context.reader.document(doc, fields)
         } else null
         for (field <- srp.storedSingularFields) fields += ((field -> Json.toJson(document.get(field))))
@@ -215,13 +215,13 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
           }
         }
         if (srp.returnMatches)
-          fields += (("matches" -> Json.toJson(highlighter.highlightWithoutSearcher("content", query, document.get("content"), 100).asInstanceOf[Array[String]].filter(_.contains("<b>")))))
+          fields += (("matches" -> Json.toJson(highlighter.highlightWithoutSearcher(indexMetadata.contentField, query, document.get(indexMetadata.contentField), 100).asInstanceOf[Array[String]].filter(_.contains("<b>")))))
         val cv = if (termVectors || ctvpa.defined || ctvpl.defined || ctvpa.mdsDimensions > 0 || ctv.query.isDefined) getTermVectorForDocument(ir, doc, ctvpl, ctvpa) else null 
         if (ctv.query.isDefined)
           fields += (("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._2))))
         if (srp.returnNorms) {
           fields += (("explanation" -> Json.toJson(we.explain(context, doc).toString)))
-        fields += (("norms" -> Json.toJson(normTerms.map(t => Json.toJson(Map("term"->t, "docFreq"->(""+ir.docFreq(new Term("content", t))), "totalTermFreq"->(""+ir.totalTermFreq(new Term("content",t)))))))))
+        fields += (("norms" -> Json.toJson(normTerms.map(t => Json.toJson(Map("term"->t, "docFreq"->(""+ir.docFreq(new Term(indexMetadata.contentField, t))), "totalTermFreq"->(""+ir.totalTermFreq(new Term(indexMetadata.contentField,t)))))))))
         }
         if (cv != null && ctvpa.mdsDimensions == 0) fields += (("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, cv).map(p=>Json.obj("term" -> p._1, "weight" -> p._2)))))
         (fields, if (ctvpa.mdsDimensions >0) cv else null)    

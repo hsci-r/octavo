@@ -31,9 +31,9 @@ import play.api.libs.json.Json
 import play.api.libs.json.JsValue
 import scala.collection.mutable.ArrayBuffer
 
-object TermVectors  {
+object TermVectors {
   
-  import IndexAccess.{getHitCountForQuery,termOrdToTerm}
+  import IndexAccess._
   
   case class TermVectorQueryMetadata(val totalDocs: Long, val processedDocs: Long, val samplePercentage: Double, val contributingDocs: Long, val processedTerms: Long, val acceptedTerms: Long, val totalAcceptedTermFreq: Long) {
     def toJson(): JsValue = Json.toJson(Map(
@@ -48,24 +48,24 @@ object TermVectors  {
             
   }
   
-  private def runTermVectorQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int, contextSetter: (LeafReaderContext) => Unit, docCollector: (Int) => Unit, termCollector: (Long,Int) => Unit)(implicit tlc: ThreadLocal[TimeLimitingCollector]): TermVectorQueryMetadata = {
-   var processedDocs = 0l
-   var contributingDocs = 0l
-   var processedTerms = 0l
-   var acceptedTerms = 0l
-   var totalAcceptedTermFreq = 0l
-   val totalHits = getHitCountForQuery(is, q)
-   val sampleProbability = if (maxDocs == -1) 1.0 else math.min(maxDocs.toDouble / totalHits, 1.0)
-   val ir = is.getIndexReader
-   Logger.info(f"q: $q%s, sampleProbability:${sampleProbability}%,.4f <- maxDocs:$maxDocs%,d, hits:${totalHits}%,d")
-   tlc.get.setCollector(new SimpleCollector() {
+  private def runTermVectorQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int, contextSetter: (LeafReaderContext) => Unit, docCollector: (Int) => Unit, termCollector: (Long,Int) => Unit)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): TermVectorQueryMetadata = {
+    var processedDocs = 0l
+    var contributingDocs = 0l
+    var processedTerms = 0l
+    var acceptedTerms = 0l
+    var totalAcceptedTermFreq = 0l
+    val totalHits = getHitCountForQuery(is, q)
+    val sampleProbability = if (maxDocs == -1) 1.0 else math.min(maxDocs.toDouble / totalHits, 1.0)
+    val ir = is.getIndexReader
+    Logger.info(f"q: $q%s, sampleProbability:${sampleProbability}%,.4f <- maxDocs:$maxDocs%,d, hits:${totalHits}%,d")
+    tlc.get.setCollector(new SimpleCollector() {
       override def needsScores: Boolean = false
       var context: LeafReaderContext = null
 
       override def collect(doc: Int) {
         if (maxDocs == -1 || sampleProbability == 1.0 || Math.random() < sampleProbability) {
           processedDocs+=1          
-          val tv = this.context.reader.getTermVector(doc, "content")
+          val tv = this.context.reader.getTermVector(doc, ia.indexMetadata.contentField)
           if (tv != null) {
             docCollector(doc)
             if (tv.size()>10000) Logger.debug(f"Long term vector for doc $doc%d: ${tv.size}%,d")
@@ -102,9 +102,9 @@ object TermVectors  {
     TermVectorQueryMetadata(totalHits, processedDocs, sampleProbability, contributingDocs, processedTerms, acceptedTerms, totalAcceptedTermFreq)
   }
   
-  def getTermVectorForDocument(ir: IndexReader, doc: Int, ctvpl: LocalTermVectorProcessingParameters, ctvpa: AggregateTermVectorProcessingParameters): LongDoubleMap = {
+  def getTermVectorForDocument(ir: IndexReader, doc: Int, ctvpl: LocalTermVectorProcessingParameters, ctvpa: AggregateTermVectorProcessingParameters)(implicit ia: IndexAccess): LongDoubleMap = {
     val cv = HashLongIntMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap() 
-    val tv = ir.getTermVector(doc, "content")
+    val tv = ir.getTermVector(doc, ia.indexMetadata.contentField)
     if (tv != null) {
       val tvt = tv.iterator.asInstanceOf[TVTermsEnum]
       var term = tvt.nextOrd()
@@ -117,13 +117,13 @@ object TermVectors  {
     scaleAndFilterTermVector(ir, cv, ctvpa)
   }
 
-  private def getUnscaledAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (TermVectorQueryMetadata,LongIntMap) = {
+  private def getUnscaledAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): (TermVectorQueryMetadata,LongIntMap) = {
      val cv = HashLongIntMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()     
      val md = runTermVectorQuery(is, q, ctvp, minScalingTerms, maxDocs, (_: LeafReaderContext) => Unit, (_: Int) => Unit, (term: Long, freq: Int) => cv.addValue(term, freq))
      (md,cv)
   }
   
-  private def scaleAndFilterTermVector(ir: IndexReader, cv: LongIntMap, ctvp: AggregateTermVectorProcessingParameters): LongDoubleMap = {
+  private def scaleAndFilterTermVector(ir: IndexReader, cv: LongIntMap, ctvp: AggregateTermVectorProcessingParameters)(implicit ia: IndexAccess): LongDoubleMap = {
     val m = HashLongDoubleMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
     cv.forEach(new LongIntConsumer {
        override def accept(k: Long, v: Int) {
@@ -140,7 +140,7 @@ object TermVectors  {
     }
   }
   
-  def getAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (TermVectorQueryMetadata,LongDoubleMap) = {
+  def getAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): (TermVectorQueryMetadata,LongDoubleMap) = {
     val (md, cv) = getUnscaledAggregateContextVectorForQuery(is, q, ctvpl, minScalingTerms, maxDocs)
     (md, scaleAndFilterTermVector(is.getIndexReader, cv, ctvpa))
   }
@@ -171,7 +171,7 @@ object TermVectors  {
     cvm
   }  
 
-  final class VectorInfo(ir: IndexReader, value: UnscaledVectorInfo, ctvpa: AggregateTermVectorProcessingParameters) {
+  final class VectorInfo(ir: IndexReader, value: UnscaledVectorInfo, ctvpa: AggregateTermVectorProcessingParameters)(implicit ia: IndexAccess) {
     val docFreq = value.docFreq
     val totalTermFreq = value.totalTermFreq
     val cv: LongDoubleMap = scaleAndFilterTermVector(ir, value.cv,ctvpa)
@@ -182,7 +182,7 @@ object TermVectors  {
     getGroupedUnscaledAggregateContextVectorsForQuery(is, q, ctvpl, minScalingTerms, attr, attrLength, maxDocs).map{ case (key,value) => (key, new VectorInfo(ir, value,ctvpa)) }
   }
   
-  def getContextTermsForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (TermVectorQueryMetadata,LongSet) = {
+  def getContextTermsForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): (TermVectorQueryMetadata,LongSet) = {
      val cv = HashLongSets.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableSet()
      val md = runTermVectorQuery(is, q, ctvp, Seq.empty, maxDocs, (_: LeafReaderContext) => Unit, (_: Int) => Unit, (term: Long, _) => cv.add(term))
      (md,cv)
@@ -222,32 +222,32 @@ object TermVectors  {
     return MDSJ.stressMinimization(matrix, rtp.mdsDimensions).transpose
   }
   
-  def termOrdMapToTermMap(ir: IndexReader, m: LongDoubleMap): collection.Map[String,Double] = {
+  def termOrdMapToTermMap(ir: IndexReader, m: LongDoubleMap)(implicit ia: IndexAccess): collection.Map[String,Double] = {
     val rm = new HashMap[String,Double]
     m.forEach(new LongDoubleConsumer {
       override def accept(term: Long, freq: Double) {
-        rm.put(termOrdToTerm(ir, term),freq)
+        rm.put(ia.termOrdToTerm(ir, term),freq)
       }
     })
     rm
   }
   
-  def termOrdMapToOrderedTermSeq(ir: IndexReader, m: LongDoubleMap): Seq[(String,Double)] = {
+  def termOrdMapToOrderedTermSeq(ir: IndexReader, m: LongDoubleMap)(implicit ia: IndexAccess): Seq[(String,Double)] = {
     val rm = new ArrayBuffer[(String,Double)]
     m.forEach(new LongDoubleConsumer {
       override def accept(term: Long, freq: Double) {
-        rm += ((termOrdToTerm(ir, term),freq))
+        rm += ((ia.termOrdToTerm(ir, term),freq))
       }
     })
     rm.sortBy(-_._2)
   }
   
-  def termOrdsToTerms(ir: IndexReader, m: LongSet): Traversable[String] = {
+  def termOrdsToTerms(ir: IndexReader, m: LongSet)(implicit ia: IndexAccess): Traversable[String] = {
     return new Traversable[String] {
       override def foreach[U](f: String => U): Unit = {
         m.forEach(new LongConsumer {
           override def accept(term: Long) {
-            f(termOrdToTerm(ir, term))
+            f(ia.termOrdToTerm(ir, term))
           }
         })
       }

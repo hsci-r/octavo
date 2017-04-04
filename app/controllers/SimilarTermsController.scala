@@ -46,7 +46,7 @@ class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
     val callId = s"similarTerms: query:$q, maxEditdistance:$maxEditDistance, minCommonPrefix:$minCommonPrefix, transposeIsSingleEdit:$transposeIsSingleEdit"
     Logger.info(callId)
     val qm = Json.obj("method"->"similarTerms","callId"->callId,"term"->q,"maxEditDistance"->maxEditDistance,"minCommonPrefix"->minCommonPrefix,"transposeIsSingleEdit"->transposeIsSingleEdit)
-    val ts = analyzer.tokenStream("content", q)
+    val ts = analyzer.tokenStream(indexMetadata.contentField, q)
     val ta = ts.addAttribute(classOf[CharTermAttribute])
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
     ts.reset()
@@ -59,8 +59,8 @@ class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
     val termMaps = parts.map(_ => new HashMap[String,Long]().withDefaultValue(0l)).toSeq
     for (((so,qt),termMap) <- parts.zip(termMaps)) {
       val as = new AttributeSource()
-      val t = new Term("content",qt)
-      for (lrc <- reader(ia.indexMetadata.defaultLevel.id).leaves.asScala; terms = lrc.reader.terms("content"); if terms!=null; (br,docFreq) <- new FuzzyTermsEnum(terms,as,t,maxEditDistance,minCommonPrefix,transposeIsSingleEdit).asBytesRefAndDocFreqIterator)
+      val t = new Term(indexMetadata.contentField,qt)
+      for (lrc <- reader(ia.indexMetadata.defaultLevel.id).leaves.asScala; terms = lrc.reader.terms(indexMetadata.contentField); if terms!=null; (br,docFreq) <- new FuzzyTermsEnum(terms,as,t,maxEditDistance,minCommonPrefix,transposeIsSingleEdit).asBytesRefAndDocFreqIterator)
         termMap(br.utf8ToString) += docFreq
     }
     if (parts.length==1)
@@ -74,7 +74,7 @@ class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
         val pqb = new PhraseQuery.Builder()
         for ((q,o) <- terms.zip(parts.map(_._1))) {
           position += o
-          pqb.add(new Term("content",q),position)
+          pqb.add(new Term(indexMetadata.contentField,q),position)
         }
         bqb.add(pqb.build,BooleanClause.Occur.SHOULD)
         searcher(ia.indexMetadata.defaultLevel.id, SumScaling.ABSOLUTE).search(bqb.build, hc)

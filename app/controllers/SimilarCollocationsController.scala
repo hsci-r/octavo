@@ -66,7 +66,7 @@ class SimilarCollocationsController @Inject() (implicit ia: IndexAccess, materia
       collocations.forEach(new LongDoubleConsumer {
         override def accept(term: Long, freq: Double) {
           val termS = termOrdToTerm(ir, term)
-          val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term("content",termS)), Occur.MUST)
+          val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,termS)), Occur.MUST)
           for (q <- intermediaryLimitQuery) bqb.add(q, Occur.MUST)
           futures += Future {
             val (_,tv) = getContextTermsForQuery(is, bqb.build, intermediaryTermVectorLocalProcessingParameters, maxDocs3)
@@ -85,7 +85,7 @@ class SimilarCollocationsController @Inject() (implicit ia: IndexAccess, materia
       val maxDocs4 = if (gp.maxDocs == -1) -1 else maxDocs2/collocationCollocations.size
       val finalLimitQuery = finalTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(_)._2)
       val thirdOrderCollocations = for (term2 <- termOrdsToTerms(ir, collocationCollocations).par) yield {
-        val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term("content",term2)), Occur.MUST)
+        val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,term2)), Occur.MUST)
         for (q <- finalLimitQuery) bqb.add(q, Occur.MUST)
         val (_,tv) = getAggregateContextVectorForQuery(is, bqb.build,finalTermVectorLocalProcessingParameters,Seq(term2), finalTermVectorAggregateProcessingParameters, maxDocs4)
         (term2,tv)

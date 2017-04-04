@@ -4,9 +4,10 @@ import play.api.mvc.Request
 import play.api.mvc.AnyContent
 import org.apache.lucene.index.IndexReader
 import play.api.libs.json.Json
+import services.IndexAccess
 
-case class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) {
-  import services.IndexAccess.{totalTermFreq,docFreq,termOrdToTerm}
+case class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent], ia: IndexAccess) {
+  import ia.{totalTermFreq,docFreq,termOrdToTerm}
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   private val minFreqInDocOpt = p.get(prefix+"minFreqInDoc"+suffix).map(_(0).toLong)
   /** minimum per document frequency of term to be added to the term vector */
