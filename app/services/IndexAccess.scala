@@ -346,7 +346,9 @@ class IndexAccess @Inject() (config: Configuration) {
   val indexMetadata: IndexMetadata = readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
   
   for (level <- indexMetadata.levels) {
+    Logger.info("Initializing index at "+path+"/"+level.index)
     readers.put(level.id, DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath(path+"/"+level.index))))
+    Logger.info("Initialized index at "+path+"/"+level.index)
     tfSearchers.put(level.id, {
       val is = new IndexSearcher(readers(level.id))
       is.setSimilarity(termFrequencySimilarity)
