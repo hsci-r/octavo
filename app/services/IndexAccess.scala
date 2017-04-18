@@ -57,6 +57,7 @@ import org.apache.lucene.index.LeafReader
 import java.util.Collections
 import org.apache.lucene.analysis.CharArraySet
 import scala.language.implicitConversions
+import org.apache.lucene.analysis.core.WhitespaceAnalyzer
 
 object IndexAccess {
   
@@ -80,7 +81,9 @@ object IndexAccess {
   
   BooleanQuery.setMaxClauseCount(Int.MaxValue)
 
-  private val standardAnalyzer = new StandardAnalyzer(CharArraySet.EMPTY_SET)
+  //private val standardAnayzer = new StandardAnalyzer(CharArraySet.EMPTY_SET)
+  
+  private val whitespaceAnalyzer = new WhitespaceAnalyzer()
   
   private val termFrequencySimilarity = new SimilarityBase() {
     override def score(stats: BasicStats, freq: Float, docLen: Float): Float = {
@@ -369,7 +372,7 @@ class IndexAccess @Inject() (config: Configuration) {
   }
   
   val analyzer = new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),
-      (indexMetadata.textFields).map((_,standardAnalyzer)).toMap[String,Analyzer].asJava)
+      (indexMetadata.textFields).map((_,whitespaceAnalyzer)).toMap[String,Analyzer].asJava)
   
   val queryParsers = new ThreadLocal[QueryParser] {
     
