@@ -58,6 +58,7 @@ import java.util.Collections
 import org.apache.lucene.analysis.CharArraySet
 import scala.language.implicitConversions
 import org.apache.lucene.analysis.core.WhitespaceAnalyzer
+import fi.seco.lucene.FinnishMorphologicalAnalyzer
 
 object IndexAccess {
   
@@ -267,7 +268,7 @@ class IndexAccess @Inject() (config: Configuration) {
   
   import IndexAccess._
  
-  val path = config.getString("index.path").getOrElse("/srv/ecco")
+  val path = config.getString("index.path").getOrElse("/srv/eccocluster")
   
   private val readers: collection.mutable.Map[String,IndexReader] = new HashMap[String,IndexReader]  
   private val tfSearchers: collection.mutable.Map[String,IndexSearcher] = new HashMap[String,IndexSearcher]
@@ -297,6 +298,7 @@ class IndexAccess @Inject() (config: Configuration) {
   case class IndexMetadata(
     contentField: String,
     levels: Seq[LevelMetadata],
+    indexingAnalyzersAsText: Map[String,String],
     textFields: Set[String],
     intPointFields: Set[String],
     termVectorFields: Set[String],
@@ -305,6 +307,11 @@ class IndexAccess @Inject() (config: Configuration) {
     storedMultiFields: Set[String],
     numericDocValuesFields: Set[String]
   ) {
+    val indexingAnalyzers: Map[String,Analyzer] = indexingAnalyzersAsText.mapValues(_ match {
+      case "StandardAnalyzer" => new StandardAnalyzer(CharArraySet.EMPTY_SET)
+      case "FinnishMorphologicalAnalyzer" => new FinnishMorphologicalAnalyzer() 
+      case any => throw new IllegalArgumentException("Unknown analyzer type "+any) 
+    }).withDefaultValue(new KeywordAnalyzer()) 
     val defaultLevel: LevelMetadata = levels.last
     val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap
     val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
@@ -337,6 +344,7 @@ class IndexAccess @Inject() (config: Configuration) {
   def readIndexMetadata(c: JsValue) = IndexMetadata(
     (c \ "contentField").as[String],
     (c \ "levels").as[Seq[JsValue]].map(readLevelMetadata(_)),
+    (c \ "indexingAnalyzers").as[Map[String,String]],
     (c \ "textFields").as[Set[String]],
     (c \ "intPointFields").as[Set[String]],
     (c \ "termVectorFields").as[Set[String]],
@@ -371,12 +379,12 @@ class IndexAccess @Inject() (config: Configuration) {
     }
   }
   
-  val analyzer = new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),
+  val queryAnalyzer = new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),
       (indexMetadata.textFields).map((_,whitespaceAnalyzer)).toMap[String,Analyzer].asJava)
   
   val queryParsers = new ThreadLocal[QueryParser] {
     
-    override def initialValue(): QueryParser = new QueryParser(indexMetadata.contentField,analyzer) {
+    override def initialValue(): QueryParser = new QueryParser(indexMetadata.contentField,queryAnalyzer) {
       override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
         if (indexMetadata.intPointFields.contains(field)) {
           val low = Try(if (startInclusive) part1.toInt else part1.toInt + 1).getOrElse(Int.MinValue)
@@ -412,18 +420,22 @@ class IndexAccess @Inject() (config: Configuration) {
   def extractContentTermsFromQuery(q: Query): Seq[String] = QueryTermExtractor.getTerms(q, false, indexMetadata.contentField).map(_.getTerm).toSeq
   
   private def runSubQuery(queryLevel: String, query: Query, targetLevel: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Query = {
-    val (idTerm: Term, values: Iterable[BytesRef]) = 
-      if (indexMetadata.levelOrder(queryLevel)<indexMetadata.levelOrder(targetLevel)) // DOCUMENT < PARAGRAPH
-        (indexMetadata.levelMap(queryLevel).termAsTerm, indexMetadata.levelType(queryLevel)(searcher(targetLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(queryLevel).term))
+    val qlU = queryLevel.toUpperCase
+    val tlU = targetLevel.toUpperCase
+    val (idTerm: Term, values: Iterable[BytesRef]) =
+      if (!indexMetadata.levelOrder.contains(tlU)) 
+        (new Term(targetLevel,""), (if (indexMetadata.numericDocValuesFields.contains(targetLevel)) QueryByType.NUMERIC else QueryByType.SORTED)(searcher(qlU, SumScaling.ABSOLUTE), query, targetLevel)) 
+      else if (indexMetadata.levelOrder(qlU)<indexMetadata.levelOrder(tlU)) // DOCUMENT < PARAGRAPH
+        (indexMetadata.levelMap(qlU).termAsTerm, indexMetadata.levelType(qlU)(searcher(tlU, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(qlU).term))
       else 
-        (indexMetadata.levelMap(targetLevel).termAsTerm, indexMetadata.levelType(targetLevel)(searcher(queryLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(targetLevel).term)) 
+        (indexMetadata.levelMap(tlU).termAsTerm, indexMetadata.levelType(tlU)(searcher(qlU, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(tlU).term)) 
     new AutomatonQuery(idTerm,Automata.makeStringUnion(values.asJavaCollection))
   }
   
   private def processQueryInternal(queryIn: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (String,Query,String) = {
-    val queryLevel = queryIn.substring(1,queryIn.indexOf('|')).toUpperCase
-    val targetLevel = queryIn.substring(queryIn.lastIndexOf('|') + 1, queryIn.length - 1).toUpperCase
-    var query = queryIn.substring(queryIn.indexOf('|') + 1, queryIn.lastIndexOf('|'))
+    val queryLevel = queryIn.substring(1,queryIn.indexOf('§'))
+    val targetLevel = queryIn.substring(queryIn.lastIndexOf('§') + 1, queryIn.length - 1)
+    var query = queryIn.substring(queryIn.indexOf('§') + 1, queryIn.lastIndexOf('§'))
     val replacements = new HashMap[String,Query]
     var firstStart = queryPartStart.findFirstMatchIn(query)
     while (firstStart.isDefined) { // we have (more) subqueries
@@ -440,7 +452,7 @@ class IndexAccess @Inject() (config: Configuration) {
     Logger.debug(s"Query ${queryIn} rewritten to $query with replacements $replacements.")
     val q = queryParsers.get.parse(query)
     if (replacements.isEmpty) (queryLevel,q,targetLevel) 
-    else {
+    else if (q.isInstanceOf[BooleanQuery]) {
       val bqb = new BooleanQuery.Builder()
       for (clause <- q.asInstanceOf[BooleanQuery].clauses.asScala)
         if (clause.getQuery.isInstanceOf[TermQuery]) {
@@ -449,6 +461,13 @@ class IndexAccess @Inject() (config: Configuration) {
           else bqb.add(clause)
         } else bqb.add(clause)
       (queryLevel,bqb.build,targetLevel)
+    } else {
+      val q2 = if (q.isInstanceOf[TermQuery]) {
+          val tq = q.asInstanceOf[TermQuery]
+          if (tq.getTerm.field == "MAGIC") replacements(tq.getTerm.text)
+          else q
+      } else q
+      (queryLevel,q2,targetLevel)
     }
   }
   

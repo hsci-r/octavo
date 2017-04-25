@@ -135,6 +135,8 @@ import parameters.QueryParameters
 import org.apache.lucene.search.uhighlight.PassageFormatter
 import org.apache.lucene.search.uhighlight.Passage
 import org.apache.lucene.search.uhighlight.DefaultPassageFormatter
+import services.ExtendedUnifiedHighlighter
+import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource
 
 /**
  * This controller creates an `Action` to handle HTTP requests to the
@@ -175,16 +177,6 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
       })
       val compareTermVector = if (ctv.query.isDefined)
         getAggregateContextVectorForQuery(is, query,ctvpl, extractContentTermsFromQuery(query),ctvpa, gp.maxDocs) else null
-      val highlighter = if (srp.returnMatches) {
-        val highlighter = new UnifiedHighlighter(null, analyzer)
-        val defaultPassageFormatter = new DefaultPassageFormatter()
-        highlighter.setFormatter(new PassageFormatter() {
-          override def format(passages: Array[Passage], content: String): Array[String] = passages.map(passage => {
-            defaultPassageFormatter.format(Array(passage), content)
-          })
-        })
-        highlighter
-      } else null
       val (we, normTerms) = if (srp.returnNorms)
         (query.createWeight(is, true), extractContentTermsFromQuery(query))
       else (null, null)
@@ -214,8 +206,6 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
             fields += ((field -> Json.toJson(map)))
           }
         }
-        if (srp.returnMatches)
-          fields += (("matches" -> Json.toJson(highlighter.highlightWithoutSearcher(indexMetadata.contentField, query, document.get(indexMetadata.contentField), 100).asInstanceOf[Array[String]].filter(_.contains("<b>")))))
         val cv = if (termVectors || ctvpa.defined || ctvpl.defined || ctvpa.mdsDimensions > 0 || ctv.query.isDefined) getTermVectorForDocument(ir, doc, ctvpl, ctvpa) else null 
         if (ctv.query.isDefined)
           fields += (("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._2))))
@@ -267,7 +257,7 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
         }
       }
       tlc.get.setCollector(collector)
-      is.search(query, gp.tlc.get)    
+      is.search(query, gp.tlc.get)
       if (srp.limit!= -1) {
         val dvs = new HashMap[Int,(Map[String,SortedDocValues],Map[String,NumericDocValues])]
         for (lr <- ir.leaves.asScala) {
@@ -293,11 +283,30 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
         val originalIndicesToMDSValueIndices = nonEmptyVectorsAndTheirOriginalIndices.map(_._2).zipWithIndex.toMap
         values.indices.map(i => originalIndicesToMDSValueIndices.get(i).map(vi => Json.toJson(mdsValues(vi))).getOrElse(JsNull))
       } else null
+      val matchesByDocs = if (srp.returnMatches) {
+        val highlighter = new ExtendedUnifiedHighlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField)) {
+          override def getOffsetSource(field: String): OffsetSource = {
+            val fieldInfo = getFieldInfo(field)
+            if (fieldInfo != null) {
+              if (fieldInfo.getIndexOptions == IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
+                if (fieldInfo.hasVectors()) return OffsetSource.POSTINGS_WITH_TERM_VECTORS else return OffsetSource.POSTINGS
+              if (false && fieldInfo.hasVectors()) // unfortunately we can't also check if the TV has offsets
+                return OffsetSource.TERM_VECTORS;
+            }
+            return OffsetSource.ANALYSIS
+          }
+        }
+        highlighter.highlight(indexMetadata.contentField, query, values.map(_._1).toArray, Int.MaxValue - 1)
+      } 
+      else null
       var obj = Json.obj("queryMetadata"->qm, "results"->Json.obj(
 	      "total"->total,
-	      "docs"->values.zipWithIndex.map{ case ((doc,score),i) =>
-        if (cvs!=null) docFields.get(doc) ++ Map("termVector"->cvs(i), "score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt))) 
-        else docFields.get(doc) ++ Map("score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt))) 
+	      "docs"->values.zipWithIndex.map{ 
+	        case ((doc,score),i) =>
+	          var df = docFields.get(doc)
+            if (cvs!=null) df = df ++ Map("termVector"->cvs(i))
+            if (srp.returnMatches) df = df ++ Map("matches" -> Json.toJson(matchesByDocs(i).filter(_.contains("<b>"))))
+            df ++ Map("score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt))) 
       }))
       if (gp.pretty)
         Ok(Json.prettyPrint(obj))

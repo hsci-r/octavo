@@ -14,7 +14,7 @@ import play.api.libs.json.JsObject
 
 case class QueryParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent], ia: IndexAccess) {
   protected val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-  val query: Option[String] = p.get(prefix+"query"+suffix).map(v => if (!v(0).startsWith("<")) "<"+ia.indexMetadata.defaultLevel.id+"|"+v(0)+"|"+ia.indexMetadata.levels.last.id+">" else v(0))
+  val query: Option[String] = p.get(prefix+"query"+suffix).map(v => if (!v(0).startsWith("<")) "<"+ia.indexMetadata.defaultLevel.id+"§"+v(0)+"§"+ia.indexMetadata.defaultLevel.id+">" else v(0))
   /** minimum query score (by default term match frequency) for doc to be included in query results */
   val minScore: Float = p.get(prefix+"minScore"+suffix).map(_(0).toFloat).getOrElse(0.0f)
   override def toString() = s"${prefix}query$suffix:$query, ${prefix}minScore$suffix: $minScore"

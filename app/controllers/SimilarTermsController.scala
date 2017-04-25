@@ -28,6 +28,9 @@ import org.apache.lucene.util.AttributeSource
 import scala.collection.JavaConverters._
 import org.apache.lucene.index.Term
 import org.apache.lucene.search.FuzzyTermsEnum
+import org.apache.lucene.util.BytesRef
+import org.apache.lucene.index.TermsEnum.SeekStatus
+import java.util.Arrays
 
 @Singleton
 class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
@@ -40,13 +43,28 @@ class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
     (acc, next) => acc.flatMap { combo => next.map { num => combo :+ num } } 
   }
   
+  private def hasPrefix(br: BytesRef, prefix: BytesRef): Boolean = {
+    if (br.length<prefix.length) return false
+    val aBytes = prefix.bytes;
+    var aUpto = prefix.offset
+    val bBytes = br.bytes;
+    var bUpto = br.offset
+    val aStop = aUpto + prefix.length
+    while(aUpto < aStop) {
+      if (aBytes(aUpto) != bBytes(bUpto)) return false
+      aUpto += 1
+      bUpto += 1
+    }
+    return true
+  }
+  
   // get terms lexically similar to a query term - used in topic definition to get past OCR errors
   def similarTerms(q: String, maxEditDistance:Int, minCommonPrefix:Int,transposeIsSingleEditg : Option[String]) = Action {
     val transposeIsSingleEdit: Boolean = transposeIsSingleEditg.exists(v => v=="" || v.toBoolean)
-    val callId = s"similarTerms: query:$q, maxEditdistance:$maxEditDistance, minCommonPrefix:$minCommonPrefix, transposeIsSingleEdit:$transposeIsSingleEdit"
+    val callId = s"similarTerms: query:$q, maxEditDistance:$maxEditDistance, minCommonPrefix:$minCommonPrefix, transposeIsSingleEdit:$transposeIsSingleEdit"
     Logger.info(callId)
     val qm = Json.obj("method"->"similarTerms","callId"->callId,"term"->q,"maxEditDistance"->maxEditDistance,"minCommonPrefix"->minCommonPrefix,"transposeIsSingleEdit"->transposeIsSingleEdit)
-    val ts = analyzer.tokenStream(indexMetadata.contentField, q)
+    val ts = queryAnalyzer.tokenStream(indexMetadata.contentField, q)
     val ta = ts.addAttribute(classOf[CharTermAttribute])
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
     ts.reset()
@@ -58,10 +76,17 @@ class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
     ts.close()
     val termMaps = parts.map(_ => new HashMap[String,Long]().withDefaultValue(0l)).toSeq
     for (((so,qt),termMap) <- parts.zip(termMaps)) {
-      val as = new AttributeSource()
-      val t = new Term(indexMetadata.contentField,qt)
-      for (lrc <- reader(ia.indexMetadata.defaultLevel.id).leaves.asScala; terms = lrc.reader.terms(indexMetadata.contentField); if terms!=null; (br,docFreq) <- new FuzzyTermsEnum(terms,as,t,maxEditDistance,minCommonPrefix,transposeIsSingleEdit).asBytesRefAndDocFreqIterator)
-        termMap(br.utf8ToString) += docFreq
+      for (
+          lrc <- reader(ia.indexMetadata.defaultLevel.id).leaves.asScala; 
+          terms = lrc.reader.terms(indexMetadata.contentField); 
+          if terms!=null; 
+          (br,docFreq) <- if (qt.endsWith("*")) {
+            val prefix = new BytesRef(qt.substring(0,qt.length-1))
+            val ti = terms.iterator
+            ti.seekCeil(prefix)
+            ti.asBytesRefAndDocFreqIterator().takeWhile(p => hasPrefix(p._1,prefix))            
+          } else new FuzzyTermsEnum(terms,new AttributeSource(),new Term(indexMetadata.contentField,qt),maxEditDistance,minCommonPrefix,transposeIsSingleEdit).asBytesRefAndDocFreqIterator
+        ) termMap(br.utf8ToString) += docFreq
     }
     if (parts.length==1)
       Ok(Json.obj("queryMetadata"->qm,"results"->termMaps(0).toSeq.sortBy(-_._2).map(p => Json.obj("term"->p._1,"count"->p._2))))
