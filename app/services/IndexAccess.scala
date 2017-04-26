@@ -429,7 +429,7 @@ class IndexAccess @Inject() (config: Configuration) {
         (indexMetadata.levelMap(qlU).termAsTerm, indexMetadata.levelType(qlU)(searcher(tlU, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(qlU).term))
       else 
         (indexMetadata.levelMap(tlU).termAsTerm, indexMetadata.levelType(tlU)(searcher(qlU, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(tlU).term)) 
-    new AutomatonQuery(idTerm,Automata.makeStringUnion(values.asJavaCollection))
+    new AutomatonQuery(idTerm,Automata.makeStringUnion(values.asJavaCollection),Int.MaxValue)
   }
   
   private def processQueryInternal(queryIn: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (String,Query,String) = {
