@@ -58,7 +58,9 @@ import java.util.Collections
 import org.apache.lucene.analysis.CharArraySet
 import scala.language.implicitConversions
 import org.apache.lucene.analysis.core.WhitespaceAnalyzer
-import fi.seco.lucene.FinnishMorphologicalAnalyzer
+import fi.seco.lucene.MorphologicalAnalyzer
+import java.util.Locale
+import fi.seco.lucene.MorphologicalAnalyzer
 
 object IndexAccess {
   
@@ -309,7 +311,7 @@ class IndexAccess @Inject() (config: Configuration) {
   ) {
     val indexingAnalyzers: Map[String,Analyzer] = indexingAnalyzersAsText.mapValues(_ match {
       case "StandardAnalyzer" => new StandardAnalyzer(CharArraySet.EMPTY_SET)
-      case "FinnishMorphologicalAnalyzer" => new FinnishMorphologicalAnalyzer() 
+      case a if a.startsWith("MorphologicalAnalyzer_") => new MorphologicalAnalyzer(new Locale(a.substring(23)))  
       case any => throw new IllegalArgumentException("Unknown analyzer type "+any) 
     }).withDefaultValue(new KeywordAnalyzer()) 
     val defaultLevel: LevelMetadata = levels.last
