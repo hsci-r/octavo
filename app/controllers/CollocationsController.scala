@@ -19,7 +19,7 @@ import org.apache.lucene.search.BooleanClause.Occur
 import services.TermVectors
 
 @Singleton
-class CollocationsController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends QueuingController(materializer, env) {
+class CollocationsController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends AQueuingController(materializer, env) {
   
   import IndexAccess._
   import ia._
@@ -40,9 +40,8 @@ class CollocationsController @Inject() (implicit ia: IndexAccess, materializer: 
     val resultTermVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters("r_")
     val termVectors = p.get("termVectors").exists(v => v(0)=="" || v(0).toBoolean)
     implicit val iec = gp.executionContext
-    val callId = s"collocations: $gp, $termVectorQueryParameters, $termVectorLocalProcessingParameters, $termVectorAggregateProcessingParameters, $resultTermVectorLimitQueryParameters, $resultTermVectorLocalProcessingParameters, $resultTermVectorAggregateProcessingParameters"
-    getOrCreateResult(callId, gp.force, () => {
-      val qm = Json.obj("method"->"collocations","callId"->callId,"termVectors"->termVectors) ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ resultTermVectorLimitQueryParameters.toJson ++ resultTermVectorLocalProcessingParameters.toJson ++ resultTermVectorAggregateProcessingParameters.toJson
+    val qm = Json.obj("method"->"collocations","termVectors"->termVectors) ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ resultTermVectorLimitQueryParameters.toJson ++ resultTermVectorLocalProcessingParameters.toJson ++ resultTermVectorAggregateProcessingParameters.toJson
+    getOrCreateResult(qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(termVectorQueryParameters.query.get)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
@@ -50,7 +49,7 @@ class CollocationsController @Inject() (implicit ia: IndexAccess, materializer: 
       val maxDocs = if (gp.maxDocs == -1 || termVectorAggregateProcessingParameters.limit == -1) -1 else if (resultTermVectorAggregateProcessingParameters.mdsDimensions>0 || resultTermVectorLocalProcessingParameters.defined || resultTermVectorAggregateProcessingParameters.defined || termVectors) gp.maxDocs / (termVectorAggregateProcessingParameters.limit + 1) else gp.maxDocs / 2
       val (md, allCollocations) = getAggregateContextVectorForQuery(is, termVectorQuery,termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters,maxDocs)
       val collocations = filterHighestScores(allCollocations, termVectorAggregateProcessingParameters.limit)
-      val json = Json.obj("queryMetadata"->qm, "results"->Json.obj("metadata"->md.toJson,"terms"->(if (resultTermVectorAggregateProcessingParameters.mdsDimensions>0) {
+      Json.obj("metadata"->md.toJson,"terms"->(if (resultTermVectorAggregateProcessingParameters.mdsDimensions>0) {
         val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(_)._2)
         val ctermVectors = collocations.keys.toSeq.par.map{term => 
           val termS = termOrdToTerm(ir,term)
@@ -69,11 +68,7 @@ class CollocationsController @Inject() (implicit ia: IndexAccess, materializer: 
           val (md, ctermVector) = getAggregateContextVectorForQuery(is, bqb.build(), resultTermVectorLocalProcessingParameters, Seq(termS), resultTermVectorAggregateProcessingParameters, maxDocs) 
           Json.obj("term" -> termS, "termVector"->Json.obj("metadata"->md.toJson, "terms"->termOrdMapToOrderedTermSeq(ir, ctermVector).map(p=>Json.obj("term" -> p._1, "weight" -> p._2)),"weight"->weight))
         }}.seq
-      } else collocations.toSeq.sortBy(-_._2).map(p => Json.obj("term"->termOrdToTerm(ir,p._1), "weight" -> p._2)))))
-      if (gp.pretty)
-        Ok(Json.prettyPrint(json))
-      else 
-        Ok(json)
+      } else collocations.toSeq.sortBy(-_._2).map(p => Json.obj("term"->termOrdToTerm(ir,p._1), "weight" -> p._2))))
     })
   }
 }

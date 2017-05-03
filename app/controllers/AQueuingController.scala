@@ -15,8 +15,11 @@ import javax.inject.Inject
 import akka.stream.Materializer
 import java.io.StringWriter
 import play.api.Environment
+import play.api.libs.json.JsValue
+import play.api.libs.json.JsObject
+import play.api.libs.json.Json
 
-abstract class QueuingController(materializer: Materializer, env: Environment) extends Controller {
+abstract class AQueuingController(materializer: Materializer, env: Environment) extends Controller {
   
   private lazy val tmpDir = {
     val tmpDir = env.getFile("tmp")
@@ -40,7 +43,8 @@ abstract class QueuingController(materializer: Materializer, env: Environment) e
     pw.close()
   }
 
-  protected def getOrCreateResult(callId: String, force: Boolean, call: () => Result)(implicit ec: ExecutionContext): Result = {
+  protected def getOrCreateResult(qm: JsObject, force: Boolean, pretty: Boolean, call: () => JsValue)(implicit ec: ExecutionContext): Result = {
+    val callId = qm.toString
     Logger.info(callId)
     val name = play.api.libs.Codecs.sha1(sha1md.digest(callId.getBytes))
     val tf = new File(tmpDir+"/result-"+name+".json")
@@ -48,7 +52,15 @@ abstract class QueuingController(materializer: Materializer, env: Environment) e
     if (tf.createNewFile()) {
       val tf2 = new File(tmpDir+"/result-"+name+".parameters")
       writeFile(tf2, callId)
-      val future = Future { call() } .flatMap(_.body.consumeData(materializer).map(c => c.decodeString("UTF-8"))).map(content => {
+      val future = Future {
+        val startTime = System.currentTimeMillis
+        val resultsJson = call() 
+        val json = Json.obj("queryMetadata"->(qm ++ Json.obj("time"->(System.currentTimeMillis()-startTime))),"results"->resultsJson)
+        if (pretty)
+          Json.prettyPrint(json)
+        else
+          json.toString
+      }.map(content => {
         writeFile(tf, content)
         processing.remove(name)
         Ok(content).as(JSON)

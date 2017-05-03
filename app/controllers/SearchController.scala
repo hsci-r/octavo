@@ -143,7 +143,7 @@ import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource
  * application's home page.
  */
 @Singleton
-class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends QueuingController(materializer, env) {
+class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends AQueuingController(materializer, env) {
   
   import ia._
   import IndexAccess._
@@ -163,9 +163,8 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
     val ctvpa = AggregateTermVectorProcessingParameters("r_")
     val termVectors = p.get("termVectors").exists(v => v(0)=="" || v(0).toBoolean)
     implicit val iec = gp.executionContext
-    val callId = s"search: $qp, $srp, $ctv, $ctvpl, $ctvpa, $gp, termVectors:$termVectors"
-    getOrCreateResult(callId, gp.force, () => {
-      val qm = Json.obj("method"->"search","callId"->callId,"termVector"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ ctvpl.toJson ++ ctvpa.toJson
+    val qm = Json.obj("method"->"search","termVector"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ ctvpl.toJson ++ ctvpa.toJson
+    getOrCreateResult(qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       val (queryLevel,query) = buildFinalQueryRunningSubQueries(qp.query.get)
       Logger.debug(f"Final query: $query%s, level: $queryLevel%s")
@@ -299,7 +298,7 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
         highlighter.highlight(indexMetadata.contentField, query, values.map(_._1).toArray, Int.MaxValue - 1)
       } 
       else null
-      var obj = Json.obj("queryMetadata"->qm, "results"->Json.obj(
+      Json.obj(
 	      "total"->total,
 	      "docs"->values.zipWithIndex.map{ 
 	        case ((doc,score),i) =>
@@ -307,11 +306,7 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
             if (cvs!=null) df = df ++ Map("termVector"->cvs(i))
             if (srp.returnMatches) df = df ++ Map("matches" -> Json.toJson(matchesByDocs(i).filter(_.contains("<b>"))))
             df ++ Map("score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt))) 
-      }))
-      if (gp.pretty)
-        Ok(Json.prettyPrint(obj))
-      else 
-        Ok(Json.toJson(obj))
+      })
     })
   }
  

@@ -16,7 +16,7 @@ import org.apache.lucene.index.DocValues
 import parameters.GeneralParameters
 
 @Singleton
-class DumpController @Inject() (ia: IndexAccess, mat: Materializer, env: Environment) extends QueuingController(mat, env) {
+class DumpController @Inject() (ia: IndexAccess, mat: Materializer, env: Environment) extends AQueuingController(mat, env) {
   
   import ia._
   import IndexAccess.shortTaskExecutionContext
@@ -25,7 +25,8 @@ class DumpController @Inject() (ia: IndexAccess, mat: Materializer, env: Environ
     if (reader(ia.indexMetadata.levels(0).id).hasDeletions()) throw new UnsupportedOperationException("Index should not have deletions!")
     val gp = GeneralParameters()
     implicit val iec = shortTaskExecutionContext
-    getOrCreateResult(s"dump: $gp", gp.force, () => {
+    val qm = Json.obj("method"->"dump") ++ gp.toJson
+    getOrCreateResult(qm, gp.force, gp.pretty, () => {
       val sdvfields = Seq("collectionID","documentID","ESTCID","language","module")
       val ndvfields = Seq("pubDateStart","pubDateEnd","documentLength","totalPages","totalParagraphs")
       val sfields = Seq("fullTitle")
@@ -55,11 +56,7 @@ class DumpController @Inject() (ia: IndexAccess, mat: Materializer, env: Environ
           output += Json.toJson(values)
         }
       }
-      val json = Json.toJson(output)
-      if (gp.pretty)
-        Ok(Json.prettyPrint(json))
-      else 
-        Ok(json)
+      Json.toJson(output)
     })
   }
   

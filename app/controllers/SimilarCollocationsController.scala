@@ -30,7 +30,7 @@ import java.util.function.LongConsumer
 import services.Distance
 
 @Singleton
-class SimilarCollocationsController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends QueuingController(materializer, env) {
+class SimilarCollocationsController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends AQueuingController(materializer, env) {
   
   import IndexAccess._
   import ia._
@@ -52,7 +52,8 @@ class SimilarCollocationsController @Inject() (implicit ia: IndexAccess, materia
     val finalTermVectorLimitQueryParameters = QueryParameters("f_")
     val finalTermVectorLocalProcessingParameters = LocalTermVectorProcessingParameters("f_")
     val finalTermVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters("f_")
-    getOrCreateResult(s"similarCollocations: $gp, $termVectorQueryParameters, $termVectorLocalProcessingParameters, $termVectorAggregateProcessingParameters, $intermediaryTermVectorLimitQueryParameters, $intermediaryTermVectorLocalProcessingParameters, $finalTermVectorLimitQueryParameters, $finalTermVectorLocalProcessingParameters, $finalTermVectorAggregateProcessingParameters", gp.force, () => {
+    val qm = Json.obj("method"->"similarCollocations") ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ intermediaryTermVectorLimitQueryParameters.toJson ++ intermediaryTermVectorLocalProcessingParameters.toJson ++ finalTermVectorLimitQueryParameters.toJson ++ finalTermVectorLocalProcessingParameters.toJson ++ finalTermVectorAggregateProcessingParameters.toJson  
+    getOrCreateResult(qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(termVectorQueryParameters.query.get)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
@@ -114,11 +115,7 @@ class SimilarCollocationsController @Inject() (implicit ia: IndexAccess, materia
           }
         }
       }
-      val json = Json.toJson(Map("cosine"->cmaxHeap.toMap,"dice"->dmaxHeap.toMap)) 
-      if (gp.pretty)
-          Ok(Json.prettyPrint(json))
-        else 
-          Ok(json)
+      Json.toJson(Map("cosine"->cmaxHeap.toMap,"dice"->dmaxHeap.toMap)) 
     })
   }
   
