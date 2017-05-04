@@ -19,7 +19,7 @@ import org.apache.lucene.search.BooleanClause.Occur
 import services.TermVectors
 
 @Singleton
-class CollocationsController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends AQueuingController(materializer, env) {
+class CollocationsController @Inject() (implicit ia: IndexAccess, env: Environment) extends AQueuingController(env) {
   
   import IndexAccess._
   import ia._
@@ -43,7 +43,7 @@ class CollocationsController @Inject() (implicit ia: IndexAccess, materializer: 
     val qm = Json.obj("method"->"collocations","termVectors"->termVectors) ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ resultTermVectorLimitQueryParameters.toJson ++ resultTermVectorLocalProcessingParameters.toJson ++ resultTermVectorAggregateProcessingParameters.toJson
     getOrCreateResult(qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
-      val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(termVectorQueryParameters.query.get)
+      val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(termVectorQueryParameters.requiredQuery)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
       val maxDocs = if (gp.maxDocs == -1 || termVectorAggregateProcessingParameters.limit == -1) -1 else if (resultTermVectorAggregateProcessingParameters.mdsDimensions>0 || resultTermVectorLocalProcessingParameters.defined || resultTermVectorAggregateProcessingParameters.defined || termVectors) gp.maxDocs / (termVectorAggregateProcessingParameters.limit + 1) else gp.maxDocs / 2

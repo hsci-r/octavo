@@ -30,7 +30,7 @@ import java.util.function.LongConsumer
 import services.Distance
 
 @Singleton
-class SimilarCollocationsController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends AQueuingController(materializer, env) {
+class SimilarCollocationsController @Inject() (implicit ia: IndexAccess, env: Environment) extends AQueuingController(env) {
   
   import IndexAccess._
   import ia._
@@ -55,7 +55,7 @@ class SimilarCollocationsController @Inject() (implicit ia: IndexAccess, materia
     val qm = Json.obj("method"->"similarCollocations") ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ intermediaryTermVectorLimitQueryParameters.toJson ++ intermediaryTermVectorLocalProcessingParameters.toJson ++ finalTermVectorLimitQueryParameters.toJson ++ finalTermVectorLocalProcessingParameters.toJson ++ finalTermVectorAggregateProcessingParameters.toJson  
     getOrCreateResult(qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
-      val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(termVectorQueryParameters.query.get)
+      val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(termVectorQueryParameters.requiredQuery)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
       val maxDocs2 = if (gp.maxDocs == -1) -1 else gp.maxDocs / 3

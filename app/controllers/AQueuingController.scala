@@ -19,7 +19,7 @@ import play.api.libs.json.JsValue
 import play.api.libs.json.JsObject
 import play.api.libs.json.Json
 
-abstract class AQueuingController(materializer: Materializer, env: Environment) extends Controller {
+abstract class AQueuingController(env: Environment) extends Controller {
   
   private lazy val tmpDir = {
     val tmpDir = env.getFile("tmp")

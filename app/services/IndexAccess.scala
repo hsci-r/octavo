@@ -67,6 +67,13 @@ import org.apache.lucene.index.PostingsEnum
 import org.apache.lucene.index.FilteredTermsEnum
 import org.apache.lucene.index.FilteredTermsEnum.AcceptStatus
 import scala.collection.Searching._
+import org.apache.lucene.search.MatchAllDocsQuery
+import org.apache.lucene.store.Directory
+import java.nio.file.Path
+import org.apache.lucene.store.NIOFSDirectory
+import org.apache.lucene.store.SimpleFSDirectory
+import org.apache.lucene.store.RAMDirectory
+import org.apache.lucene.store.IOContext
 
 object IndexAccess {
   
@@ -304,6 +311,7 @@ class IndexAccess @Inject() (config: Configuration) {
   }
 
   case class IndexMetadata(
+    indexType: String,
     contentField: String,
     levels: Seq[LevelMetadata],
     indexingAnalyzersAsText: Map[String,String],
@@ -315,6 +323,13 @@ class IndexAccess @Inject() (config: Configuration) {
     storedMultiFields: Set[String],
     numericDocValuesFields: Set[String]
   ) {
+    val directoryCreator: (Path) => Directory = (path: Path) => indexType match {
+      case "MMapDirectory" => new MMapDirectory(path)
+      case "RAMDirectory" => new RAMDirectory(new NIOFSDirectory(path), new IOContext())
+      case "SimpleFSDirectory" => new SimpleFSDirectory(path)
+      case "NIOFSDirectory" => new NIOFSDirectory(path)
+      case any => throw new IllegalArgumentException("Unknown directory type "+any)
+    }
     val indexingAnalyzers: Map[String,Analyzer] = indexingAnalyzersAsText.mapValues(_ match {
       case "StandardAnalyzer" => new StandardAnalyzer(CharArraySet.EMPTY_SET)
       case a if a.startsWith("MorphologicalAnalyzer_") => new MorphologicalAnalyzer(new Locale(a.substring(23)))  
@@ -350,9 +365,10 @@ class IndexAccess @Inject() (config: Configuration) {
   )
   
   def readIndexMetadata(c: JsValue) = IndexMetadata(
+    (c \ "indexType").asOpt[String].getOrElse("MMapDirectory"),
     (c \ "contentField").as[String],
     (c \ "levels").as[Seq[JsValue]].map(readLevelMetadata(_)),
-    (c \ "indexingAnalyzers").as[Map[String,String]],
+    (c \ "indexingAnalyzers").asOpt[Map[String,String]].getOrElse(Map.empty),
     (c \ "textFields").as[Set[String]],
     (c \ "intPointFields").as[Set[String]],
     (c \ "termVectorFields").as[Set[String]],
@@ -491,7 +507,7 @@ class IndexAccess @Inject() (config: Configuration) {
       firstStart = queryPartStart.findFirstMatchIn(query)
     }
     Logger.debug(s"Query ${queryIn} rewritten to $query with replacements $replacements.")
-    val q = queryParsers.get.parse(query)
+    val q = if (query.isEmpty) new MatchAllDocsQuery() else queryParsers.get.parse(query)
     if (replacements.isEmpty) (queryLevel,q,targetLevel) 
     else if (q.isInstanceOf[BooleanQuery]) {
       val bqb = new BooleanQuery.Builder()

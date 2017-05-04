@@ -16,7 +16,7 @@ import org.apache.lucene.index.DocValues
 import parameters.GeneralParameters
 
 @Singleton
-class DumpController @Inject() (ia: IndexAccess, mat: Materializer, env: Environment) extends AQueuingController(mat, env) {
+class DumpController @Inject() (ia: IndexAccess, env: Environment) extends AQueuingController(env) {
   
   import ia._
   import IndexAccess.shortTaskExecutionContext

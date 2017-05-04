@@ -143,7 +143,7 @@ import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource
  * application's home page.
  */
 @Singleton
-class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends AQueuingController(materializer, env) {
+class SearchController @Inject() (implicit ia: IndexAccess, env: Environment) extends AQueuingController(env) {
   
   import ia._
   import IndexAccess._
@@ -166,7 +166,7 @@ class SearchController @Inject() (implicit ia: IndexAccess, materializer: Materi
     val qm = Json.obj("method"->"search","termVector"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ ctvpl.toJson ++ ctvpa.toJson
     getOrCreateResult(qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
-      val (queryLevel,query) = buildFinalQueryRunningSubQueries(qp.query.get)
+      val (queryLevel,query) = buildFinalQueryRunningSubQueries(qp.requiredQuery)
       Logger.debug(f"Final query: $query%s, level: $queryLevel%s")
       val is = searcher(queryLevel,srp.sumScaling)
       val ir = is.getIndexReader

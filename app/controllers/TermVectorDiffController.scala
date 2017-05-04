@@ -27,7 +27,7 @@ import com.koloboke.collect.set.hash.HashLongSets
 import java.util.function.LongConsumer
 
 @Singleton
-class TermVectorDiffController @Inject() (implicit ia: IndexAccess, materializer: Materializer, env: Environment) extends AQueuingController(materializer, env) {
+class TermVectorDiffController @Inject() (implicit ia: IndexAccess, env: Environment) extends AQueuingController(env) {
   
   import IndexAccess._
   import ia._
@@ -48,8 +48,8 @@ class TermVectorDiffController @Inject() (implicit ia: IndexAccess, materializer
     implicit val ec = gp.executionContext
     val qm = Json.obj("method"->"termVectorDiff","attr"->attr,"attrLength"->attrLength,"meaningfulTerms"->meaningfulTerms) ++ gp.toJson ++ tvq1.toJson ++ tvq2.toJson ++ tvpl.toJson ++ tvpa.toJson
     getOrCreateResult(qm, gp.force, gp.pretty, () => {
-      val (qlevel1,termVector1Query) = buildFinalQueryRunningSubQueries(tvq1.query.get)
-      val (qlevel2,termVector2Query) = buildFinalQueryRunningSubQueries(tvq2.query.get)
+      val (qlevel1,termVector1Query) = buildFinalQueryRunningSubQueries(tvq1.requiredQuery)
+      val (qlevel2,termVector2Query) = buildFinalQueryRunningSubQueries(tvq2.requiredQuery)
       val tvm1f = Future { getGroupedAggregateContextVectorsForQuery(searcher(qlevel1, SumScaling.ABSOLUTE), termVector1Query,tvpl,extractContentTermsFromQuery(termVector1Query),attr,attrLength,tvpa,gp.maxDocs/2) }
       val tvm2f = Future { getGroupedAggregateContextVectorsForQuery(searcher(qlevel2, SumScaling.ABSOLUTE), termVector2Query,tvpl,extractContentTermsFromQuery(termVector2Query),attr,attrLength,tvpa,gp.maxDocs/2) }
       val tvm1 = Await.result(tvm1f, Duration.Inf)
