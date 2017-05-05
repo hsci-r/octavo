@@ -74,27 +74,38 @@ import org.apache.lucene.store.NIOFSDirectory
 import org.apache.lucene.store.SimpleFSDirectory
 import org.apache.lucene.store.RAMDirectory
 import org.apache.lucene.store.IOContext
+import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.ForkJoinPool.ForkJoinWorkerThreadFactory
+import java.util.concurrent.ForkJoinWorkerThread
+import scala.concurrent.Future
+import scala.concurrent.Await
+import scala.concurrent.duration.Duration
 
 object IndexAccess {
   
-  private val numWorkers = sys.runtime.availableProcessors / 2
+  private val numShortWorkers = sys.runtime.availableProcessors
+  private val numLongWorkers = sys.runtime.availableProcessors / 2
   private val queueCapacity = 10
   
   val longTaskExecutionContext = ExecutionContext.fromExecutorService(
-   new ThreadPoolExecutor(
-     numWorkers, numWorkers,
-     0L, TimeUnit.SECONDS,
-     new ArrayBlockingQueue[Runnable](queueCapacity) {
-       override def offer(e: Runnable) = {
-         put(e)
-         true
-       }
+   new ForkJoinPool(numLongWorkers, new ForkJoinWorkerThreadFactory() {
+     override def newThread(pool: ForkJoinPool): ForkJoinWorkerThread = {
+       val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
+       worker.setName("long-task-worker" + worker.getPoolIndex())
+       worker
      }
-   )
+   }, null, true)
   )
   
-  val shortTaskExecutionContext = ExecutionContext.Implicits.global
-  
+  val shortTaskExecutionContext = ExecutionContext.fromExecutorService(
+   new ForkJoinPool(numShortWorkers, new ForkJoinWorkerThreadFactory() {
+     override def newThread(pool: ForkJoinPool): ForkJoinWorkerThread = {
+       val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
+       worker.setName("short-task-worker" + worker.getPoolIndex())
+       worker
+     }
+   }, null, true)
+  )
   BooleanQuery.setMaxClauseCount(Int.MaxValue)
 
   //private val standardAnayzer = new StandardAnalyzer(CharArraySet.EMPTY_SET)
@@ -475,7 +486,7 @@ class IndexAccess @Inject() (config: Configuration) {
     override def getTermsEnum(terms: Terms, attrs:  AttributeSource): TermsEnum = new TermCollectionTermsEnum(terms, values)
   }
   
-  private def runSubQuery(queryLevel: String, query: Query, targetLevel: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Query = {
+  private def runSubQuery(queryLevel: String, query: Query, targetLevel: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): Future[Query] = Future {
     val qlU = queryLevel.toUpperCase
     val tlU = targetLevel.toUpperCase
     val (idTerm: Term, values: Iterable[BytesRef]) =
@@ -489,11 +500,11 @@ class IndexAccess @Inject() (config: Configuration) {
     new TermCollectionQuery(idTerm.field, values)
   }
   
-  private def processQueryInternal(queryIn: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (String,Query,String) = {
+  private def processQueryInternal(queryIn: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): (String,Query,String) = {
     val queryLevel = queryIn.substring(1,queryIn.indexOf('§'))
     val targetLevel = queryIn.substring(queryIn.lastIndexOf('§') + 1, queryIn.length - 1)
     var query = queryIn.substring(queryIn.indexOf('§') + 1, queryIn.lastIndexOf('§'))
-    val replacements = new HashMap[String,Query]
+    val replacements = new HashMap[String,Future[Query]]
     var firstStart = queryPartStart.findFirstMatchIn(query)
     while (firstStart.isDefined) { // we have (more) subqueries
       val ends = queryPartEnd.findAllMatchIn(query)
@@ -501,7 +512,7 @@ class IndexAccess @Inject() (config: Configuration) {
       var neededEnds = queryPartStart.findAllIn(query.substring(0, curEnd)).size - 1
       while (neededEnds > 0) curEnd = ends.next().start
       val (subQueryQueryLevel, subQuery, subQueryTargetLevel) = processQueryInternal(query.substring(firstStart.get.start, curEnd + 1))
-      val processedSubQuery = if (subQueryQueryLevel == queryLevel && subQueryTargetLevel == targetLevel) subQuery else runSubQuery(subQueryQueryLevel,subQuery,subQueryTargetLevel)
+      val processedSubQuery = if (subQueryQueryLevel == queryLevel && subQueryTargetLevel == targetLevel) Future.successful(subQuery) else runSubQuery(subQueryQueryLevel,subQuery,subQueryTargetLevel)
       replacements += (("" + (replacements.size + 1)) -> processedSubQuery)
       query = query.substring(0, firstStart.get.start) + "MAGIC:" + replacements.size + query.substring(curEnd + 1)
       firstStart = queryPartStart.findFirstMatchIn(query)
@@ -514,24 +525,24 @@ class IndexAccess @Inject() (config: Configuration) {
       for (clause <- q.asInstanceOf[BooleanQuery].clauses.asScala)
         if (clause.getQuery.isInstanceOf[TermQuery]) {
           val tq = clause.getQuery.asInstanceOf[TermQuery]
-          if (tq.getTerm.field == "MAGIC") bqb.add(replacements(tq.getTerm.text),clause.getOccur)
+          if (tq.getTerm.field == "MAGIC") bqb.add(Await.result(replacements(tq.getTerm.text), Duration.Inf),clause.getOccur)
           else bqb.add(clause)
         } else bqb.add(clause)
       (queryLevel,bqb.build,targetLevel)
     } else {
       val q2 = if (q.isInstanceOf[TermQuery]) {
           val tq = q.asInstanceOf[TermQuery]
-          if (tq.getTerm.field == "MAGIC") replacements(tq.getTerm.text)
+          if (tq.getTerm.field == "MAGIC") Await.result(replacements(tq.getTerm.text), Duration.Inf)
           else q
       } else q
       (queryLevel,q2,targetLevel)
     }
   }
   
-  def buildFinalQueryRunningSubQueries(query: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): (String, Query) = {
+  def buildFinalQueryRunningSubQueries(query: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): (String, Query) = {
     val (queryLevel, q, targetLevel) = processQueryInternal(query)
     if (queryLevel==targetLevel) (targetLevel,q)
-    else (targetLevel,runSubQuery(queryLevel,q,targetLevel))
+    else (targetLevel,Await.result(runSubQuery(queryLevel,q,targetLevel), Duration.Inf))
   }
   
 }
