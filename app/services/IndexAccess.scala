@@ -91,7 +91,7 @@ object IndexAccess {
    new ForkJoinPool(numLongWorkers, new ForkJoinWorkerThreadFactory() {
      override def newThread(pool: ForkJoinPool): ForkJoinWorkerThread = {
        val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
-       worker.setName("long-task-worker" + worker.getPoolIndex())
+       worker.setName("long-task-worker-" + worker.getPoolIndex())
        worker
      }
    }, null, true)
@@ -101,7 +101,7 @@ object IndexAccess {
    new ForkJoinPool(numShortWorkers, new ForkJoinWorkerThreadFactory() {
      override def newThread(pool: ForkJoinPool): ForkJoinWorkerThread = {
        val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
-       worker.setName("short-task-worker" + worker.getPoolIndex())
+       worker.setName("short-task-worker-" + worker.getPoolIndex())
        worker
      }
    }, null, true)
