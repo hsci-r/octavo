@@ -1,6 +1,6 @@
 name := """octavo"""
 
-version := "1.1.5"
+version := "1.1.6"
 
 enablePlugins(SystemdPlugin)
 
