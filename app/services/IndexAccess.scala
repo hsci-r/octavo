@@ -80,6 +80,8 @@ import java.util.concurrent.ForkJoinWorkerThread
 import scala.concurrent.Future
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
+import org.apache.lucene.search.TermInSetQuery
+import java.util.SortedSet
 
 object IndexAccess {
   
@@ -245,7 +247,7 @@ object IndexAccess {
   }
 
   
-  private def getMatchingValuesFromSortedDocValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = {
+  private def getMatchingValuesFromSortedDocValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): scala.collection.Set[BytesRef] = {
     val ret = new HashSet[BytesRef]
     tlc.get.setCollector(new SimpleCollector() {
       
@@ -266,7 +268,7 @@ object IndexAccess {
     ret
   }
 
-  private def getMatchingValuesFromNumericDocValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = {
+  private def getMatchingValuesFromNumericDocValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): scala.collection.Set[BytesRef] = {
     val ret = new HashSet[BytesRef]
     tlc.get.setCollector(new SimpleCollector() {
       
@@ -454,50 +456,17 @@ class IndexAccess @Inject() (config: Configuration) {
   
   def extractContentTermsFromQuery(q: Query): Seq[String] = QueryTermExtractor.getTerms(q, false, indexMetadata.contentField).map(_.getTerm).toSeq
   
-  class TermCollectionTermsEnum(terms: Terms, values: Array[BytesRef]) extends FilteredTermsEnum(terms.iterator) {
-    var cpos = 0
-    override def accept(term: BytesRef): AcceptStatus = values.search(term, cpos, values.length) match {
-      case Found(pos) =>
-        cpos = pos
-        AcceptStatus.YES_AND_SEEK 
-      case InsertionPoint(pos) => 
-        if (pos!=values.length) {
-          cpos = pos
-          AcceptStatus.NO_AND_SEEK
-        } else AcceptStatus.END
-    }
-    override def nextSeekTerm(currentTerm: BytesRef): BytesRef = {
-      if (term == null) cpos = 0
-      else cpos = values.search(term, cpos, values.length) match {
-        case Found(pos) => pos + 1
-        case InsertionPoint(pos) => pos
-      }
-      if (cpos != values.length) values(cpos) else null
-    }
-  }
-  
-  class TermCollectionQuery(field: String, valuesIn: Iterable[BytesRef]) extends MultiTermQuery(field) {
-    
-    val values : Array[BytesRef] = valuesIn.toArray.sorted
-    
-    override def toString(defaultField: String): String =
-      (if (field==defaultField) "" else field) + "TermCollectionQuery(terms="+values.length+")"
-    
-    override def getTermsEnum(terms: Terms, attrs:  AttributeSource): TermsEnum = new TermCollectionTermsEnum(terms, values)
-  }
-  
   private def runSubQuery(queryLevel: String, query: Query, targetLevel: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): Future[Query] = Future {
     val qlU = queryLevel.toUpperCase
     val tlU = targetLevel.toUpperCase
-    val (idTerm: Term, values: Iterable[BytesRef]) =
+    val (idTerm: Term, values: scala.collection.Set[BytesRef]) =
       if (!indexMetadata.levelOrder.contains(tlU)) 
         (new Term(targetLevel,""), (if (indexMetadata.numericDocValuesFields.contains(targetLevel)) QueryByType.NUMERIC else QueryByType.SORTED)(searcher(qlU, SumScaling.ABSOLUTE), query, targetLevel)) 
       else if (indexMetadata.levelOrder(qlU)<indexMetadata.levelOrder(tlU)) // DOCUMENT < PARAGRAPH
         (indexMetadata.levelMap(qlU).termAsTerm, indexMetadata.levelType(qlU)(searcher(tlU, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(qlU).term))
       else 
         (indexMetadata.levelMap(tlU).termAsTerm, indexMetadata.levelType(tlU)(searcher(qlU, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(tlU).term))
-    //new AutomatonQuery(idTerm,Automata.makeStringUnion(values.asJavaCollection),Int.MaxValue)
-    new TermCollectionQuery(idTerm.field, values)
+    new TermInSetQuery(idTerm.field, values.asJava)
   }
   
   private def processQueryInternal(queryIn: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): (String,Query,String) = {
