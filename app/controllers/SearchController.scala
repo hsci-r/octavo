@@ -137,23 +137,24 @@ import org.apache.lucene.search.uhighlight.Passage
 import org.apache.lucene.search.uhighlight.DefaultPassageFormatter
 import services.ExtendedUnifiedHighlighter
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource
+import services.IndexAccessProvider
 
 /**
  * This controller creates an `Action` to handle HTTP requests to the
  * application's home page.
  */
 @Singleton
-class SearchController @Inject() (implicit ia: IndexAccess, env: Environment) extends AQueuingController(env) {
+class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
   
-  import ia._
-  import IndexAccess._
   import TermVectors._
   
 /*  private def counts[T](xs: TraversableOnce[T]): Map[T, Int] = {
     xs.foldLeft(HashMap.empty[T, Int].withDefaultValue(0))((acc, x) => { acc(x) += 1; acc}).toMap
   } */
   
-  def search() = Action { implicit request =>
+  def search(index: String) = Action { implicit request =>
+    implicit val ia = iap(index)
+    import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val qp = QueryParameters()
     val gp = GeneralParameters()
@@ -164,7 +165,7 @@ class SearchController @Inject() (implicit ia: IndexAccess, env: Environment) ex
     val termVectors = p.get("termVectors").exists(v => v(0)=="" || v(0).toBoolean)
     implicit val iec = gp.executionContext
     val qm = Json.obj("method"->"search","termVector"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ ctvpl.toJson ++ ctvpa.toJson
-    getOrCreateResult(qm, gp.force, gp.pretty, () => {
+    getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       val (queryLevel,query) = buildFinalQueryRunningSubQueries(qp.requiredQuery)
       Logger.debug(f"Final query: $query%s, level: $queryLevel%s")

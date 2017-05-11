@@ -14,19 +14,22 @@ import play.api.Environment
 import scala.collection.JavaConverters._
 import org.apache.lucene.index.DocValues
 import parameters.GeneralParameters
+import services.IndexAccessProvider
+import play.api.Configuration
 
 @Singleton
-class DumpController @Inject() (ia: IndexAccess, env: Environment) extends AQueuingController(env) {
+class DumpController @Inject() (iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
   
-  import ia._
-  import IndexAccess.shortTaskExecutionContext
+  import IndexAccess.longTaskExecutionContext
   
-  def dump() = Action { implicit request => 
+  def dump(index: String) = Action { implicit request =>
+    implicit val ia = iap(index)
+    import ia._    
     if (reader(ia.indexMetadata.levels(0).id).hasDeletions()) throw new UnsupportedOperationException("Index should not have deletions!")
     val gp = GeneralParameters()
-    implicit val iec = shortTaskExecutionContext
+    implicit val iec = longTaskExecutionContext
     val qm = Json.obj("method"->"dump") ++ gp.toJson
-    getOrCreateResult(qm, gp.force, gp.pretty, () => {
+    getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       val sdvfields = Seq("collectionID","documentID","ESTCID","language","module")
       val ndvfields = Seq("pubDateStart","pubDateEnd","documentLength","totalPages","totalParagraphs")
       val sfields = Seq("fullTitle")

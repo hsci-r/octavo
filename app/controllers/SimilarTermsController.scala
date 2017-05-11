@@ -31,13 +31,10 @@ import org.apache.lucene.search.FuzzyTermsEnum
 import org.apache.lucene.util.BytesRef
 import org.apache.lucene.index.TermsEnum.SeekStatus
 import java.util.Arrays
+import services.IndexAccessProvider
 
 @Singleton
-class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
-  
-  import ia._
-
-  import IndexAccess._
+class SimilarTermsController @Inject() (iap: IndexAccessProvider) extends Controller {
   
   private def permutations[A](a: Seq[Seq[A]]): Seq[Seq[A]] = a.foldLeft(Seq(Seq.empty[A])) {
     (acc, next) => acc.flatMap { combo => next.map { num => combo :+ num } } 
@@ -59,7 +56,10 @@ class SimilarTermsController @Inject() (ia: IndexAccess) extends Controller {
   }
   
   // get terms lexically similar to a query term - used in topic definition to get past OCR errors
-  def similarTerms(q: String, maxEditDistance:Int, minCommonPrefix:Int,transposeIsSingleEditg : Option[String]) = Action {
+  def similarTerms(index: String, q: String, maxEditDistance:Int, minCommonPrefix:Int,transposeIsSingleEditg : Option[String]) = Action {
+    implicit val ia = iap(index)
+    import ia._
+    import IndexAccess._
     val transposeIsSingleEdit: Boolean = transposeIsSingleEditg.exists(v => v=="" || v.toBoolean)
     val callId = s"similarTerms: query:$q, maxEditDistance:$maxEditDistance, minCommonPrefix:$minCommonPrefix, transposeIsSingleEdit:$transposeIsSingleEdit"
     Logger.info(callId)

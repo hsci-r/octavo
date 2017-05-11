@@ -6,7 +6,7 @@ import play.api.routing.Router.Tags
 import scala.concurrent.Future
 import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
-class LoggingFilter @Inject() (implicit val mat: Materializer) extends Filter {
+class LoggingFilter @Inject() (override implicit val mat: Materializer) extends Filter {
   def apply(nextFilter: RequestHeader => Future[Result])
            (requestHeader: RequestHeader): Future[Result] = {
 

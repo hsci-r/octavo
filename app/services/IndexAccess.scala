@@ -84,7 +84,7 @@ import org.apache.lucene.search.TermInSetQuery
 import java.util.SortedSet
 
 object IndexAccess {
-  
+    
   private val numShortWorkers = sys.runtime.availableProcessors
   private val numLongWorkers = sys.runtime.availableProcessors / 2
   private val queueCapacity = 10
@@ -247,7 +247,7 @@ object IndexAccess {
   }
 
   
-  private def getMatchingValuesFromSortedDocValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): scala.collection.Set[BytesRef] = {
+  def getMatchingValuesFromSortedDocValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): scala.collection.Set[BytesRef] = {
     val ret = new HashSet[BytesRef]
     tlc.get.setCollector(new SimpleCollector() {
       
@@ -268,7 +268,7 @@ object IndexAccess {
     ret
   }
 
-  private def getMatchingValuesFromNumericDocValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): scala.collection.Set[BytesRef] = {
+  def getMatchingValuesFromNumericDocValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): scala.collection.Set[BytesRef] = {
     val ret = new HashSet[BytesRef]
     tlc.get.setCollector(new SimpleCollector() {
       
@@ -292,31 +292,33 @@ object IndexAccess {
 }
 
 @Singleton
-class IndexAccess @Inject() (config: Configuration) {
-  
-  import IndexAccess._
- 
-  val path = config.getString("index.path").getOrElse("/srv/eccocluster")
-  
-  private val readers: collection.mutable.Map[String,IndexReader] = new HashMap[String,IndexReader]  
-  private val tfSearchers: collection.mutable.Map[String,IndexSearcher] = new HashMap[String,IndexSearcher]
-  private val tfidfSearchers: collection.mutable.Map[String,IndexSearcher] = new HashMap[String,IndexSearcher]
-  
-  sealed abstract class QueryByType extends EnumEntry {
-    def apply(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] 
-  }  
-  
-  object QueryByType extends Enum[QueryByType] {
-    case object NUMERIC extends QueryByType {
-      def apply(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = getMatchingValuesFromNumericDocValues(is, q, field)
-    }
-    case object SORTED extends QueryByType {
-      def apply(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = getMatchingValuesFromSortedDocValues(is, q, field)
-    }
-    val values = findValues
+class IndexAccessProvider @Inject() (config: Configuration) {
+  private val defaultIndex = config.getString("index.path").map(new IndexAccess(_))
+  private val indexAccesses = {
+    val m = config.getConfig("indices")
+      .map(c => c.keys.map(k => (k, new IndexAccess(c.getString(k).get))).toMap).getOrElse(Map.empty)
+    if (defaultIndex.isDefined) m.withDefaultValue(defaultIndex.get)
+    else m
   }
+  def apply(id: String): IndexAccess = indexAccesses(id)
+}
+
+sealed abstract class QueryByType extends EnumEntry {
+  def apply(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] 
+}  
   
-  case class LevelMetadata(
+object QueryByType extends Enum[QueryByType] {
+  import IndexAccess._
+  case object NUMERIC extends QueryByType {
+    def apply(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = getMatchingValuesFromNumericDocValues(is, q, field)
+  }
+  case object SORTED extends QueryByType {
+    def apply(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = getMatchingValuesFromSortedDocValues(is, q, field)
+  }
+  val values = findValues
+}
+
+case class LevelMetadata(
     id: String,
     term: String,
     index: String) {
@@ -324,6 +326,8 @@ class IndexAccess @Inject() (config: Configuration) {
   }
 
   case class IndexMetadata(
+    indexName: String,
+    indexVersion: String,
     indexType: String,
     contentField: String,
     levels: Seq[LevelMetadata],
@@ -336,9 +340,20 @@ class IndexAccess @Inject() (config: Configuration) {
     storedMultiFields: Set[String],
     numericDocValuesFields: Set[String]
   ) {
+    import IndexAccess._
+    
     val directoryCreator: (Path) => Directory = (path: Path) => indexType match {
-      case "MMapDirectory" => new MMapDirectory(path)
-      case "RAMDirectory" => new RAMDirectory(new NIOFSDirectory(path), new IOContext())
+      case "PLMMapDirectory" =>
+        val d = new MMapDirectory(path)
+        d.setPreload(true)
+        d
+      case "MMapDirectory" =>
+        new MMapDirectory(path)        
+      case "RAMDirectory" =>
+        val id = new NIOFSDirectory(path)
+        val d = new RAMDirectory(id, new IOContext())
+        id.close()
+        d
       case "SimpleFSDirectory" => new SimpleFSDirectory(path)
       case "NIOFSDirectory" => new NIOFSDirectory(path)
       case any => throw new IllegalArgumentException("Unknown directory type "+any)
@@ -370,6 +385,14 @@ class IndexAccess @Inject() (config: Configuration) {
       return null
     }
   }
+
+class IndexAccess(path: String) {
+  
+  import IndexAccess._
+ 
+  private val readers: collection.mutable.Map[String,IndexReader] = new HashMap[String,IndexReader]  
+  private val tfSearchers: collection.mutable.Map[String,IndexSearcher] = new HashMap[String,IndexSearcher]
+  private val tfidfSearchers: collection.mutable.Map[String,IndexSearcher] = new HashMap[String,IndexSearcher]
   
   def readLevelMetadata(c: JsValue) = LevelMetadata(
       (c \ "id").as[String],
@@ -378,6 +401,8 @@ class IndexAccess @Inject() (config: Configuration) {
   )
   
   def readIndexMetadata(c: JsValue) = IndexMetadata(
+    (c \ "name").as[String],
+    (c \ "version").as[String],
     (c \ "indexType").asOpt[String].getOrElse("MMapDirectory"),
     (c \ "contentField").as[String],
     (c \ "levels").as[Seq[JsValue]].map(readLevelMetadata(_)),
@@ -395,7 +420,7 @@ class IndexAccess @Inject() (config: Configuration) {
   
   for (level <- indexMetadata.levels) {
     Logger.info("Initializing index at "+path+"/"+level.index)
-    readers.put(level.id, DirectoryReader.open(new MMapDirectory(FileSystems.getDefault().getPath(path+"/"+level.index))))
+    readers.put(level.id, DirectoryReader.open(indexMetadata.directoryCreator(FileSystems.getDefault().getPath(path+"/"+level.index))))
     Logger.info("Initialized index at "+path+"/"+level.index)
     tfSearchers.put(level.id, {
       val is = new IndexSearcher(readers(level.id))

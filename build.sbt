@@ -1,6 +1,10 @@
+import com.typesafe.config._
+
 name := """octavo"""
 
-version := "1.1.6"
+val conf = ConfigFactory.parseFile(new File("conf/application.conf")).resolve()
+
+version := conf.getString("app.version")
 
 enablePlugins(SystemdPlugin)
 
@@ -33,7 +37,7 @@ libraryDependencies ++= Seq(
   filters,
   "org.apache.lucene" % "lucene-core" % "6.5.1",
   "org.apache.lucene" % "lucene-analyzers-common" % "6.5.1",
-  "fi.seco" %% "lucene-morphologicalanalyzer" % "1.1.0",
+  "fi.seco" %% "lucene-morphologicalanalyzer" % "1.1.1",
   "fi.seco" %% "lucene-fstordtermvectorscodec" % "1.3.0",
   "org.apache.lucene" % "lucene-queryparser" % "6.5.1",
   "org.apache.lucene" % "lucene-highlighter" % "6.5.1",

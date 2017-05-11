@@ -17,16 +17,18 @@ import play.api.libs.json.Json
 import parameters.SumScaling
 import org.apache.lucene.search.BooleanClause.Occur
 import services.TermVectors
+import services.IndexAccessProvider
+import play.api.Configuration
 
 @Singleton
-class CollocationsController @Inject() (implicit ia: IndexAccess, env: Environment) extends AQueuingController(env) {
+class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
   
-  import IndexAccess._
-  import ia._
   import TermVectors._
   
   // get collocations for a term query (+ a possible limit query), for defining a topic
-  def collocations() = Action { implicit request =>
+  def collocations(index: String) = Action { implicit request =>
+    implicit val ia = iap(index)
+    import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val gp = GeneralParameters()
     val termVectorQueryParameters = QueryParameters()
@@ -41,7 +43,7 @@ class CollocationsController @Inject() (implicit ia: IndexAccess, env: Environme
     val termVectors = p.get("termVectors").exists(v => v(0)=="" || v(0).toBoolean)
     implicit val iec = gp.executionContext
     val qm = Json.obj("method"->"collocations","termVectors"->termVectors) ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ resultTermVectorLimitQueryParameters.toJson ++ resultTermVectorLocalProcessingParameters.toJson ++ resultTermVectorAggregateProcessingParameters.toJson
-    getOrCreateResult(qm, gp.force, gp.pretty, () => {
+    getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(termVectorQueryParameters.requiredQuery)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)

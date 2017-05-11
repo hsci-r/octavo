@@ -22,10 +22,11 @@ import akka.stream.Materializer
 import play.api.Environment
 import parameters.GeneralParameters
 import scala.collection.mutable.HashMap
+import services.IndexAccessProvider
+import play.api.Configuration
 
 @Singleton
-class TermStatsController @Inject() (implicit ia: IndexAccess, env: Environment) extends AQueuingController(env) {
-  import ia._
+class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
   
   class Stats {
     var termFreqs = new ArrayBuffer[Int]
@@ -36,7 +37,7 @@ class TermStatsController @Inject() (implicit ia: IndexAccess, env: Environment)
       else Json.obj("totalTermFreq"->totalTermFreq,"docFreq"->docFreq)
   }
   
-  private def getStats(is: IndexSearcher, q: Query, attrO: Option[String], attrLength: Int, gatherTermFreqsPerDoc: Boolean): JsValue = {
+  private def getStats(is: IndexSearcher, q: Query, attrO: Option[String], attrLength: Int, gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess): JsValue = {
     if (attrO.isDefined) {
       val attr = attrO.get
       var attrGetter: (Int) => String = null
@@ -83,7 +84,9 @@ class TermStatsController @Inject() (implicit ia: IndexAccess, env: Environment)
     }
   }
   
-  def stats() = Action { implicit request =>
+  def stats(index: String) = Action { implicit request =>
+    implicit val ia = iap(index)
+    import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val gp = new GeneralParameters
     val q = new QueryParameters
@@ -92,7 +95,7 @@ class TermStatsController @Inject() (implicit ia: IndexAccess, env: Environment)
     val attrLength = p.get("attrLength").map(_(0).toInt).getOrElse(-1)
     val qm = Json.obj("method"->"termStats","attr"->attr,"attrLength"->attrLength) ++ gp.toJson ++ q.toJson
     implicit val ec = gp.executionContext
-    getOrCreateResult(qm, gp.force, gp.pretty, () => {
+    getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       val (qlevel,query) = buildFinalQueryRunningSubQueries(q.requiredQuery)
       getStats(searcher(qlevel, SumScaling.ABSOLUTE), query, attr, attrLength, gatherTermFreqsPerDoc)

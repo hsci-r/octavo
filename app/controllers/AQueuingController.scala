@@ -18,8 +18,12 @@ import play.api.Environment
 import play.api.libs.json.JsValue
 import play.api.libs.json.JsObject
 import play.api.libs.json.Json
+import play.api.Configuration
+import services.IndexMetadata
 
-abstract class AQueuingController(env: Environment) extends Controller {
+abstract class AQueuingController(env: Environment, configuration: Configuration) extends Controller {
+  
+  private final val version = configuration.getString("app.version") 
   
   private lazy val tmpDir = {
     val tmpDir = env.getFile("tmp")
@@ -43,8 +47,8 @@ abstract class AQueuingController(env: Environment) extends Controller {
     pw.close()
   }
 
-  protected def getOrCreateResult(qm: JsObject, force: Boolean, pretty: Boolean, call: () => JsValue)(implicit ec: ExecutionContext): Result = {
-    val callId = qm.toString
+  protected def getOrCreateResult(index: IndexMetadata, qm: JsObject, force: Boolean, pretty: Boolean, call: () => JsValue)(implicit ec: ExecutionContext): Result = {
+    val callId = index.indexName + ':' + index.indexVersion + ':' + qm.toString
     Logger.info(callId)
     val name = play.api.libs.Codecs.sha1(sha1md.digest(callId.getBytes))
     val tf = new File(tmpDir+"/result-"+name+".json")
@@ -55,7 +59,7 @@ abstract class AQueuingController(env: Environment) extends Controller {
       val future = Future {
         val startTime = System.currentTimeMillis
         val resultsJson = call() 
-        val json = Json.obj("queryMetadata"->(qm ++ Json.obj("time"->(System.currentTimeMillis()-startTime))),"results"->resultsJson)
+        val json = Json.obj("queryMetadata"->Json.obj("parameters"->qm,"index"->Json.obj("name"->index.indexName,"version"->index.indexVersion),"octavoVersion"->version,"timeTakenMS"->(System.currentTimeMillis()-startTime)),"results"->resultsJson)
         if (pretty)
           Json.prettyPrint(json)
         else

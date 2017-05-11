@@ -28,16 +28,18 @@ import scala.collection.mutable.PriorityQueue
 import com.koloboke.collect.set.LongSet
 import java.util.function.LongConsumer
 import services.Distance
+import services.IndexAccessProvider
+import play.api.Configuration
 
 @Singleton
-class SimilarCollocationsController @Inject() (implicit ia: IndexAccess, env: Environment) extends AQueuingController(env) {
+class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
   
-  import IndexAccess._
-  import ia._
   import TermVectors._
   
   // get terms with similar collocations for a term - to find out what other words are talked about in a similar manner, for topic definition
-  def similarCollocations() = Action { implicit request =>
+  def similarCollocations(index: String) = Action { implicit request =>
+    implicit val ia = iap(index)
+    import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val gp = new GeneralParameters
     implicit val iec = gp.executionContext
@@ -53,7 +55,7 @@ class SimilarCollocationsController @Inject() (implicit ia: IndexAccess, env: En
     val finalTermVectorLocalProcessingParameters = LocalTermVectorProcessingParameters("f_")
     val finalTermVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters("f_")
     val qm = Json.obj("method"->"similarCollocations") ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ intermediaryTermVectorLimitQueryParameters.toJson ++ intermediaryTermVectorLocalProcessingParameters.toJson ++ finalTermVectorLimitQueryParameters.toJson ++ finalTermVectorLocalProcessingParameters.toJson ++ finalTermVectorAggregateProcessingParameters.toJson  
-    getOrCreateResult(qm, gp.force, gp.pretty, () => {
+    getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(termVectorQueryParameters.requiredQuery)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)

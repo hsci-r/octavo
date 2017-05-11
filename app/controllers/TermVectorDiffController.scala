@@ -25,16 +25,18 @@ import play.api.libs.json.JsNull
 import scala.collection.mutable.PriorityQueue
 import com.koloboke.collect.set.hash.HashLongSets
 import java.util.function.LongConsumer
+import services.IndexAccessProvider
+import play.api.Configuration
 
 @Singleton
-class TermVectorDiffController @Inject() (implicit ia: IndexAccess, env: Environment) extends AQueuingController(env) {
+class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
   
-  import IndexAccess._
-  import ia._
   import TermVectors._
   
     // calculate distance between two term vectors across a metadata variable (use to create e.g. graphs of term meaning changes)
-  def termVectorDiff() = Action { implicit request =>
+  def termVectorDiff(index: String) = Action { implicit request =>
+    implicit val ia = iap(index)
+    import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val gp = new GeneralParameters
     val tvq1 = new QueryParameters("t1_")
@@ -47,7 +49,7 @@ class TermVectorDiffController @Inject() (implicit ia: IndexAccess, env: Environ
     implicit val tlc = gp.tlc
     implicit val ec = gp.executionContext
     val qm = Json.obj("method"->"termVectorDiff","attr"->attr,"attrLength"->attrLength,"meaningfulTerms"->meaningfulTerms) ++ gp.toJson ++ tvq1.toJson ++ tvq2.toJson ++ tvpl.toJson ++ tvpa.toJson
-    getOrCreateResult(qm, gp.force, gp.pretty, () => {
+    getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       val (qlevel1,termVector1Query) = buildFinalQueryRunningSubQueries(tvq1.requiredQuery)
       val (qlevel2,termVector2Query) = buildFinalQueryRunningSubQueries(tvq2.requiredQuery)
       val tvm1f = Future { getGroupedAggregateContextVectorsForQuery(searcher(qlevel1, SumScaling.ABSOLUTE), termVector1Query,tvpl,extractContentTermsFromQuery(termVector1Query),attr,attrLength,tvpa,gp.maxDocs/2) }
