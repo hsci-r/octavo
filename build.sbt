@@ -46,6 +46,7 @@ libraryDependencies ++= Seq(
   "com.beachape" %% "enumeratum" % "1.5.1",
   "com.bizo" %% "mighty-csv" % "0.2",
   "com.tdunning" % "t-digest" % "3.1",
+  "org.codehaus.groovy" % "groovy" % "2.4.11",
   "mdsj" % "mdsj" % "0.2"
 )
 

@@ -24,6 +24,9 @@ import parameters.GeneralParameters
 import scala.collection.mutable.HashMap
 import services.IndexAccessProvider
 import play.api.Configuration
+import groovy.lang.GroovyShell
+import groovy.lang.Script
+import org.apache.lucene.search.TimeLimitingCollector
 
 @Singleton
 class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
@@ -37,12 +40,13 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
       else Json.obj("totalTermFreq"->totalTermFreq,"docFreq"->docFreq)
   }
   
-  private def getStats(is: IndexSearcher, q: Query, attrO: Option[String], attrLength: Int, gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess): JsValue = {
+  private def getStats(is: IndexSearcher, q: Query, attrO: Option[String], attrLength: Int, attrProcessor: Option[Script], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
     if (attrO.isDefined) {
       val attr = attrO.get
       var attrGetter: (Int) => String = null
       val groupedStats = new HashMap[String,Stats]
-      is.search(q, new SimpleCollector() {
+      val gs = new Stats
+      tlc.get.setCollector(new SimpleCollector() {
         override def needsScores: Boolean = true
         
         override def setScorer(scorer: Scorer) = this.scorer = scorer
@@ -51,18 +55,27 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
   
         override def collect(doc: Int) {
           val cattr = attrGetter(doc)
-          val s = groupedStats.getOrElseUpdate(if (attrLength == -1) cattr else cattr.substring(0,attrLength), new Stats)
+          val s = groupedStats.getOrElseUpdate(attrProcessor.map(ap => {
+            ap.getBinding.setProperty("attr", cattr)
+            ap.run().asInstanceOf[String]
+          }).getOrElse(if (attrLength == -1) cattr else cattr.substring(0,attrLength)), new Stats)
           s.docFreq += 1
+          gs.docFreq += 1
           val score = scorer.score().toInt
-          if (gatherTermFreqsPerDoc) s.termFreqs += score
+          if (gatherTermFreqsPerDoc) {
+            s.termFreqs += score
+            gs.termFreqs += score
+          }
           s.totalTermFreq += score
+          gs.totalTermFreq += score
         }
         
         override def doSetNextReader(context: LeafReaderContext) = {
           attrGetter = ia.indexMetadata.getter(context.reader, attr).andThen(_.iterator.next)
         }
       })
-      Json.arr(groupedStats.toIterable.map(p => Json.obj("attr"->p._1,"stats"->p._2.toJson)))
+      is.search(q, tlc.get)
+      Json.obj("general"->gs.toJson,"grouped"->groupedStats.toIterable.map(p => Json.obj("attr"->p._1,"stats"->p._2.toJson)))
     } else {
       val s = new Stats
       is.search(q, new SimpleCollector() {
@@ -93,12 +106,13 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
     val gatherTermFreqsPerDoc = p.get("termFreqs").exists(v => v(0)=="" || v(0).toBoolean)
     val attr = p.get("attr").map(_(0))
     val attrLength = p.get("attrLength").map(_(0).toInt).getOrElse(-1)
+    val attrProcessor = p.get("attrProcessor").map(_(0)).map(apScript => new GroovyShell().parse(apScript))
     val qm = Json.obj("method"->"termStats","attr"->attr,"attrLength"->attrLength) ++ gp.toJson ++ q.toJson
     implicit val ec = gp.executionContext
     getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       val (qlevel,query) = buildFinalQueryRunningSubQueries(q.requiredQuery)
-      getStats(searcher(qlevel, SumScaling.ABSOLUTE), query, attr, attrLength, gatherTermFreqsPerDoc)
+      getStats(searcher(qlevel, SumScaling.ABSOLUTE), query, attr, attrLength, attrProcessor, gatherTermFreqsPerDoc)
     })
   }  
 }
