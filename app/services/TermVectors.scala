@@ -48,12 +48,22 @@ object TermVectors {
             
   }
   
-  private def runTermVectorQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int, contextSetter: (LeafReaderContext) => Unit, docCollector: (Int) => Unit, termCollector: (Long,Int) => Unit)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): TermVectorQueryMetadata = {
+  private def runTermVectorQuery(
+      is: IndexSearcher, 
+      q: Query, 
+      ctvp: LocalTermVectorProcessingParameters, 
+      minScalingTerms: Seq[String], 
+      maxDocs: Int,
+      contextSetter: (LeafReaderContext) => Unit, 
+      docCollector: (Int) => Unit, 
+      termCollector: (Long,Int) => Unit)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): TermVectorQueryMetadata = {
     var processedDocs = 0l
     var contributingDocs = 0l
     var processedTerms = 0l
     var acceptedTerms = 0l
     var totalAcceptedTermFreq = 0l
+    val termTransformer = ctvp.termTransformer.map(_.get)
+    termTransformer.foreach(_.getBinding.invokeMethod("setIndexAccess", ia))
     val totalHits = getHitCountForQuery(is, q)
     val sampleProbability = if (maxDocs == -1) 1.0 else math.min(maxDocs.toDouble / totalHits, 1.0)
     val ir = is.getIndexReader
@@ -75,6 +85,10 @@ object TermVectors {
             var anyMatches = false
             while (term != -1l) {
               processedTerms += 1
+              term = termTransformer.map(s => {
+                s.getBinding.setProperty("term", term)
+                s.run().asInstanceOf[Long]
+              }).getOrElse(term)
               if (ctvp.matches(ir, term, tvt.totalTermFreq)) {
                 acceptedTerms += 1
                 anyMatches = true
@@ -94,6 +108,7 @@ object TermVectors {
       }
       override def doSetNextReader(context: LeafReaderContext) = {
         this.context = context
+        termTransformer.foreach(_.getBinding.invokeMethod("setContext", context))
         contextSetter(context)
       }
     })

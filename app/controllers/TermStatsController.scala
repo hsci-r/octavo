@@ -108,9 +108,20 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
     val gatherTermFreqsPerDoc = p.get("termFreqs").exists(v => v(0)=="" || v(0).toBoolean)
     val attr = p.get("attr").map(_(0))
     val attrLength = p.get("attrLength").map(_(0).toInt).getOrElse(-1)
-    val grouper = p.get("grouper").map(_(0)).map(apScript => new GroovyShell().parse(apScript))
     val attrTransformer = p.get("attrTransformer").map(_(0)).map(apScript => new GroovyShell().parse(apScript))
-    val qm = Json.obj("method"->"termStats","attr"->attr,"attrLength"->attrLength) ++ gp.toJson ++ q.toJson
+    val grouper = p.get("grouper").map(_(0)).map(apScript => {
+      val s = new GroovyShell().parse(apScript)
+      val b = s.getBinding
+      b.setProperty("ia", ia)
+      b.setProperty("gp", gp)
+      b.setProperty("q", q)
+      b.setProperty("gatherTermFreqsPerDoc", gatherTermFreqsPerDoc)
+      b.setProperty("attr", attr)
+      b.setProperty("attrLength", attrLength)
+      b.setProperty("attrTransformer", attrTransformer)
+      s
+    })
+    val qm = Json.obj("method"->"termStats","grouper"->p.get("grouper").map(_(0)),"attr"->attr,"attrLength"->attrLength,"attrTransformer"->p.get("attrTransformer").map(_(0))) ++ gp.toJson ++ q.toJson
     implicit val ec = gp.executionContext
     getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc

@@ -5,6 +5,11 @@ import play.api.mvc.AnyContent
 import org.apache.lucene.index.IndexReader
 import play.api.libs.json.Json
 import services.IndexAccess
+import groovy.lang.GroovyShell
+import groovy.lang.GroovyClassLoader
+import groovy.lang.Script
+import org.codehaus.groovy.runtime.InvokerHelper
+import groovy.lang.Binding
 
 case class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent], ia: IndexAccess) {
   import ia.{totalTermFreq,docFreq,termOrdToTerm}
@@ -52,10 +57,31 @@ case class LocalTermVectorProcessingParameters(prefix: String = "", suffix: Stri
     val terms = termOrdToTerm(ir, term)
     return terms.length>=minTermLength && terms.length<=maxTermLength
   }
+  private val termFilterAsStringOpt = p.get(prefix+"termFilter"+suffix).map(_(0))
+  /** Groovy function for filtering terms */
+  private val termFilter = termFilterAsStringOpt.map(scriptS => {
+    val script = new GroovyClassLoader().parseClass(scriptS)
+    new ThreadLocal[Script] {
+      override def initialValue(): Script = InvokerHelper.createScript(script, new Binding())
+    }
+  })
+  private val termTransformerAsStringOpt = p.get(prefix+"termTransformer"+suffix).map(_(0))
+  /** Groovy function for transforming terms */
+  val termTransformer = termTransformerAsStringOpt.map(scriptS => {
+    val script = new GroovyClassLoader().parseClass(scriptS)
+    new ThreadLocal[Script] {
+      override def initialValue(): Script = InvokerHelper.createScript(script, new Binding())
+    }
+  })
   final def matches(ir: IndexReader, term: Long, freq: Long): Boolean =
-    freqInDocMatches(freq) && docFreqMatches(ir,term) && totalTermFreqMatches(ir,term) && termLengthMatches(ir,term)
-  val defined: Boolean = localScalingOpt.isDefined || minFreqInDocOpt.isDefined || maxFreqInDocOpt.isDefined || minTotalTermFreqOpt.isDefined || maxTotalTermFreqOpt.isDefined || minDocFreqOpt.isDefined || maxDocFreqOpt.isDefined || minTermLengthOpt.isDefined || maxTermLengthOpt.isDefined
+    freqInDocMatches(freq) && docFreqMatches(ir,term) && totalTermFreqMatches(ir,term) && termLengthMatches(ir,term) && termFilter.forall(stl => {
+      val s = stl.get
+      s.getBinding.setProperty("term", termOrdToTerm(ir, term))
+      s.getBinding.setProperty("freq", freq)
+      s.run().asInstanceOf[Boolean]
+    })
+  val defined: Boolean = termTransformerAsStringOpt.isDefined || termFilterAsStringOpt.isDefined || localScalingOpt.isDefined || minFreqInDocOpt.isDefined || maxFreqInDocOpt.isDefined || minTotalTermFreqOpt.isDefined || maxTotalTermFreqOpt.isDefined || minDocFreqOpt.isDefined || maxDocFreqOpt.isDefined || minTermLengthOpt.isDefined || maxTermLengthOpt.isDefined
   override def toString() = s"${prefix}localScaling$suffix:$localScaling, ${prefix}minTotalTermFreq$suffix:$minTotalTermFreq, ${prefix}maxTotalTermFreq$suffix:$maxTotalTermFreq, ${prefix}minDocFreq$suffix:$minDocFreq, ${prefix}maxDocFreq$suffix:$maxDocFreq, ${prefix}minFreqInDoc$suffix:$minFreqInDoc, ${prefix}maxFreqInDoc$suffix:$maxFreqInDoc, ${prefix}minTermLength$suffix:$minTermLength, ${prefix}maxTermLength$suffix:$maxTermLength"
-  def toJson() = Json.obj(prefix+"localScaling"+suffix->localScaling, prefix+"minTotalTermFreq"+suffix->minTotalTermFreq, prefix+"maxTotalTermFreq"+suffix->maxTotalTermFreq, prefix+"minDocFreq"+suffix->minDocFreq, prefix+"maxDocFreq"+suffix->maxDocFreq, prefix+"minFreqInDoc"+suffix -> minFreqInDoc, prefix+"maxFreqInDoc"+suffix -> maxFreqInDoc, prefix + "minTermLength" + suffix -> minTermLength, prefix + "maxTermLength" + suffix -> maxTermLength)
+  def toJson() = Json.obj(prefix+"termTransformer"+suffix->termTransformerAsStringOpt,prefix+"termFilter"+suffix->termFilterAsStringOpt,prefix+"localScaling"+suffix->localScaling, prefix+"minTotalTermFreq"+suffix->minTotalTermFreq, prefix+"maxTotalTermFreq"+suffix->maxTotalTermFreq, prefix+"minDocFreq"+suffix->minDocFreq, prefix+"maxDocFreq"+suffix->maxDocFreq, prefix+"minFreqInDoc"+suffix -> minFreqInDoc, prefix+"maxFreqInDoc"+suffix -> maxFreqInDoc, prefix + "minTermLength" + suffix -> minTermLength, prefix + "maxTermLength" + suffix -> maxTermLength)
 }
 

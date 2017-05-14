@@ -319,72 +319,88 @@ object QueryByType extends Enum[QueryByType] {
 }
 
 case class LevelMetadata(
-    id: String,
-    term: String,
-    index: String) {
-    val termAsTerm = new Term(term,"")
-  }
+  id: String,
+  term: String,
+  index: String) {
+  val termAsTerm = new Term(term,"")
+  def toJson = Json.obj("id"->id,"term"->term,"index"->index)
+}
 
-  case class IndexMetadata(
-    indexName: String,
-    indexVersion: String,
-    indexType: String,
-    contentField: String,
-    levels: Seq[LevelMetadata],
-    indexingAnalyzersAsText: Map[String,String],
-    textFields: Set[String],
-    intPointFields: Set[String],
-    termVectorFields: Set[String],
-    sortedDocValuesFields: Set[String],
-    storedSingularFields: Set[String],
-    storedMultiFields: Set[String],
-    numericDocValuesFields: Set[String]
-  ) {
-    import IndexAccess._
-    
-    val directoryCreator: (Path) => Directory = (path: Path) => indexType match {
-      case "PLMMapDirectory" =>
-        val d = new MMapDirectory(path)
-        d.setPreload(true)
-        d
-      case "MMapDirectory" =>
-        new MMapDirectory(path)        
-      case "RAMDirectory" =>
-        val id = new NIOFSDirectory(path)
-        val d = new RAMDirectory(id, new IOContext())
-        id.close()
-        d
-      case "SimpleFSDirectory" => new SimpleFSDirectory(path)
-      case "NIOFSDirectory" => new NIOFSDirectory(path)
-      case any => throw new IllegalArgumentException("Unknown directory type "+any)
-    }
-    val indexingAnalyzers: Map[String,Analyzer] = indexingAnalyzersAsText.mapValues(_ match {
-      case "StandardAnalyzer" => new StandardAnalyzer(CharArraySet.EMPTY_SET)
-      case a if a.startsWith("MorphologicalAnalyzer_") => new MorphologicalAnalyzer(new Locale(a.substring(23)))  
-      case any => throw new IllegalArgumentException("Unknown analyzer type "+any) 
-    }).withDefaultValue(new KeywordAnalyzer()) 
-    val defaultLevel: LevelMetadata = levels.last
-    val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap
-    val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
-    val levelType: Map[String,QueryByType] = levels.map(l => (l.id,if (numericDocValuesFields.contains(l.term)) QueryByType.NUMERIC else QueryByType.SORTED)).toMap
-    def getter(lr: LeafReader, field: String): (Int) => Iterable[String] = {
-      if (storedSingularFields.contains(field) || storedMultiFields.contains(field)) {
-        val fieldS = Collections.singleton(field)
-        return (doc: Int) => lr.document(doc,fieldS).getValues(field).toSeq
-      }
-      if (sortedDocValuesFields.contains(field)) {
-        val dvs = DocValues.getSorted(lr, field)
-        return (doc: Int) => Seq(dvs.get(doc).utf8ToString())
-      }
-      if (numericDocValuesFields.contains(field)) {
-        val dvs = DocValues.getNumeric(lr, field)
-        return (doc: Int) => Seq(""+dvs.get(doc))
-      }
-      if (termVectorFields.contains(field))
-        return (doc: Int) => lr.getTermVector(doc, field).asBytesRefIterable().map(_.utf8ToString)
-      return null
-    }
+case class IndexMetadata(
+  indexName: String,
+  indexVersion: String,
+  indexType: String,
+  contentField: String,
+  levels: Seq[LevelMetadata],
+  indexingAnalyzersAsText: Map[String,String],
+  textFields: Set[String],
+  intPointFields: Set[String],
+  termVectorFields: Set[String],
+  sortedDocValuesFields: Set[String],
+  storedSingularFields: Set[String],
+  storedMultiFields: Set[String],
+  numericDocValuesFields: Set[String]
+) {
+  import IndexAccess._
+  
+  val directoryCreator: (Path) => Directory = (path: Path) => indexType match {
+    case "PLMMapDirectory" =>
+      val d = new MMapDirectory(path)
+      d.setPreload(true)
+      d
+    case "MMapDirectory" =>
+      new MMapDirectory(path)        
+    case "RAMDirectory" =>
+      val id = new NIOFSDirectory(path)
+      val d = new RAMDirectory(id, new IOContext())
+      id.close()
+      d
+    case "SimpleFSDirectory" => new SimpleFSDirectory(path)
+    case "NIOFSDirectory" => new NIOFSDirectory(path)
+    case any => throw new IllegalArgumentException("Unknown directory type "+any)
   }
+  val indexingAnalyzers: Map[String,Analyzer] = indexingAnalyzersAsText.mapValues(_ match {
+    case "StandardAnalyzer" => new StandardAnalyzer(CharArraySet.EMPTY_SET)
+    case a if a.startsWith("MorphologicalAnalyzer_") => new MorphologicalAnalyzer(new Locale(a.substring(23)))  
+    case any => throw new IllegalArgumentException("Unknown analyzer type "+any) 
+  }).withDefaultValue(new KeywordAnalyzer()) 
+  val defaultLevel: LevelMetadata = levels.last
+  val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap
+  val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
+  val levelType: Map[String,QueryByType] = levels.map(l => (l.id,if (numericDocValuesFields.contains(l.term)) QueryByType.NUMERIC else QueryByType.SORTED)).toMap
+  def getter(lr: LeafReader, field: String): (Int) => Iterable[String] = {
+    if (storedSingularFields.contains(field) || storedMultiFields.contains(field)) {
+      val fieldS = Collections.singleton(field)
+      return (doc: Int) => lr.document(doc,fieldS).getValues(field).toSeq
+    }
+    if (sortedDocValuesFields.contains(field)) {
+      val dvs = DocValues.getSorted(lr, field)
+      return (doc: Int) => Seq(dvs.get(doc).utf8ToString())
+    }
+    if (numericDocValuesFields.contains(field)) {
+      val dvs = DocValues.getNumeric(lr, field)
+      return (doc: Int) => Seq(""+dvs.get(doc))
+    }
+    if (termVectorFields.contains(field))
+      return (doc: Int) => lr.getTermVector(doc, field).asBytesRefIterable().map(_.utf8ToString)
+    return null
+  }
+    def toJson = Json.obj(
+        "name"->indexName,
+        "version"->indexVersion,
+        "indexType"->indexType,
+        "contentField"->contentField,
+        "levels"->levels.map(_.toJson),
+        "indexingAnalyzers"->indexingAnalyzersAsText,
+        "textFields"->textFields,
+        "intPointFields"->intPointFields,
+        "termVectorFields"->termVectorFields,
+        "sortedDocValuesFields"->sortedDocValuesFields,
+        "storedSingularFields"->storedSingularFields,
+        "storedMultiFields"->storedMultiFields,
+        "numericDocValuesFields"->numericDocValuesFields)
+
+}
 
 class IndexAccess(path: String) {
   

@@ -2,6 +2,9 @@
 # This file defines all application routes (Higher priority routes first)
 # ~~~~
 
+GET		/:index/indexInfo				controllers.IndexInfoController.info(index)
+GET		/indexInfo						controllers.IndexInfoController.info(index = "default")
+
 GET     /:index/search           		controllers.SearchController.search(index)
 GET     /search           				controllers.SearchController.search(index = "default")
 POST    /:index/search           		controllers.SearchController.search(index)
@@ -31,7 +34,7 @@ POST	/termVectorDiff					controllers.TermVectorDiffController.termVectorDiff(ind
 GET		/:index/similarCollocations		controllers.SimilarCollocationsController.similarCollocations(index)
 GET		/similarCollocations			controllers.SimilarCollocationsController.similarCollocations(index = "default")
 POST	/:index/similarCollocations		controllers.SimilarCollocationsController.similarCollocations(index)
-POST	/similarCollocations			controllers.SimilarCollocationsController.similarCollocations(index = " default")
+POST	/similarCollocations			controllers.SimilarCollocationsController.similarCollocations(index = "default")
 
-GET		/:index/dump					controllers.DumpController.dump(index)
-GET		/dump							controllers.DumpController.dump(index = "default")
+GET		/:index/runScript				controllers.RunScriptController.runScript(index)
+POST	/:index/runScript				controllers.RunScriptController.runScript(index)
