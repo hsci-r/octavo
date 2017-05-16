@@ -462,14 +462,20 @@ class IndexAccess(path: String) {
   
   val queryParsers = new ThreadLocal[QueryParser] {
     
-    override def initialValue(): QueryParser = new QueryParser(indexMetadata.contentField,queryAnalyzer) {
-      override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
-        if (indexMetadata.intPointFields.contains(field)) {
-          val low = Try(if (startInclusive) part1.toInt else part1.toInt + 1).getOrElse(Int.MinValue)
-          val high = Try(if (endInclusive) part2.toInt else part2.toInt - 1).getOrElse(Int.MaxValue)
-          IntPoint.newRangeQuery(field, low, high)
-        } else super.getRangeQuery(field,part1,part2,startInclusive,endInclusive) 
-      } 
+    override def initialValue(): QueryParser = {
+      val qp = new QueryParser(indexMetadata.contentField,queryAnalyzer) {
+        override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
+          if (indexMetadata.intPointFields.contains(field)) {
+            val low = Try(if (startInclusive) part1.toInt else part1.toInt + 1).getOrElse(Int.MinValue)
+            val high = Try(if (endInclusive) part2.toInt else part2.toInt - 1).getOrElse(Int.MaxValue)
+            IntPoint.newRangeQuery(field, low, high)
+          } else super.getRangeQuery(field,part1,part2,startInclusive,endInclusive) 
+        } 
+      }
+      qp.setAllowLeadingWildcard(true)
+      qp.setLowercaseExpandedTerms(false)
+      qp.setMaxDeterminizedStates(Int.MaxValue)
+      qp
     }
 
   }
@@ -498,21 +504,20 @@ class IndexAccess(path: String) {
   def extractContentTermsFromQuery(q: Query): Seq[String] = QueryTermExtractor.getTerms(q, false, indexMetadata.contentField).map(_.getTerm).toSeq
   
   private def runSubQuery(queryLevel: String, query: Query, targetLevel: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): Future[Query] = Future {
-    val qlU = queryLevel.toUpperCase
-    val tlU = targetLevel.toUpperCase
     val (idTerm: Term, values: scala.collection.Set[BytesRef]) =
-      if (!indexMetadata.levelOrder.contains(tlU)) 
-        (new Term(targetLevel,""), (if (indexMetadata.numericDocValuesFields.contains(targetLevel)) QueryByType.NUMERIC else QueryByType.SORTED)(searcher(qlU, SumScaling.ABSOLUTE), query, targetLevel)) 
-      else if (indexMetadata.levelOrder(qlU)<indexMetadata.levelOrder(tlU)) // DOCUMENT < PARAGRAPH
-        (indexMetadata.levelMap(qlU).termAsTerm, indexMetadata.levelType(qlU)(searcher(tlU, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(qlU).term))
+      if (!indexMetadata.levelOrder.contains(targetLevel)) 
+        (new Term(targetLevel,""), (if (indexMetadata.numericDocValuesFields.contains(targetLevel)) QueryByType.NUMERIC else QueryByType.SORTED)(searcher(queryLevel, SumScaling.ABSOLUTE), query, targetLevel)) 
+      else if (indexMetadata.levelOrder(queryLevel)<indexMetadata.levelOrder(targetLevel)) // DOCUMENT < PARAGRAPH
+        (indexMetadata.levelMap(queryLevel).termAsTerm, indexMetadata.levelType(queryLevel)(searcher(targetLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(queryLevel).term))
       else 
-        (indexMetadata.levelMap(tlU).termAsTerm, indexMetadata.levelType(tlU)(searcher(qlU, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(tlU).term))
+        (indexMetadata.levelMap(targetLevel).termAsTerm, indexMetadata.levelType(targetLevel)(searcher(queryLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(targetLevel).term))
     new TermInSetQuery(idTerm.field, values.asJava)
   }
   
   private def processQueryInternal(queryIn: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): (String,Query,String) = {
-    val queryLevel = queryIn.substring(1,queryIn.indexOf('§'))
-    val targetLevel = queryIn.substring(queryIn.lastIndexOf('§') + 1, queryIn.length - 1)
+    val queryLevel = queryIn.substring(1,queryIn.indexOf('§')).toUpperCase
+    val targetLevelOrig = queryIn.substring(queryIn.lastIndexOf('§') + 1, queryIn.length - 1)
+    val targetLevel = if (indexMetadata.levelOrder.contains(targetLevelOrig.toUpperCase)) targetLevelOrig.toUpperCase else targetLevelOrig
     var query = queryIn.substring(queryIn.indexOf('§') + 1, queryIn.lastIndexOf('§'))
     val replacements = new HashMap[String,Future[Query]]
     var firstStart = queryPartStart.findFirstMatchIn(query)
