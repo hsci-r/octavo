@@ -27,6 +27,9 @@ import play.api.Configuration
 import groovy.lang.GroovyShell
 import groovy.lang.Script
 import org.apache.lucene.search.TimeLimitingCollector
+import org.apache.lucene.search.MatchAllDocsQuery
+import org.apache.lucene.index.DocValues
+import org.apache.lucene.index.NumericDocValues
 
 @Singleton
 class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
@@ -42,9 +45,11 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
   
   private def getStats(is: IndexSearcher, q: Query, grouper: Option[Script], attrs: Seq[String], attrLengths: Seq[Int], attrTransformer: Option[Script], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
     if (!attrs.isEmpty) {
+      val matchAll = q.isInstanceOf[MatchAllDocsQuery]
       var attrGetters: Seq[(Int) => String] = null
       val groupedStats = new HashMap[Seq[String],Stats]
       val gs = new Stats
+      var contentTokensNDV: NumericDocValues = null
       tlc.get.setCollector(new SimpleCollector() {
         override def needsScores: Boolean = true
         
@@ -61,7 +66,7 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
           }).getOrElse(if (attrLengths.isEmpty) attrGetters.map(_(doc)) else attrGetters.zip(attrLengths).map(p => p._1(doc).substring(0,p._2)))), new Stats)
           s.docFreq += 1
           gs.docFreq += 1
-          val score = scorer.score().toInt
+          val score = if (matchAll) contentTokensNDV.get(doc).toInt else scorer.score().toInt
           if (gatherTermFreqsPerDoc) {
             s.termFreqs += score
             gs.termFreqs += score
@@ -73,6 +78,7 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
         override def doSetNextReader(context: LeafReaderContext) = {
           grouper.foreach(_.invokeMethod("setContext",context))
           attrGetters = attrs.map(ia.indexMetadata.getter(context.reader,_).andThen(_.iterator.next))
+          if (matchAll) contentTokensNDV = DocValues.getNumeric(context.reader, ia.indexMetadata.contentTokensField)
         }
       })
       is.search(q, tlc.get)
@@ -120,7 +126,7 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
       b.setProperty("attrTransformer", attrTransformer)
       s
     })
-    val qm = Json.obj("method"->"termStats","grouper"->p.get("grouper").map(_(0)),"attrs"->attrs,"attrLength"->attrLengths,"attrTransformer"->p.get("attrTransformer").map(_(0))) ++ gp.toJson ++ q.toJson
+    val qm = Json.obj("method"->"termStats","grouper"->p.get("grouper").map(_(0)),"attrs"->attrs,"attrLengths"->attrLengths,"attrTransformer"->p.get("attrTransformer").map(_(0))) ++ gp.toJson ++ q.toJson
     implicit val ec = gp.executionContext
     getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
