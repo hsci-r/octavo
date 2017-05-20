@@ -82,6 +82,8 @@ import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 import org.apache.lucene.search.TermInSetQuery
 import java.util.SortedSet
+import org.apache.lucene.document.LongPoint
+import org.joda.time.format.ISODateTimeFormat
 
 object IndexAccess {
     
@@ -335,11 +337,13 @@ case class IndexMetadata(
   indexingAnalyzersAsText: Map[String,String],
   textFields: Set[String],
   intPointFields: Set[String],
+  longPointFields: Set[String],
   termVectorFields: Set[String],
   sortedDocValuesFields: Set[String],
   storedSingularFields: Set[String],
   storedMultiFields: Set[String],
-  numericDocValuesFields: Set[String]
+  numericDocValuesFields: Set[String],
+  jsonFields: Set[String]
 ) {
   import IndexAccess._
   
@@ -394,11 +398,13 @@ case class IndexMetadata(
         "indexingAnalyzers"->indexingAnalyzersAsText,
         "textFields"->textFields,
         "intPointFields"->intPointFields,
+        "longPointFields"->longPointFields,
         "termVectorFields"->termVectorFields,
         "sortedDocValuesFields"->sortedDocValuesFields,
         "storedSingularFields"->storedSingularFields,
         "storedMultiFields"->storedMultiFields,
-        "numericDocValuesFields"->numericDocValuesFields)
+        "numericDocValuesFields"->numericDocValuesFields,
+        "jsonFields"->jsonFields)
 
 }
 
@@ -425,11 +431,13 @@ class IndexAccess(path: String) {
     (c \ "indexingAnalyzers").asOpt[Map[String,String]].getOrElse(Map.empty),
     (c \ "textFields").as[Set[String]],
     (c \ "intPointFields").as[Set[String]],
+    (c \ "longPointFields").asOpt[Set[String]].getOrElse(Set.empty),
     (c \ "termVectorFields").as[Set[String]],
     (c \ "sortedDocValuesFields").as[Set[String]],
     (c \ "storedSingularFields").as[Set[String]],
     (c \ "storedMultiFields").as[Set[String]],
-    (c \ "numericDocValuesFields").as[Set[String]]
+    (c \ "numericDocValuesFields").as[Set[String]],
+    (c \ "jsonFields").asOpt[Set[String]].getOrElse(Set.empty)
   )
   
   val indexMetadata: IndexMetadata = readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
@@ -466,9 +474,23 @@ class IndexAccess(path: String) {
       val qp = new QueryParser(indexMetadata.contentField,queryAnalyzer) {
         override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
           if (indexMetadata.intPointFields.contains(field)) {
-            val low = Try(if (startInclusive) part1.toInt else part1.toInt + 1).getOrElse(Int.MinValue)
-            val high = Try(if (endInclusive) part2.toInt else part2.toInt - 1).getOrElse(Int.MaxValue)
+            val low = if (part1.trim.isEmpty) Int.MinValue else if (startInclusive) part1.toInt else part1.toInt + 1
+            val high = if (part2.trim.isEmpty) Int.MaxValue else if (endInclusive) part2.toInt else part2.toInt - 1
             IntPoint.newRangeQuery(field, low, high)
+          } else if (indexMetadata.longPointFields.contains(field)) {
+             val low = if (part1.trim.isEmpty) Long.MinValue else {
+              val low = if (part1.contains("-")) {
+                ISODateTimeFormat.dateOptionalTimeParser().parseMillis(part1)
+              } else part1.toLong
+              if (startInclusive) low else low + 1
+            } 
+            val high = if (part2.trim.isEmpty) Long.MaxValue else {
+              val high = if (part2.contains("-")) {
+                ISODateTimeFormat.dateOptionalTimeParser().parseMillis(part2)
+              } else part2.toLong
+              if (endInclusive) high else high - 1
+            } 
+            LongPoint.newRangeQuery(field, low, high)
           } else super.getRangeQuery(field,part1,part2,startInclusive,endInclusive) 
         } 
       }

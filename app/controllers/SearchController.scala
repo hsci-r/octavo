@@ -182,7 +182,12 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
       else (null, null)
       val processDocFields = (context: LeafReaderContext, doc: Int, sdvs: Map[String,SortedDocValues], ndvs: Map[String,NumericDocValues]) => {
         val fields = new HashMap[String, JsValue]
-        for ((field, dv) <- sdvs) fields += ((field -> Json.toJson(dv.get(doc).utf8ToString)))
+        for ((field, dv) <- sdvs) fields += ((field -> {
+          val value = dv.get(doc).utf8ToString
+          if (indexMetadata.jsonFields.contains(field)) 
+            Json.parse(value)
+          else Json.toJson(value)
+        }))
         for ((field, dv) <- ndvs) fields += ((field -> Json.toJson(dv.get(doc))))
         val document = if (srp.returnMatches || !srp.storedSingularFields.isEmpty || !srp.storedMultiFields.isEmpty) {
           val fields = new java.util.HashSet[String]
@@ -191,8 +196,16 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
           if (srp.returnMatches) fields.add(indexMetadata.contentField)
           context.reader.document(doc, fields)
         } else null
-        for (field <- srp.storedSingularFields) fields += ((field -> Json.toJson(document.get(field))))
-        for (field <- srp.storedMultiFields) fields += ((field -> Json.toJson(document.getValues(field))))
+        for (field <- srp.storedSingularFields) fields += ((field -> {
+          val value = document.get(field)
+          if (indexMetadata.jsonFields.contains(field)) 
+            Json.parse(value)
+          else Json.toJson(value)
+        }))
+        for (field <- srp.storedMultiFields) fields += ((field -> 
+          (if (indexMetadata.jsonFields.contains(field)) Json.toJson(document.getValues(field).map(Json.parse(_))) 
+          else Json.toJson(document.getValues(field)))
+        ))
         for (field <- srp.termVectorFields) {
           val ft = context.reader.getTermVector(doc, field)
           if (ft != null) {

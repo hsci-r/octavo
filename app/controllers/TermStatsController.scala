@@ -40,11 +40,10 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
       else Json.obj("totalTermFreq"->totalTermFreq,"docFreq"->docFreq)
   }
   
-  private def getStats(is: IndexSearcher, q: Query, grouper: Option[Script], attrO: Option[String], attrLength: Int, attrTransformer: Option[Script], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
-    if (attrO.isDefined) {
-      val attr = attrO.get
-      var attrGetter: (Int) => String = null
-      val groupedStats = new HashMap[String,Stats]
+  private def getStats(is: IndexSearcher, q: Query, grouper: Option[Script], attrs: Seq[String], attrLengths: Seq[Int], attrTransformer: Option[Script], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
+    if (!attrs.isEmpty) {
+      var attrGetters: Seq[(Int) => String] = null
+      val groupedStats = new HashMap[Seq[String],Stats]
       val gs = new Stats
       tlc.get.setCollector(new SimpleCollector() {
         override def needsScores: Boolean = true
@@ -55,11 +54,11 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
   
         override def collect(doc: Int) {
           val s = groupedStats.getOrElseUpdate(grouper.map(ap => {
-            ap.invokeMethod("group", doc).asInstanceOf[String]
+            ap.invokeMethod("group", doc).asInstanceOf[Seq[String]]
           }).getOrElse(attrTransformer.map(ap => {
-            ap.getBinding.setProperty("attr", attrGetter(doc))
-            ap.run().asInstanceOf[String]
-          }).getOrElse(if (attrLength == -1) attrGetter(doc) else attrGetter(doc).substring(0,attrLength))), new Stats)
+            ap.getBinding.setProperty("attrs", attrGetters.map(_(doc)))
+            ap.run().asInstanceOf[Seq[String]]
+          }).getOrElse(if (attrLengths.isEmpty) attrGetters.map(_(doc)) else attrGetters.zip(attrLengths).map(p => p._1(doc).substring(0,p._2)))), new Stats)
           s.docFreq += 1
           gs.docFreq += 1
           val score = scorer.score().toInt
@@ -73,11 +72,11 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
         
         override def doSetNextReader(context: LeafReaderContext) = {
           grouper.foreach(_.invokeMethod("setContext",context))
-          attrGetter = ia.indexMetadata.getter(context.reader, attr).andThen(_.iterator.next)
+          attrGetters = attrs.map(ia.indexMetadata.getter(context.reader,_).andThen(_.iterator.next))
         }
       })
       is.search(q, tlc.get)
-      Json.obj("general"->gs.toJson,"grouped"->groupedStats.toIterable.map(p => Json.obj("attr"->p._1,"stats"->p._2.toJson)))
+      Json.obj("general"->gs.toJson,"grouped"->groupedStats.toIterable.map(p => Json.toJson(attrs.zip(p._1.map(Json.toJson(_))).toMap ++ Map("stats" -> p._2.toJson))))
     } else {
       val s = new Stats
       is.search(q, new SimpleCollector() {
@@ -106,8 +105,8 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
     val gp = new GeneralParameters
     val q = new QueryParameters
     val gatherTermFreqsPerDoc = p.get("termFreqs").exists(v => v(0)=="" || v(0).toBoolean)
-    val attr = p.get("attr").map(_(0))
-    val attrLength = p.get("attrLength").map(_(0).toInt).getOrElse(-1)
+    val attrs = p.get("attr").getOrElse(Seq.empty)
+    val attrLengths = p.get("attrLength").map(_.map(_.toInt)).getOrElse(Seq.empty)
     val attrTransformer = p.get("attrTransformer").map(_(0)).map(apScript => new GroovyShell().parse(apScript))
     val grouper = p.get("grouper").map(_(0)).map(apScript => {
       val s = new GroovyShell().parse(apScript)
@@ -116,17 +115,17 @@ class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Env
       b.setProperty("gp", gp)
       b.setProperty("q", q)
       b.setProperty("gatherTermFreqsPerDoc", gatherTermFreqsPerDoc)
-      b.setProperty("attr", attr)
-      b.setProperty("attrLength", attrLength)
+      b.setProperty("attrs", attrs)
+      b.setProperty("attrLengths", attrLengths)
       b.setProperty("attrTransformer", attrTransformer)
       s
     })
-    val qm = Json.obj("method"->"termStats","grouper"->p.get("grouper").map(_(0)),"attr"->attr,"attrLength"->attrLength,"attrTransformer"->p.get("attrTransformer").map(_(0))) ++ gp.toJson ++ q.toJson
+    val qm = Json.obj("method"->"termStats","grouper"->p.get("grouper").map(_(0)),"attrs"->attrs,"attrLength"->attrLengths,"attrTransformer"->p.get("attrTransformer").map(_(0))) ++ gp.toJson ++ q.toJson
     implicit val ec = gp.executionContext
     getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       val (qlevel,query) = buildFinalQueryRunningSubQueries(q.requiredQuery)
-      getStats(searcher(qlevel, SumScaling.ABSOLUTE), query, grouper, attr, attrLength, attrTransformer, gatherTermFreqsPerDoc)
+      getStats(searcher(qlevel, SumScaling.ABSOLUTE), query, grouper, attrs, attrLengths, attrTransformer, gatherTermFreqsPerDoc)
     })
   }  
 }
