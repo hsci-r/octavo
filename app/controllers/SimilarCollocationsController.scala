@@ -102,7 +102,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
       var total = 0
       val termsToScores = thirdOrderCollocations.filter(!_._2.isEmpty).map(p => (p._1,Distance.cosineSimilarity(collocations,p._2),Distance.diceSimilarity(collocations,p._2)))
       for ((term,cscore,dscore) <- termsToScores.seq) {
-        total+=1
+        if (cscore != 0.0 || dscore != 0.0) total+=1
         if (finalTermVectorAggregateProcessingParameters.limit == -1 || total<=finalTermVectorAggregateProcessingParameters.limit) { 
           if (cscore!=0.0) cmaxHeap += ((term,cscore))
           if (dscore!=0.0) dmaxHeap += ((term,dscore))
