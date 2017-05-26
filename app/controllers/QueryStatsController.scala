@@ -32,7 +32,7 @@ import org.apache.lucene.index.DocValues
 import org.apache.lucene.index.NumericDocValues
 
 @Singleton
-class TermStatsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
+class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
   
   class Stats {
     var termFreqs = new ArrayBuffer[Int]

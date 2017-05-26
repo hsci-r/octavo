@@ -69,7 +69,7 @@ class StatsController @Inject() (iap: IndexAccessProvider) extends Controller {
         "totalTerms" -> ia.reader(ia.indexMetadata.defaultLevel.id).leaves.get(0).reader().terms(ia.indexMetadata.contentField).size(),
         "totalDocFreq" -> ia.reader(ia.indexMetadata.defaultLevel.id).getSumDocFreq(ia.indexMetadata.contentField),
         "totalTermFreq" -> ia.reader(ia.indexMetadata.defaultLevel.id).getSumTotalTermFreq(ia.indexMetadata.contentField),
-        "termFreqQuantiles"-> (from to to by by).map(q => Json.obj((formatString format q) -> ttft.quantile(Math.min(q, 1.0)).toLong)),
-        "docFreqQuantiles" -> (from to to by by).map(q => Json.obj((formatString format q) -> dft.quantile(Math.min(q, 1.0)).toLong)))))
+        "termFreqQuantiles"-> (from to to by by).map(q => Json.obj("quantile"->(formatString format q), "freq" -> ttft.quantile(Math.min(q, 1.0)).toLong)),
+        "docFreqQuantiles" -> (from to to by by).map(q => Json.obj("quantile"->(formatString format q), "freq" -> dft.quantile(Math.min(q, 1.0)).toLong)))))
   }  
 }

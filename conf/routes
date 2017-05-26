@@ -16,10 +16,10 @@ GET		/terms							controllers.SimilarTermsController.similarTerms(index = "defau
 GET		/:index/stats					controllers.StatsController.stats(index, from: Double ?= 0.0, to: Double ?= 1.0, by: String ?= "0.1")
 GET		/stats							controllers.StatsController.stats(index = "default", from: Double ?= 0.0, to: Double ?= 1.0, by: String ?= "0.1")
 
-GET		/:index/termStats				controllers.TermStatsController.stats(index)
-GET		/termStats						controllers.TermStatsController.stats(index = "default")
-POST	/:index/termStats				controllers.TermStatsController.stats(index)
-POST	/termStats						controllers.TermStatsController.stats(index = "default")
+GET		/:index/queryStats				controllers.QueryStatsController.stats(index)
+GET		/queryStats						controllers.QueryStatsController.stats(index = "default")
+POST	/:index/queryStats				controllers.QueryStatsController.stats(index)
+POST	/queryStats						controllers.QueryStatsController.stats(index = "default")
 
 GET		/:index/collocations			controllers.CollocationsController.collocations(index)
 GET		/collocations					controllers.CollocationsController.collocations(index = "default")
