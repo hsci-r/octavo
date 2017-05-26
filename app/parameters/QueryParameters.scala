@@ -18,6 +18,5 @@ case class QueryParameters(prefix: String = "", suffix: String = "")(implicit re
   def requiredQuery: String = query.getOrElse("<"+ia.indexMetadata.defaultLevel.id+"§§"+ia.indexMetadata.defaultLevel.id+">")
   /** minimum query score (by default term match frequency) for doc to be included in query results */
   val minScore: Float = p.get(prefix+"minScore"+suffix).map(_(0).toFloat).getOrElse(0.0f)
-  override def toString() = s"${prefix}query$suffix:$query, ${prefix}minScore$suffix: $minScore"
   def toJson: JsObject = Json.obj(prefix+"query"+suffix->query,prefix+"minScore"+suffix->minScore)
 }

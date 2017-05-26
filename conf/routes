@@ -13,8 +13,8 @@ POST	/search							controllers.SearchController.search(index = "default")
 GET		/:index/terms					controllers.SimilarTermsController.similarTerms(index, term: String, maxEditDistance: Int ?= 2, minCommonPrefix: Int ?= 0, transposeIsSingleEdit: Option[String])
 GET		/terms							controllers.SimilarTermsController.similarTerms(index = "default", term: String, maxEditDistance: Int ?= 2, minCommonPrefix: Int ?= 0, transposeIsSingleEdit: Option[String])
 
-GET		/:index/stats					controllers.StatsController.stats(index, from: Double ?= 0.0, to: Double ?= 1.0, by: Double ?= 0.1)
-GET		/stats							controllers.StatsController.stats(index = "default", from: Double ?= 0.0, to: Double ?= 1.0, by: Double ?= 0.1)
+GET		/:index/stats					controllers.StatsController.stats(index, from: Double ?= 0.0, to: Double ?= 1.0, by: String ?= "0.1")
+GET		/stats							controllers.StatsController.stats(index = "default", from: Double ?= 0.0, to: Double ?= 1.0, by: String ?= "0.1")
 
 GET		/:index/termStats				controllers.TermStatsController.stats(index)
 GET		/termStats						controllers.TermStatsController.stats(index = "default")

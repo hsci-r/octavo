@@ -84,6 +84,8 @@ import org.apache.lucene.search.TermInSetQuery
 import java.util.SortedSet
 import org.apache.lucene.document.LongPoint
 import org.joda.time.format.ISODateTimeFormat
+import org.apache.lucene.search.BooleanClause.Occur
+import org.apache.lucene.search.BoostQuery
 
 object IndexAccess {
     
@@ -477,17 +479,17 @@ class IndexAccess(path: String) {
       val qp = new QueryParser(indexMetadata.contentField,queryAnalyzer) {
         override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
           if (indexMetadata.intPointFields.contains(field)) {
-            val low = if (part1.trim.isEmpty) Int.MinValue else if (startInclusive) part1.toInt else part1.toInt + 1
-            val high = if (part2.trim.isEmpty) Int.MaxValue else if (endInclusive) part2.toInt else part2.toInt - 1
+            val low = if (part1.equals("*")) Int.MinValue else if (startInclusive) part1.toInt else part1.toInt + 1
+            val high = if (part2.equals("*")) Int.MaxValue else if (endInclusive) part2.toInt else part2.toInt - 1
             IntPoint.newRangeQuery(field, low, high)
           } else if (indexMetadata.longPointFields.contains(field)) {
-             val low = if (part1.trim.isEmpty) Long.MinValue else {
+             val low = if (part1.equals("*")) Long.MinValue else {
               val low = if (part1.contains("-")) {
                 ISODateTimeFormat.dateOptionalTimeParser().parseMillis(part1)
               } else part1.toLong
               if (startInclusive) low else low + 1
             } 
-            val high = if (part2.trim.isEmpty) Long.MaxValue else {
+            val high = if (part2.equals("*")) Long.MaxValue else {
               val high = if (part2.contains("-")) {
                 ISODateTimeFormat.dateOptionalTimeParser().parseMillis(part2)
               } else part2.toLong
@@ -500,6 +502,7 @@ class IndexAccess(path: String) {
       qp.setAllowLeadingWildcard(true)
       qp.setLowercaseExpandedTerms(false)
       qp.setMaxDeterminizedStates(Int.MaxValue)
+      qp.setMultiTermRewriteMethod(MultiTermQuery.SCORING_BOOLEAN_REWRITE)
       qp
     }
 
@@ -558,7 +561,23 @@ class IndexAccess(path: String) {
       firstStart = queryPartStart.findFirstMatchIn(query)
     }
     Logger.debug(s"Query ${queryIn} rewritten to $query with replacements $replacements.")
-    val q = if (query.isEmpty) new MatchAllDocsQuery() else queryParsers.get.parse(query)
+    val q = if (query.isEmpty) new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField) else { 
+      val q = queryParsers.get.parse(query) 
+      if (q.isInstanceOf[BooleanQuery]) {
+        val bq = q.asInstanceOf[BooleanQuery]
+        if (bq.clauses.asScala.forall(c => c.getOccur == Occur.MUST_NOT || (c.getQuery.isInstanceOf[BoostQuery]) && c.getQuery.asInstanceOf[BoostQuery].getBoost == 0.0f)) {
+          val bqb = new BooleanQuery.Builder()
+          bqb.add(new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField), Occur.MUST)
+          bq.clauses.asScala.foreach(bqb.add(_))
+          bqb.build
+        } else bq
+      } else if (q.isInstanceOf[BoostQuery] && q.asInstanceOf[BoostQuery].getBoost == 0.0) {
+        val bqb = new BooleanQuery.Builder()
+        bqb.add(new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField), Occur.MUST)
+        bqb.add(q, Occur.MUST)
+        bqb.build
+      } else q
+    }
     if (replacements.isEmpty) (queryLevel,q,targetLevel) 
     else if (q.isInstanceOf[BooleanQuery]) {
       val bqb = new BooleanQuery.Builder()

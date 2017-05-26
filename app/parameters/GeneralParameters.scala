@@ -27,6 +27,5 @@ case class GeneralParameters(implicit request: Request[AnyContent]) {
     }
   }
   val force: Boolean  = p.get("force").exists(v => v(0)=="" || v(0).toBoolean)
-  override def toString() = s"maxDocs:$maxDocs, pretty: $pretty"
   def toJson(): JsObject = Json.obj("maxDocs"->maxDocs,"pretty"->pretty)
 }

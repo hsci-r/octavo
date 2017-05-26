@@ -5,11 +5,11 @@ import org.apache.lucene.index.IndexReader
 import enumeratum.Enum
 import services.IndexAccess
 
-sealed trait SumScaling extends EnumEntry {
+trait SumScaling {
   def apply(ir: IndexReader, term: Long, freq: Int)(implicit ia: IndexAccess): Double
 }
 
-object SumScaling extends Enum[SumScaling] {
+object SumScaling {
   
   case object ABSOLUTE extends SumScaling {
     def apply(ir: IndexReader, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble
@@ -21,5 +21,22 @@ object SumScaling extends Enum[SumScaling] {
     def apply(ir: IndexReader, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble/ia.totalTermFreq(ir, term)
   }
   
-  val values = findValues
+  def STTF(smoothing: Double): SumScaling = new SumScaling {
+    def apply(ir: IndexReader, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble/(ia.totalTermFreq(ir, term)+smoothing)
+  }
+
+  def SDF(smoothing: Double): SumScaling = new SumScaling {
+    def apply(ir: IndexReader, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble/(ia.docFreq(ir,term)+smoothing)
+  }
+  
+  def get(name: String, smoothing: Double): SumScaling = {
+    name match {
+      case "ABSOLUTE" => ABSOLUTE
+      case "DF" if smoothing == 0.0 => DF
+      case "DF" => SDF(smoothing)
+      case "TTF" if smoothing == 0.0 => TTF
+      case "TTF" => STTF(smoothing)
+    }
+  }
+
 }

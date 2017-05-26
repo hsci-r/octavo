@@ -81,7 +81,6 @@ case class LocalTermVectorProcessingParameters(prefix: String = "", suffix: Stri
       s.run().asInstanceOf[Boolean]
     })
   val defined: Boolean = termTransformerAsStringOpt.isDefined || termFilterAsStringOpt.isDefined || localScalingOpt.isDefined || minFreqInDocOpt.isDefined || maxFreqInDocOpt.isDefined || minTotalTermFreqOpt.isDefined || maxTotalTermFreqOpt.isDefined || minDocFreqOpt.isDefined || maxDocFreqOpt.isDefined || minTermLengthOpt.isDefined || maxTermLengthOpt.isDefined
-  override def toString() = s"${prefix}localScaling$suffix:$localScaling, ${prefix}minTotalTermFreq$suffix:$minTotalTermFreq, ${prefix}maxTotalTermFreq$suffix:$maxTotalTermFreq, ${prefix}minDocFreq$suffix:$minDocFreq, ${prefix}maxDocFreq$suffix:$maxDocFreq, ${prefix}minFreqInDoc$suffix:$minFreqInDoc, ${prefix}maxFreqInDoc$suffix:$maxFreqInDoc, ${prefix}minTermLength$suffix:$minTermLength, ${prefix}maxTermLength$suffix:$maxTermLength"
   def toJson() = Json.obj(prefix+"termTransformer"+suffix->termTransformerAsStringOpt,prefix+"termFilter"+suffix->termFilterAsStringOpt,prefix+"localScaling"+suffix->localScaling, prefix+"minTotalTermFreq"+suffix->minTotalTermFreq, prefix+"maxTotalTermFreq"+suffix->maxTotalTermFreq, prefix+"minDocFreq"+suffix->minDocFreq, prefix+"maxDocFreq"+suffix->maxDocFreq, prefix+"minFreqInDoc"+suffix -> minFreqInDoc, prefix+"maxFreqInDoc"+suffix -> maxFreqInDoc, prefix + "minTermLength" + suffix -> minTermLength, prefix + "maxTermLength" + suffix -> maxTermLength)
 }
 

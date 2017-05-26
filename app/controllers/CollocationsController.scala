@@ -19,6 +19,9 @@ import org.apache.lucene.search.BooleanClause.Occur
 import services.TermVectors
 import services.IndexAccessProvider
 import play.api.Configuration
+import scala.collection.mutable.ArrayBuffer
+import scala.concurrent.Future
+import com.koloboke.function.LongDoubleConsumer
 
 @Singleton
 class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
@@ -49,12 +52,17 @@ class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: 
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
       val maxDocs = if (gp.maxDocs == -1 || termVectorAggregateProcessingParameters.limit == -1) -1 else if (resultTermVectorAggregateProcessingParameters.mdsDimensions>0 || resultTermVectorLocalProcessingParameters.defined || resultTermVectorAggregateProcessingParameters.defined || termVectors) gp.maxDocs / (termVectorAggregateProcessingParameters.limit + 1) else gp.maxDocs / 2
-      val (md, allCollocations) = getAggregateContextVectorForQuery(is, termVectorQuery,termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters,maxDocs)
-      val collocations = filterHighestScores(allCollocations, termVectorAggregateProcessingParameters.limit)
+      val (md, collocationsMap) = getAggregateContextVectorForQuery(is, termVectorQuery,termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters,maxDocs)
+      val collocations = new ArrayBuffer[(Long,Double)]
+      collocationsMap.forEach(new LongDoubleConsumer {
+         override def accept(k: Long, v: Double) {
+           collocations += ((k,v))
+         }
+      })
       Json.obj("metadata"->md.toJson,"terms"->(if (resultTermVectorAggregateProcessingParameters.mdsDimensions>0) {
         val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(_)._2)
-        val ctermVectors = collocations.keys.toSeq.par.map{term => 
-          val termS = termOrdToTerm(ir,term)
+        val ctermVectors = collocations.par.map{term => 
+          val termS = termOrdToTerm(ir,term._1)
           val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,termS)), Occur.MUST)
           for (q <- resultLimitQuery) bqb.add(q, Occur.MUST)
           getAggregateContextVectorForQuery(is, bqb.build(), resultTermVectorLocalProcessingParameters, Seq(termS), resultTermVectorAggregateProcessingParameters, maxDocs)
@@ -63,14 +71,14 @@ class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: 
         collocations.zipWithIndex.toSeq.sortBy(-_._1._2).map{ case ((term,weight),i) => Json.obj("term"->termOrdToTerm(ir, term), "termVector"->Json.obj("metadata"->ctermVectors(i)._1.toJson,"terms"->mdsMatrix(i)), "weight"->weight)}
       } else if (resultTermVectorLocalProcessingParameters.defined || resultTermVectorAggregateProcessingParameters.defined || termVectors) {
         val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(_)._2)
-        collocations.toSeq.sortBy(-_._2).par.map{ case (term, weight) => {
+        collocations.sortBy(-_._2).par.map{ case (term, weight) => {
           val termS = termOrdToTerm(ir,term)
           val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,termS)), Occur.MUST)
           for (q <- resultLimitQuery) bqb.add(q, Occur.MUST)
           val (md, ctermVector) = getAggregateContextVectorForQuery(is, bqb.build(), resultTermVectorLocalProcessingParameters, Seq(termS), resultTermVectorAggregateProcessingParameters, maxDocs) 
           Json.obj("term" -> termS, "termVector"->Json.obj("metadata"->md.toJson, "terms"->termOrdMapToOrderedTermSeq(ir, ctermVector).map(p=>Json.obj("term" -> p._1, "weight" -> p._2)),"weight"->weight))
         }}.seq
-      } else collocations.toSeq.sortBy(-_._2).map(p => Json.obj("term"->termOrdToTerm(ir,p._1), "weight" -> p._2))))
+      } else collocations.sortBy(-_._2).map(p => Json.obj("term"->termOrdToTerm(ir,p._1), "weight" -> p._2))))
     })
   }
 }

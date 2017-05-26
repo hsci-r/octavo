@@ -319,7 +319,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
 	          var df = docFields.get(doc)
             if (cvs!=null) df = df ++ Map("termVector"->cvs(i))
             if (srp.returnMatches) df = df ++ Map("matches" -> Json.toJson(matchesByDocs(i).filter(_.contains("<b>"))))
-            df ++ Map("score" -> (if (ctvpa.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt))) 
+            df ++ Map("score" -> (if (ctvpa.sumScaling != SumScaling.TTF) Json.toJson(score) else Json.toJson(score.toInt))) 
       })
     })
   }

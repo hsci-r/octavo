@@ -7,8 +7,13 @@ import play.api.libs.json.Json
 
 case class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) {
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-  private val sumScalingOpt = p.get(prefix+"sumScaling"+suffix).map(v => SumScaling.withName(v(0).toUpperCase))
-  val sumScaling: SumScaling = sumScalingOpt.getOrElse(SumScaling.TTF)
+  private val smoothingOpt = p.get(prefix+"smoothing"+suffix).map(_(0).toDouble)
+  /** Laplace smoothing to use */
+  val smoothing = smoothingOpt.getOrElse(2.0)
+  private val sumScalingStringOpt = p.get(prefix+"sumScaling"+suffix).map(v => v(0).toUpperCase)
+  private val sumScalingString = sumScalingStringOpt.getOrElse("TTF")
+  /** sum scaling to use */
+  val sumScaling = SumScaling.get(sumScalingString, smoothing)
   private val minSumFreqOpt = p.get(prefix+"minSumFreq"+suffix).map(_(0).toInt)
   /** minimum sum frequency of term to filter resulting term vector */
   val minSumFreq: Int = minSumFreqOpt.getOrElse(1)
@@ -26,7 +31,6 @@ case class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: 
   private val distanceOpt = p.get("distance").map(v => DistanceMetric.withName(v(0).toUpperCase))
   /** distance metric used for term vector comparisons */
   val distance: DistanceMetric = distanceOpt.getOrElse(DistanceMetric.COSINE)
-  val defined: Boolean = sumScalingOpt.isDefined || minSumFreqOpt.isDefined || maxSumFreqOpt.isDefined || limitOpt.isDefined || mdsDimensionsOpt.isDefined || distanceOpt.isDefined
-  override def toString() = s"${prefix}sumScaling$suffix:$sumScaling, ${prefix}minSumFreq$suffix:$minSumFreq, ${prefix}maxSumFreq$suffix:$maxSumFreq, ${prefix}tvlimit$suffix:${limit}, ${prefix}mdsDimensions$suffix:$mdsDimensions, ${prefix}distance$suffix:$distance"
-  def toJson(): JsObject = Json.obj(prefix+"sumScaling"+suffix->sumScaling.entryName,prefix+"minSumFreq"+suffix->minSumFreq,prefix+"maxSumFreq"+suffix->maxSumFreq,prefix+"limit"+suffix->limit, prefix+"mdsDimensions"+suffix->mdsDimensions, prefix+"distance"+suffix->distance.entryName) 
+  val defined: Boolean = sumScalingStringOpt.isDefined || minSumFreqOpt.isDefined || maxSumFreqOpt.isDefined || limitOpt.isDefined || mdsDimensionsOpt.isDefined || distanceOpt.isDefined
+  def toJson(): JsObject = Json.obj(prefix+"smoothing"+suffix->smoothing,prefix+"sumScaling"+suffix->sumScalingString,prefix+"minSumFreq"+suffix->minSumFreq,prefix+"maxSumFreq"+suffix->maxSumFreq,prefix+"limit"+suffix->limit, prefix+"mdsDimensions"+suffix->mdsDimensions, prefix+"distance"+suffix->distance.entryName) 
 }
