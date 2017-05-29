@@ -450,16 +450,21 @@ class IndexAccess(path: String) {
   
   val indexMetadata: IndexMetadata = readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
   
-  for (level <- indexMetadata.levels) {
-    Logger.info("Initializing index at "+path+"/"+level.index)
-    readers.put(level.id, DirectoryReader.open(indexMetadata.directoryCreator(FileSystems.getDefault().getPath(path+"/"+level.index))))
-    Logger.info("Initialized index at "+path+"/"+level.index)
-    tfSearchers.put(level.id, {
-      val is = new IndexSearcher(readers(level.id))
-      is.setSimilarity(termFrequencySimilarity)
-      is
-    })
-    tfidfSearchers.put(level.id, new IndexSearcher(readers(level.id)))
+  {
+    val readerFs = for (level <- indexMetadata.levels) yield Future {
+      Logger.info("Initializing index at "+path+"/"+level.index)
+      val reader = DirectoryReader.open(indexMetadata.directoryCreator(FileSystems.getDefault().getPath(path+"/"+level.index)))
+      Logger.info("Initialized index at "+path+"/"+level.index)
+      (level.id, reader)
+    }(longTaskExecutionContext)
+    for (readerF <- readerFs) {
+      val (id, reader) = Await.result(readerF, Duration.Inf)
+      readers.put(id, reader)
+      val tfSearcher = new IndexSearcher(reader)
+      tfSearcher.setSimilarity(termFrequencySimilarity)
+      tfSearchers.put(id, tfSearcher)
+      tfidfSearchers.put(id, new IndexSearcher(reader))
+    }
   }
 
   def reader(level: String): IndexReader = readers(level)
