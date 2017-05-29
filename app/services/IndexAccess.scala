@@ -337,6 +337,7 @@ case class IndexMetadata(
   contentField: String,
   contentTokensField: String,
   levels: Seq[LevelMetadata],
+  defaultLevelS: Option[String],
   indexingAnalyzersAsText: Map[String,String],
   textFields: Set[String],
   intPointFields: Set[String],
@@ -371,9 +372,9 @@ case class IndexMetadata(
     case a if a.startsWith("MorphologicalAnalyzer_") => new MorphologicalAnalyzer(new Locale(a.substring(23)))  
     case any => throw new IllegalArgumentException("Unknown analyzer type "+any) 
   }).withDefaultValue(new KeywordAnalyzer()) 
-  val defaultLevel: LevelMetadata = levels.last
   val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap
   val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
+  val defaultLevel: LevelMetadata = defaultLevelS.map(levelMap(_)).getOrElse(levels.last)
   val levelType: Map[String,QueryByType] = levels.map(l => (l.id,if (numericDocValuesFields.contains(l.term)) QueryByType.NUMERIC else QueryByType.SORTED)).toMap
   def getter(lr: LeafReader, field: String): (Int) => Iterable[String] = {
     if (storedSingularFields.contains(field) || storedMultiFields.contains(field)) {
@@ -399,6 +400,7 @@ case class IndexMetadata(
         "contentField"->contentField,
         "contentTokensField"->contentTokensField,
         "levels"->levels.map(_.toJson),
+        "defaultLevel"->defaultLevel.id,
         "indexingAnalyzers"->indexingAnalyzersAsText,
         "textFields"->textFields,
         "intPointFields"->intPointFields,
@@ -433,6 +435,7 @@ class IndexAccess(path: String) {
     (c \ "contentField").as[String],
     (c \ "contentTokensField").as[String],
     (c \ "levels").as[Seq[JsValue]].map(readLevelMetadata(_)),
+    (c \ "defaultLevel").asOpt[String],
     (c \ "indexingAnalyzers").asOpt[Map[String,String]].getOrElse(Map.empty),
     (c \ "textFields").as[Set[String]],
     (c \ "intPointFields").as[Set[String]],
