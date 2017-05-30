@@ -86,6 +86,7 @@ import org.apache.lucene.document.LongPoint
 import org.joda.time.format.ISODateTimeFormat
 import org.apache.lucene.search.BooleanClause.Occur
 import org.apache.lucene.search.BoostQuery
+import org.apache.lucene.queryparser.classic.QueryParser.Operator
 
 object IndexAccess {
     
@@ -509,6 +510,7 @@ class IndexAccess(path: String) {
       }
       qp.setAllowLeadingWildcard(true)
       qp.setLowercaseExpandedTerms(false)
+      qp.setDefaultOperator(Operator.AND)
       qp.setMaxDeterminizedStates(Int.MaxValue)
       qp.setMultiTermRewriteMethod(MultiTermQuery.SCORING_BOOLEAN_REWRITE)
       qp
