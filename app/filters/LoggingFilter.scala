@@ -5,6 +5,7 @@ import play.api.Logger
 import play.api.routing.Router.Tags
 import scala.concurrent.Future
 import play.api.libs.concurrent.Execution.Implicits.defaultContext
+import com.google.common.net.InetAddresses
 
 class LoggingFilter @Inject() (override implicit val mat: Materializer) extends Filter {
   def apply(nextFilter: RequestHeader => Future[Result])
@@ -15,15 +16,22 @@ class LoggingFilter @Inject() (override implicit val mat: Materializer) extends 
       requestHeader.tags(Tags.RouteController) + "." + requestHeader.tags(Tags.RouteActionMethod)
       else requestHeader.path
     
-    Logger.info(f"${requestHeader.remoteAddress}%s requesting ${action}%s.")
+    val remoteHost = InetAddresses.forString(requestHeader.remoteAddress).getCanonicalHostName
+      
+    Logger.info(f"${remoteHost}%s requesting ${action}%s.")
 
-    nextFilter(requestHeader).map { result =>
+    nextFilter(requestHeader).transform(result => { 
       val endTime = System.currentTimeMillis
       val requestTime = endTime - startTime
 
-      Logger.info(f"${action}%s for ${requestHeader.remoteAddress}%s took ${requestTime}%,dms and returned ${result.header.status}%s")
+      Logger.info(f"${action}%s for ${remoteHost}%s took ${requestTime}%,dms and returned ${result.header.status}%s")
 
       result.withHeaders("Request-Time" -> requestTime.toString)
-    }
+    }, failure => {
+      val endTime = System.currentTimeMillis
+      val requestTime = endTime - startTime
+      Logger.warn(f"${action}%s for ${remoteHost}%s took ${requestTime}%,dms, but failed.", failure)
+      failure
+    })
   }
 }
