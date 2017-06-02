@@ -43,6 +43,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val gp = new GeneralParameters
     implicit val iec = gp.executionContext
+    implicit val its = gp.taskSupport
     val termVectorQueryParameters = QueryParameters()
     val termVectorLocalProcessingParameters = LocalTermVectorProcessingParameters()
     val termVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters()
@@ -87,7 +88,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
       println("collocations of collocations: "+collocationCollocations.size)
       val maxDocs4 = if (gp.maxDocs == -1) -1 else maxDocs2/collocationCollocations.size
       val finalLimitQuery = finalTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(_)._2)
-      val thirdOrderCollocations = for (term2 <- termOrdsToTerms(ir, collocationCollocations).par) yield {
+      val thirdOrderCollocations = for (term2 <- toParallel(termOrdsToTerms(ir, collocationCollocations))) yield {
         val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,term2)), Occur.MUST)
         for (q <- finalLimitQuery) bqb.add(q, Occur.MUST)
         val (_,tv) = getAggregateContextVectorForQuery(is, bqb.build,finalTermVectorLocalProcessingParameters,Seq(term2), finalTermVectorAggregateProcessingParameters, maxDocs4)

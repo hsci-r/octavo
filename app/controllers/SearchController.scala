@@ -110,7 +110,6 @@ import java.io.PrintWriter
 import akka.stream.Materializer
 import java.io.StringWriter
 import java.util.concurrent.ConcurrentHashMap
-import scala.collection.parallel.mutable.ParHashMap
 import scala.collection.mutable.PriorityQueue
 import java.io.ByteArrayOutputStream
 import play.api.libs.json.JsArray

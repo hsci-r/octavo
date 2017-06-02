@@ -22,6 +22,11 @@ import play.api.Configuration
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.Future
 import com.koloboke.function.LongDoubleConsumer
+import scala.collection.parallel.ParIterable
+import scala.concurrent.ExecutionContext
+import scala.collection.parallel.TaskSupport
+import scala.collection.parallel.ForkJoinTaskSupport
+import scala.collection.parallel.ParSeq
 
 @Singleton
 class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
@@ -45,6 +50,7 @@ class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: 
     val resultTermVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters("r_")
     val termVectors = p.get("termVectors").exists(v => v(0)=="" || v(0).toBoolean)
     implicit val iec = gp.executionContext
+    implicit val its = gp.taskSupport
     val qm = Json.obj("method"->"collocations","termVectors"->termVectors) ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ resultTermVectorLimitQueryParameters.toJson ++ resultTermVectorLocalProcessingParameters.toJson ++ resultTermVectorAggregateProcessingParameters.toJson
     getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
@@ -61,7 +67,7 @@ class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: 
       })
       Json.obj("metadata"->md.toJson,"terms"->(if (resultTermVectorAggregateProcessingParameters.mdsDimensions>0) {
         val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(_)._2)
-        val ctermVectors = collocations.par.map{term => 
+        val ctermVectors = toParallel(collocations).map{term => 
           val termS = termOrdToTerm(ir,term._1)
           val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,termS)), Occur.MUST)
           for (q <- resultLimitQuery) bqb.add(q, Occur.MUST)
@@ -71,7 +77,7 @@ class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: 
         collocations.zipWithIndex.toSeq.sortBy(-_._1._2).map{ case ((term,weight),i) => Json.obj("term"->termOrdToTerm(ir, term), "termVector"->Json.obj("metadata"->ctermVectors(i)._1.toJson,"terms"->mdsMatrix(i)), "weight"->weight)}
       } else if (resultTermVectorLocalProcessingParameters.defined || resultTermVectorAggregateProcessingParameters.defined || termVectors) {
         val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(_)._2)
-        collocations.sortBy(-_._2).par.map{ case (term, weight) => {
+        toParallel(collocations.sortBy(-_._2)).map{ case (term, weight) => {
           val termS = termOrdToTerm(ir,term)
           val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,termS)), Occur.MUST)
           for (q <- resultLimitQuery) bqb.add(q, Occur.MUST)

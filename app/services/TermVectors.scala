@@ -30,11 +30,26 @@ import com.koloboke.collect.set.hash.HashLongSets
 import play.api.libs.json.Json
 import play.api.libs.json.JsValue
 import scala.collection.mutable.ArrayBuffer
+import scala.collection.parallel.TaskSupport
+import scala.collection.parallel.ParSeq
+import scala.collection.parallel.ParIterable
 
 object TermVectors {
   
   import IndexAccess._
   
+  def toParallel[T](i: Seq[T])(implicit ts: TaskSupport): ParSeq[T] = {
+    val par = i.par
+    par.tasksupport = ts
+    par
+  }
+
+  def toParallel[T](i: Traversable[T])(implicit ts: TaskSupport): ParIterable[T] = {
+    val par = i.par
+    par.tasksupport = ts
+    par
+  }
+
   case class TermVectorQueryMetadata(val totalDocs: Long, val processedDocs: Long, val samplePercentage: Double, val contributingDocs: Long, val processedTerms: Long, val acceptedTerms: Long, val totalAcceptedTermFreq: Long) {
     def toJson(): JsValue = Json.toJson(Map(
         "totalDocsMatchingQuery"->Json.toJson(totalDocs),

@@ -74,9 +74,9 @@ import org.apache.lucene.store.NIOFSDirectory
 import org.apache.lucene.store.SimpleFSDirectory
 import org.apache.lucene.store.RAMDirectory
 import org.apache.lucene.store.IOContext
-import java.util.concurrent.ForkJoinPool
-import java.util.concurrent.ForkJoinPool.ForkJoinWorkerThreadFactory
-import java.util.concurrent.ForkJoinWorkerThread
+import scala.concurrent.forkjoin.ForkJoinPool
+import scala.concurrent.forkjoin.ForkJoinPool.ForkJoinWorkerThreadFactory
+import scala.concurrent.forkjoin.ForkJoinWorkerThread
 import scala.concurrent.Future
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
@@ -87,32 +87,34 @@ import org.joda.time.format.ISODateTimeFormat
 import org.apache.lucene.search.BooleanClause.Occur
 import org.apache.lucene.search.BoostQuery
 import org.apache.lucene.queryparser.classic.QueryParser.Operator
+import scala.collection.parallel.ForkJoinTaskSupport
 
 object IndexAccess {
     
   private val numShortWorkers = sys.runtime.availableProcessors
-  private val numLongWorkers = sys.runtime.availableProcessors / 2
+  private val numLongWorkers = Math.max(sys.runtime.availableProcessors - 2, 1)
   private val queueCapacity = 10
   
-  val longTaskExecutionContext = ExecutionContext.fromExecutorService(
-   new ForkJoinPool(numLongWorkers, new ForkJoinWorkerThreadFactory() {
+  val longTaskForkJoinPool = new ForkJoinPool(numLongWorkers, new ForkJoinWorkerThreadFactory() {
      override def newThread(pool: ForkJoinPool): ForkJoinWorkerThread = {
        val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
        worker.setName("long-task-worker-" + worker.getPoolIndex())
        worker
      }
    }, null, true)
-  )
+  val longTaskTaskSupport = new ForkJoinTaskSupport(longTaskForkJoinPool)
+  val longTaskExecutionContext = ExecutionContext.fromExecutorService(longTaskForkJoinPool)
   
-  val shortTaskExecutionContext = ExecutionContext.fromExecutorService(
-   new ForkJoinPool(numShortWorkers, new ForkJoinWorkerThreadFactory() {
+  val shortTaskForkJoinPool = new ForkJoinPool(numShortWorkers, new ForkJoinWorkerThreadFactory() {
      override def newThread(pool: ForkJoinPool): ForkJoinWorkerThread = {
        val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
        worker.setName("short-task-worker-" + worker.getPoolIndex())
        worker
      }
    }, null, true)
-  )
+  val shortTaskTaskSupport = new ForkJoinTaskSupport(shortTaskForkJoinPool)
+  val shortTaskExecutionContext = ExecutionContext.fromExecutorService(shortTaskForkJoinPool)
+
   BooleanQuery.setMaxClauseCount(Int.MaxValue)
 
   //private val standardAnayzer = new StandardAnalyzer(CharArraySet.EMPTY_SET)
@@ -326,9 +328,10 @@ object QueryByType extends Enum[QueryByType] {
 case class LevelMetadata(
   id: String,
   term: String,
-  index: String) {
+  index: String,
+  preload: Boolean) {
   val termAsTerm = new Term(term,"")
-  def toJson = Json.obj("id"->id,"term"->term,"index"->index)
+  def toJson = Json.obj("id"->id,"term"->term,"index"->index,"preload"->preload)
 }
 
 case class IndexMetadata(
@@ -353,10 +356,6 @@ case class IndexMetadata(
   import IndexAccess._
   
   val directoryCreator: (Path) => Directory = (path: Path) => indexType match {
-    case "PLMMapDirectory" =>
-      val d = new MMapDirectory(path)
-      d.setPreload(true)
-      d
     case "MMapDirectory" =>
       new MMapDirectory(path)        
     case "RAMDirectory" =>
@@ -426,7 +425,8 @@ class IndexAccess(path: String) {
   def readLevelMetadata(c: JsValue) = LevelMetadata(
       (c \ "id").as[String],
       (c \ "term").as[String],
-      (c \ "index").as[String]
+      (c \ "index").as[String],
+      (c \ "preload").asOpt[Boolean].getOrElse(false)
   )
   
   def readIndexMetadata(c: JsValue) = IndexMetadata(
@@ -454,7 +454,9 @@ class IndexAccess(path: String) {
   {
     val readerFs = for (level <- indexMetadata.levels) yield Future {
       Logger.info("Initializing index at "+path+"/"+level.index)
-      val reader = DirectoryReader.open(indexMetadata.directoryCreator(FileSystems.getDefault().getPath(path+"/"+level.index)))
+      val directory = indexMetadata.directoryCreator(FileSystems.getDefault().getPath(path+"/"+level.index))
+      if (level.preload && directory.isInstanceOf[MMapDirectory]) directory.asInstanceOf[MMapDirectory].setPreload(true)
+      val reader = DirectoryReader.open(directory)
       Logger.info("Initialized index at "+path+"/"+level.index)
       (level.id, reader)
     }(longTaskExecutionContext)
