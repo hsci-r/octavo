@@ -459,7 +459,7 @@ class IndexAccess(path: String) {
       val reader = DirectoryReader.open(directory)
       Logger.info("Initialized index at "+path+"/"+level.index)
       (level.id, reader)
-    }(longTaskExecutionContext)
+    }(shortTaskExecutionContext)
     for (readerF <- readerFs) {
       val (id, reader) = Await.result(readerF, Duration.Inf)
       readers.put(id, reader)
