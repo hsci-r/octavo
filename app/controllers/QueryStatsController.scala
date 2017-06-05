@@ -45,11 +45,9 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
   
   private def getStats(is: IndexSearcher, q: Query, grouper: Option[Script], attrs: Seq[String], attrLengths: Seq[Int], attrTransformer: Option[Script], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
     if (!attrs.isEmpty) {
-      val matchAll = q.isInstanceOf[MatchAllDocsQuery]
       var attrGetters: Seq[(Int) => String] = null
       val groupedStats = new HashMap[Seq[String],Stats]
       val gs = new Stats
-      var contentTokensNDV: NumericDocValues = null
       tlc.get.setCollector(new SimpleCollector() {
         override def needsScores: Boolean = true
         
@@ -66,7 +64,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
           }).getOrElse(if (attrLengths.isEmpty) attrGetters.map(_(doc)) else attrGetters.zip(attrLengths).map(p => p._1(doc).substring(0,p._2)))), new Stats)
           s.docFreq += 1
           gs.docFreq += 1
-          val score = if (matchAll) contentTokensNDV.get(doc).toInt else scorer.score().toInt
+          val score = scorer.score().toInt
           if (gatherTermFreqsPerDoc) {
             s.termFreqs += score
             gs.termFreqs += score
@@ -78,7 +76,6 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
         override def doSetNextReader(context: LeafReaderContext) = {
           grouper.foreach(_.invokeMethod("setContext",context))
           attrGetters = attrs.map(ia.indexMetadata.getter(context.reader,_).andThen(_.iterator.next))
-          if (matchAll) contentTokensNDV = DocValues.getNumeric(context.reader, ia.indexMetadata.contentTokensField)
         }
       })
       is.search(q, tlc.get)
@@ -130,7 +127,8 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
     implicit val ec = gp.executionContext
     getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
-      val (qlevel,query) = buildFinalQueryRunningSubQueries(q.requiredQuery)
+      implicit val qps = documentQueryParsers
+      val (qlevel,query) = buildFinalQueryRunningSubQueries(documentQueryParsers, q.requiredQuery)
       getStats(searcher(qlevel, SumScaling.ABSOLUTE), query, grouper, attrs, attrLengths, attrTransformer, gatherTermFreqsPerDoc)
     })
   }  

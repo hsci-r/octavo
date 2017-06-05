@@ -166,7 +166,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
     val qm = Json.obj("method"->"search","termVector"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ ctvpl.toJson ++ ctvpa.toJson
     getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
-      val (queryLevel,query) = buildFinalQueryRunningSubQueries(qp.requiredQuery)
+      val (queryLevel,query) = buildFinalQueryRunningSubQueries(documentQueryParsers, qp.requiredQuery)
       Logger.debug(f"Final query: $query%s, level: $queryLevel%s")
       val is = searcher(queryLevel,srp.sumScaling)
       val ir = is.getIndexReader
@@ -175,7 +175,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
         override def compare(x: (Int,Float), y: (Int,Float)) = y._2 compare x._2
       })
       val compareTermVector = if (ctv.query.isDefined)
-        getAggregateContextVectorForQuery(is, query,ctvpl, extractContentTermsFromQuery(query),ctvpa, gp.maxDocs) else null
+        getAggregateContextVectorForQuery(is, buildFinalQueryRunningSubQueries(termVectorQueryParsers, ctv.query.get)._2,ctvpl, extractContentTermsFromQuery(query),ctvpa, gp.maxDocs) else null
       val (we, normTerms) = if (srp.returnNorms)
         (query.createWeight(is, true), extractContentTermsFromQuery(query))
       else (null, null)

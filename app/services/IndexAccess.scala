@@ -247,9 +247,10 @@ object IndexAccess {
   
   implicit def termsToRichTerms(te: Terms) = RichTerms(te)
   
-  def getHitCountForQuery(is: IndexSearcher, q: Query): Long = {
+  def getHitCountForQuery(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Long = {
     val hc = new TotalHitCountCollector()
-    is.search(q,hc)
+    tlc.get.setCollector(hc)
+    is.search(q,tlc.get)
     return hc.getTotalHits
   }
 
@@ -484,10 +485,8 @@ class IndexAccess(path: String) {
   val queryAnalyzer = new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),
       (indexMetadata.textFields).map((_,whitespaceAnalyzer)).toMap[String,Analyzer].asJava)
   
-  val queryParsers = new ThreadLocal[QueryParser] {
-    
-    override def initialValue(): QueryParser = {
-      val qp = new QueryParser(indexMetadata.contentField,queryAnalyzer) {
+  private def newQueryParser() = {
+    val qp = new QueryParser(indexMetadata.contentField,queryAnalyzer) {
         override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
           if (indexMetadata.intPointFields.contains(field)) {
             val low = if (part1.equals("*")) Int.MinValue else if (startInclusive) part1.toInt else part1.toInt + 1
@@ -514,6 +513,24 @@ class IndexAccess(path: String) {
       qp.setLowercaseExpandedTerms(false)
       qp.setDefaultOperator(Operator.AND)
       qp.setMaxDeterminizedStates(Int.MaxValue)
+      qp
+  }
+  
+  val termVectorQueryParsers = new ThreadLocal[QueryParser] {
+    
+    override def initialValue(): QueryParser = {
+      val qp = newQueryParser()
+      qp.setMultiTermRewriteMethod(MultiTermQuery.CONSTANT_SCORE_REWRITE)
+      qp
+    }
+
+  }
+
+  
+  val documentQueryParsers = new ThreadLocal[QueryParser] {
+    
+    override def initialValue(): QueryParser = {
+      val qp = newQueryParser()
       qp.setMultiTermRewriteMethod(MultiTermQuery.SCORING_BOOLEAN_REWRITE)
       qp
     }
@@ -554,7 +571,7 @@ class IndexAccess(path: String) {
     new TermInSetQuery(idTerm.field, values.asJava)
   }
   
-  private def processQueryInternal(queryIn: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): (String,Query,String) = {
+  private def processQueryInternal(queryIn: String)(implicit iec: ExecutionContext, qps: ThreadLocal[QueryParser], tlc: ThreadLocal[TimeLimitingCollector]): (String,Query,String) = {
     val queryLevel = queryIn.substring(1,queryIn.indexOf('§')).toUpperCase
     val targetLevelOrig = queryIn.substring(queryIn.lastIndexOf('§') + 1, queryIn.length - 1)
     val targetLevel = if (indexMetadata.levelOrder.contains(targetLevelOrig.toUpperCase)) targetLevelOrig.toUpperCase else targetLevelOrig
@@ -574,19 +591,22 @@ class IndexAccess(path: String) {
     }
     Logger.debug(s"Query ${queryIn} rewritten to $query with replacements $replacements.")
     val q = if (query.isEmpty) new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField) else { 
-      val q = queryParsers.get.parse(query) 
+      val q = qps.get.parse(query) 
       if (q.isInstanceOf[BooleanQuery]) {
         val bq = q.asInstanceOf[BooleanQuery]
         if (bq.clauses.asScala.forall(c => c.getOccur == Occur.MUST_NOT || (c.getQuery.isInstanceOf[BoostQuery]) && c.getQuery.asInstanceOf[BoostQuery].getBoost == 0.0f)) {
           val bqb = new BooleanQuery.Builder()
           bqb.add(new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField), Occur.MUST)
-          bq.clauses.asScala.foreach(bqb.add(_))
+          bq.clauses.asScala.foreach(bc => { 
+            if (bc.getOccur == Occur.MUST) bqb.add(bc.getQuery, Occur.FILTER)
+            else bqb.add(bc)
+          })
           bqb.build
         } else bq
       } else if (q.isInstanceOf[BoostQuery] && q.asInstanceOf[BoostQuery].getBoost == 0.0) {
         val bqb = new BooleanQuery.Builder()
         bqb.add(new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField), Occur.MUST)
-        bqb.add(q, Occur.MUST)
+        bqb.add(q, Occur.FILTER)
         bqb.build
       } else q
     }
@@ -610,7 +630,8 @@ class IndexAccess(path: String) {
     }
   }
   
-  def buildFinalQueryRunningSubQueries(query: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): (String, Query) = {
+  def buildFinalQueryRunningSubQueries(qps: ThreadLocal[QueryParser], query: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): (String, Query) = {
+    implicit val iqps = qps
     val (queryLevel, q, targetLevel) = processQueryInternal(query)
     if (queryLevel==targetLevel) (targetLevel,q)
     else (targetLevel,Await.result(runSubQuery(queryLevel,q,targetLevel), Duration.Inf))
