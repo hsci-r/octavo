@@ -25,9 +25,14 @@ abstract class AQueuingController(env: Environment, configuration: Configuration
   
   private final val version = configuration.getString("app.version") 
   
-  private lazy val tmpDir = {
+  private val tmpDir = {
     val tmpDir = env.getFile("tmp")
     tmpDir.mkdir()
+    for (tf <- tmpDir.listFiles()) // clean up calls that were aborted when the application shut down/crashed
+      if (tf.isFile && tf.getName.startsWith("result-") && tf.getName.endsWith(".json") && tf.length == 0) {
+        Logger.warn("Cleaning up aborted call "+tf)
+        tf.delete()
+      }
     tmpDir.getPath
   }
   
@@ -78,7 +83,10 @@ abstract class AQueuingController(env: Environment, configuration: Configuration
         } else throw cause
       }
       processing.put(name, future)
-    } else Logger.info("Reusing ready result for "+callId)
+    } else {
+      if (processing.containsKey(name)) Logger.info("Waiting for result from prior call for "+callId) 
+      else Logger.info("Reusing ready result for "+callId)
+    }
     val f = new File(tmpDir+"/result-"+name+".json")
     if (!f.exists()) InternalServerError("\"An error has occurred, please try again.\"")
     else Option(processing.get(name)).map(Await.result(_, Duration.Inf)).getOrElse(Ok.sendFile(f).as(JSON))
