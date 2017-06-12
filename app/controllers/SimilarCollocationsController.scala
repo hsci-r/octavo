@@ -58,7 +58,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
     val qm = Json.obj("method"->"similarCollocations") ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ intermediaryTermVectorLimitQueryParameters.toJson ++ intermediaryTermVectorLocalProcessingParameters.toJson ++ finalTermVectorLimitQueryParameters.toJson ++ finalTermVectorLocalProcessingParameters.toJson ++ finalTermVectorAggregateProcessingParameters.toJson  
     getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
-      val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(termVectorQueryParsers, termVectorQueryParameters.requiredQuery)
+      val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(false, termVectorQueryParameters.requiredQuery)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
       val maxDocs2 = if (gp.maxDocs == -1) -1 else gp.maxDocs / 3
@@ -66,7 +66,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
       println("collocations: "+collocations.size)
       val futures = new ArrayBuffer[Future[LongSet]]
       val maxDocs3 = if (gp.maxDocs == -1) -1 else maxDocs2/collocations.size
-      val intermediaryLimitQuery = intermediaryTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(termVectorQueryParsers,_)._2)
+      val intermediaryLimitQuery = intermediaryTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false,_)._2)
       collocations.forEach(new LongDoubleConsumer {
         override def accept(term: Long, freq: Double) {
           val termS = termOrdToTerm(ir, term)
@@ -87,7 +87,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
         })
       println("collocations of collocations: "+collocationCollocations.size)
       val maxDocs4 = if (gp.maxDocs == -1) -1 else maxDocs2/collocationCollocations.size
-      val finalLimitQuery = finalTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(termVectorQueryParsers,_)._2)
+      val finalLimitQuery = finalTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false,_)._2)
       val thirdOrderCollocations = for (term2 <- toParallel(termOrdsToTerms(ir, collocationCollocations))) yield {
         val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,term2)), Occur.FILTER)
         for (q <- finalLimitQuery) bqb.add(q, Occur.FILTER)

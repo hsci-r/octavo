@@ -9,10 +9,10 @@ import play.api.libs.json.JsValue
 import play.api.libs.json.Json
 import scala.collection.immutable.Map
 import play.api.libs.json.JsObject
-import scala.concurrent.forkjoin.ForkJoinPool
 import scala.collection.parallel.TaskSupport
+import java.util.concurrent.ForkJoinPool
 
-case class GeneralParameters(implicit request: Request[AnyContent]) {
+case class GeneralParameters()(implicit request: Request[AnyContent]) {
   import IndexAccess.{longTaskForkJoinPool,longTaskExecutionContext,longTaskTaskSupport,shortTaskForkJoinPool,shortTaskExecutionContext,shortTaskTaskSupport}
   
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)

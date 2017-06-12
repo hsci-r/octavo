@@ -9,10 +9,8 @@ import org.apache.lucene.search.SimpleCollector
 import org.apache.lucene.search.Scorer
 import org.apache.lucene.index.LeafReaderContext
 import play.api.libs.json.Json
-import play.api.mvc.Action
 import javax.inject.Inject
 import org.apache.lucene.queryparser.classic.QueryParser
-import play.api.mvc.Controller
 import javax.inject.Named
 import services.IndexAccess
 import parameters.SumScaling
@@ -32,9 +30,10 @@ import org.apache.lucene.util.BytesRef
 import org.apache.lucene.index.TermsEnum.SeekStatus
 import java.util.Arrays
 import services.IndexAccessProvider
+import play.api.mvc.InjectedController
 
 @Singleton
-class SimilarTermsController @Inject() (iap: IndexAccessProvider) extends Controller {
+class SimilarTermsController @Inject() (iap: IndexAccessProvider) extends InjectedController {
   
   private def permutations[A](a: Seq[Seq[A]]): Seq[Seq[A]] = a.foldLeft(Seq(Seq.empty[A])) {
     (acc, next) => acc.flatMap { combo => next.map { num => combo :+ num } } 

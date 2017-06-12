@@ -128,7 +128,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
     getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       implicit val qps = documentQueryParsers
-      val (qlevel,query) = buildFinalQueryRunningSubQueries(documentQueryParsers, q.requiredQuery)
+      val (qlevel,query) = buildFinalQueryRunningSubQueries(true, q.requiredQuery)
       getStats(searcher(qlevel, SumScaling.ABSOLUTE), query, grouper, attrs, attrLengths, attrTransformer, gatherTermFreqsPerDoc)
     })
   }  

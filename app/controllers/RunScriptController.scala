@@ -9,10 +9,8 @@ import org.apache.lucene.search.SimpleCollector
 import org.apache.lucene.search.Scorer
 import org.apache.lucene.index.LeafReaderContext
 import play.api.libs.json.Json
-import play.api.mvc.Action
 import javax.inject.Inject
 import org.apache.lucene.queryparser.classic.QueryParser
-import play.api.mvc.Controller
 import javax.inject.Named
 import services.IndexAccess
 import parameters.SumScaling
@@ -31,9 +29,10 @@ import services.IndexAccessProvider
 import groovy.lang.GroovyShell
 import org.codehaus.groovy.control.customizers.ImportCustomizer
 import org.codehaus.groovy.control.CompilerConfiguration
+import play.api.mvc.InjectedController
 
 @Singleton
-class RunScriptController @Inject() (iap: IndexAccessProvider) extends Controller {
+class RunScriptController @Inject() (iap: IndexAccessProvider) extends InjectedController {
   
   private val compilerConfiguration = {
     val ic = new ImportCustomizer()

@@ -10,7 +10,6 @@ import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper
 import org.apache.lucene.analysis.core.KeywordAnalyzer
 import javax.inject.Inject
 import javax.inject.Singleton
-import play.api.Configuration
 import org.apache.lucene.search.BooleanQuery
 import org.apache.lucene.search.similarities.SimilarityBase
 import org.apache.lucene.search.similarities.BasicStats
@@ -74,9 +73,6 @@ import org.apache.lucene.store.NIOFSDirectory
 import org.apache.lucene.store.SimpleFSDirectory
 import org.apache.lucene.store.RAMDirectory
 import org.apache.lucene.store.IOContext
-import scala.concurrent.forkjoin.ForkJoinPool
-import scala.concurrent.forkjoin.ForkJoinPool.ForkJoinWorkerThreadFactory
-import scala.concurrent.forkjoin.ForkJoinWorkerThread
 import scala.concurrent.Future
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
@@ -87,7 +83,11 @@ import org.joda.time.format.ISODateTimeFormat
 import org.apache.lucene.search.BooleanClause.Occur
 import org.apache.lucene.search.BoostQuery
 import org.apache.lucene.queryparser.classic.QueryParser.Operator
+import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.ForkJoinPool.ForkJoinWorkerThreadFactory
+import java.util.concurrent.ForkJoinWorkerThread
 import scala.collection.parallel.ForkJoinTaskSupport
+import play.api.Configuration
 
 object IndexAccess {
     
@@ -102,6 +102,7 @@ object IndexAccess {
        worker
      }
    }, null, true)
+  
   val longTaskTaskSupport = new ForkJoinTaskSupport(longTaskForkJoinPool)
   val longTaskExecutionContext = ExecutionContext.fromExecutorService(longTaskForkJoinPool)
   
@@ -301,10 +302,10 @@ object IndexAccess {
 
 @Singleton
 class IndexAccessProvider @Inject() (config: Configuration) {
-  private val defaultIndex = config.getString("index.path").map(new IndexAccess(_))
+  private val defaultIndex = config.getOptional[String]("index.path").map(new IndexAccess(_))
   private val indexAccesses = {
-    val m = config.getConfig("indices")
-      .map(c => c.keys.map(k => (k, new IndexAccess(c.getString(k).get))).toMap).getOrElse(Map.empty)
+    val m = config.getOptional[Configuration]("indices")
+      .map(c => c.keys.map(k => (k, new IndexAccess(c.get[String](k)))).toMap).getOrElse(Map.empty)
     if (defaultIndex.isDefined) m.withDefaultValue(defaultIndex.get)
     else m
   }
@@ -571,7 +572,7 @@ class IndexAccess(path: String) {
     new TermInSetQuery(idTerm.field, values.asJava)
   }
   
-  private def processQueryInternal(queryIn: String)(implicit iec: ExecutionContext, qps: ThreadLocal[QueryParser], tlc: ThreadLocal[TimeLimitingCollector]): (String,Query,String) = {
+  private def processQueryInternal(exactCounts: Boolean, queryIn: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): (String,Query,String) = {
     val queryLevel = queryIn.substring(1,queryIn.indexOf('§')).toUpperCase
     val targetLevelOrig = queryIn.substring(queryIn.lastIndexOf('§') + 1, queryIn.length - 1)
     val targetLevel = if (indexMetadata.levelOrder.contains(targetLevelOrig.toUpperCase)) targetLevelOrig.toUpperCase else targetLevelOrig
@@ -583,16 +584,19 @@ class IndexAccess(path: String) {
       var curEnd = ends.next().start
       var neededEnds = queryPartStart.findAllIn(query.substring(0, curEnd)).size - 1
       while (neededEnds > 0) curEnd = ends.next().start
-      val (subQueryQueryLevel, subQuery, subQueryTargetLevel) = processQueryInternal(query.substring(firstStart.get.start, curEnd + 1))
+      val (subQueryQueryLevel, subQuery, subQueryTargetLevel) = processQueryInternal(exactCounts, query.substring(firstStart.get.start, curEnd + 1))
       val processedSubQuery = if (subQueryQueryLevel == queryLevel && subQueryTargetLevel == targetLevel) Future.successful(subQuery) else runSubQuery(subQueryQueryLevel,subQuery,subQueryTargetLevel)
       replacements += (("" + (replacements.size + 1)) -> processedSubQuery)
       query = query.substring(0, firstStart.get.start) + "MAGIC:" + replacements.size + query.substring(curEnd + 1)
       firstStart = queryPartStart.findFirstMatchIn(query)
     }
     Logger.debug(s"Query ${queryIn} rewritten to $query with replacements $replacements.")
-    val q = if (query.isEmpty) new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField) else { 
-      val q = qps.get.parse(query) 
-      if (q.isInstanceOf[BooleanQuery]) {
+    val q = if (query.isEmpty) {
+      if (exactCounts) new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField)
+      else new MatchAllDocsQuery()
+    } else {
+      val q = (if (exactCounts) documentQueryParsers.get else termVectorQueryParsers.get).parse(query) 
+      if (exactCounts && q.isInstanceOf[BooleanQuery]) {
         val bq = q.asInstanceOf[BooleanQuery]
         if (bq.clauses.asScala.forall(c => c.getOccur == Occur.MUST_NOT || (c.getQuery.isInstanceOf[BoostQuery]) && c.getQuery.asInstanceOf[BoostQuery].getBoost == 0.0f)) {
           val bqb = new BooleanQuery.Builder()
@@ -630,9 +634,8 @@ class IndexAccess(path: String) {
     }
   }
   
-  def buildFinalQueryRunningSubQueries(qps: ThreadLocal[QueryParser], query: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): (String, Query) = {
-    implicit val iqps = qps
-    val (queryLevel, q, targetLevel) = processQueryInternal(query)
+  def buildFinalQueryRunningSubQueries(exactCounts: Boolean, query: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): (String, Query) = {
+    val (queryLevel, q, targetLevel) = processQueryInternal(exactCounts, query)
     if (queryLevel==targetLevel) (targetLevel,q)
     else (targetLevel,Await.result(runSubQuery(queryLevel,q,targetLevel), Duration.Inf))
   }

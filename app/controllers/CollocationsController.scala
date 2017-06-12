@@ -49,15 +49,16 @@ class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: 
     val resultTermVectorLocalProcessingParameters = LocalTermVectorProcessingParameters("r_")
     val resultTermVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters("r_")
     val termVectors = p.get("termVectors").exists(v => v(0)=="" || v(0).toBoolean)
-    implicit val iec = gp.executionContext
-    implicit val its = gp.taskSupport
     val qm = Json.obj("method"->"collocations","termVectors"->termVectors) ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ resultTermVectorLimitQueryParameters.toJson ++ resultTermVectorLocalProcessingParameters.toJson ++ resultTermVectorAggregateProcessingParameters.toJson
+    implicit val iec = gp.executionContext
     getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
-      val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(termVectorQueryParsers, termVectorQueryParameters.requiredQuery)
+      implicit val its = gp.taskSupport
+      implicit val ifjp = gp.forkJoinPool
+      val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(false, termVectorQueryParameters.requiredQuery)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
-      val maxDocs = if (gp.maxDocs == -1 || termVectorAggregateProcessingParameters.limit == -1) -1 else if (resultTermVectorAggregateProcessingParameters.mdsDimensions>0 || resultTermVectorLocalProcessingParameters.defined || resultTermVectorAggregateProcessingParameters.defined || termVectors) gp.maxDocs / (termVectorAggregateProcessingParameters.limit + 1) else gp.maxDocs / 2
+      val maxDocs = if (gp.maxDocs == -1 || termVectorAggregateProcessingParameters.limit == -1) -1 else if (resultTermVectorAggregateProcessingParameters.dimensions>0 || resultTermVectorLocalProcessingParameters.defined || resultTermVectorAggregateProcessingParameters.defined || termVectors) gp.maxDocs / (termVectorAggregateProcessingParameters.limit + 1) else gp.maxDocs / 2
       val (md, collocationsMap) = getAggregateContextVectorForQuery(is, termVectorQuery,termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters,maxDocs)
       val collocations = new ArrayBuffer[(Long,Double)]
       collocationsMap.forEach(new LongDoubleConsumer {
@@ -65,18 +66,18 @@ class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: 
            collocations += ((k,v))
          }
       })
-      Json.obj("metadata"->md.toJson,"terms"->(if (resultTermVectorAggregateProcessingParameters.mdsDimensions>0) {
-        val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(termVectorQueryParsers,_)._2)
+      Json.obj("metadata"->md.toJson,"terms"->(if (resultTermVectorAggregateProcessingParameters.dimensions>0) {
+        val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false,_)._2)
         val ctermVectors = toParallel(collocations).map{term => 
           val termS = termOrdToTerm(ir,term._1)
           val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,termS)), Occur.FILTER)
           for (q <- resultLimitQuery) bqb.add(q, Occur.FILTER)
           getAggregateContextVectorForQuery(is, bqb.build(), resultTermVectorLocalProcessingParameters, Seq(termS), resultTermVectorAggregateProcessingParameters, maxDocs)
         }.seq
-        val mdsMatrix = mds(ctermVectors.map(_._2),resultTermVectorAggregateProcessingParameters)
+        val mdsMatrix = resultTermVectorAggregateProcessingParameters.dimensionalityReduction(ctermVectors.map(_._2),resultTermVectorAggregateProcessingParameters)
         collocations.zipWithIndex.toSeq.sortBy(-_._1._2).map{ case ((term,weight),i) => Json.obj("term"->termOrdToTerm(ir, term), "termVector"->Json.obj("metadata"->ctermVectors(i)._1.toJson,"terms"->mdsMatrix(i)), "weight"->weight)}
       } else if (resultTermVectorLocalProcessingParameters.defined || resultTermVectorAggregateProcessingParameters.defined || termVectors) {
-        val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(termVectorQueryParsers,_)._2)
+        val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false,_)._2)
         toParallel(collocations.sortBy(-_._2)).map{ case (term, weight) => {
           val termS = termOrdToTerm(ir,term)
           val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,termS)), Occur.FILTER)

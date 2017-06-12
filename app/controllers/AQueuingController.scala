@@ -1,6 +1,5 @@
 package controllers
 
-import play.api.mvc.Controller
 import play.api.mvc.Result
 import scala.concurrent.ExecutionContext
 import java.io.File
@@ -20,10 +19,11 @@ import play.api.libs.json.JsObject
 import play.api.libs.json.Json
 import play.api.Configuration
 import services.IndexMetadata
+import play.api.mvc.InjectedController
 
-abstract class AQueuingController(env: Environment, configuration: Configuration) extends Controller {
+abstract class AQueuingController(env: Environment, configuration: Configuration) extends InjectedController {
   
-  private final val version = configuration.getString("app.version") 
+  private final val version = configuration.get[String]("app.version") 
   
   private val tmpDir = {
     val tmpDir = env.getFile("tmp")

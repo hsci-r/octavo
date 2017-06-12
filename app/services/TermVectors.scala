@@ -33,6 +33,19 @@ import scala.collection.mutable.ArrayBuffer
 import scala.collection.parallel.TaskSupport
 import scala.collection.parallel.ParSeq
 import scala.collection.parallel.ParIterable
+import com.jujutsu.tsne.barneshut.ParallelBHTsne
+import com.jujutsu.tsne.barneshut.TSneConfiguration
+import com.jujutsu.utils.TSneUtils
+import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.ExecutorService
+import java.lang.invoke.MethodHandles
+import com.jujutsu.tsne.barneshut.BHTSne
+import java.lang.invoke.MethodType
+import org.deeplearning4j.plot.BarnesHutTsne
+import org.nd4j.linalg.factory.Nd4j
+import org.nd4j.linalg.api.buffer.DataBuffer
+import org.nd4j.linalg.api.buffer.util.DataTypeUtil
+import org.nd4j.linalg.api.buffer.util.AllocUtil
 
 object TermVectors {
   
@@ -237,7 +250,55 @@ object TermVectors {
     maxHeap.toMap
   }
   
-  def mds(termVectors: Iterable[LongDoubleMap], rtp: AggregateTermVectorProcessingParameters): Array[Array[Double]] = {
+  private val f = classOf[ParallelBHTsne].getDeclaredField("gradientPool")
+  private val f2 = classOf[ParallelBHTsne].getDeclaredField("gradientCalculationPool")
+  f.setAccessible(true)
+  f2.setAccessible(true)
+    
+  private val sr = {
+    val il = classOf[MethodHandles.Lookup].getDeclaredField("IMPL_LOOKUP")
+    il.setAccessible(true)
+    val lkp: MethodHandles.Lookup = il.get(null).asInstanceOf[MethodHandles.Lookup]
+    lkp.findSpecial(classOf[BHTSne], "run",MethodType.methodType(classOf[Array[Array[Double]]],classOf[TSneConfiguration]),classOf[ParallelBHTsne])
+  }
+  
+  def tsne(termVectors: Iterable[LongDoubleMap], rtp: AggregateTermVectorProcessingParameters)(implicit fjp: ForkJoinPool, ies: ExecutorService): Array[Array[Double]] = {
+    val tvms = termVectors.toSeq
+    val matrix = new Array[Array[Double]](tvms.size)
+    for (i <- 0 until matrix.length)
+      matrix(i) = new Array[Double](matrix.length)
+    for (i <- 0 until matrix.length)
+      for (j <- i + 1 until matrix.length) {
+        val dis = rtp.distance(tvms(i), tvms(j))
+        matrix(i)(j) = dis
+        matrix(j)(i) = dis
+      }
+/*    AllocUtil.setAllocationModeForContext(DataBuffer.AllocationMode.HEAP)
+    DataTypeUtil.setDTypeForContext(DataBuffer.Type.DOUBLE)
+    val tsne = new BarnesHutTsne.Builder()
+      .setMaxIter(rtp.tsneMaxIter)
+      .theta(rtp.tsneTheta)
+      .normalize(true)
+      .learningRate(500)
+      .useAdaGrad(false)
+      .numDimension(rtp.dimensions)
+      .build()
+    tsne.fit(Nd4j.create(matrix))
+    val rd = tsne.getData
+    val rm = new Array[Array[Double]](rd.rows)
+    for (i <- 0 until rm.length) {
+      rm(i) = new Array[Double](rd.columns)
+      for (j <- 0 until rd.columns) rm(i)(j) = rd.getDouble(i, j)
+    }
+    println(rm.toSeq.map(_.toSeq))
+    rm*/
+    val tsne = new BHTSne()
+    tsne.tsne(TSneUtils.buildConfig(matrix, rtp.dimensions, matrix.length, Math.min(matrix.length / 3 - 1, rtp.tsnePerplexity), rtp.tsneMaxIter, rtp.tsneUsePCA, rtp.tsneTheta, true))
+    /*f.set(tsne, fjp)
+    f2.set(tsne, ies)
+    sr.invoke(tsne, TSneUtils.buildConfig(matrix, rtp.dimensions, matrix.length, Math.min(matrix.length / 3 - 1, rtp.tsnePerplexity), rtp.tsneMaxIter, rtp.tsneUsePCA, rtp.tsneTheta, true))*/
+  }
+  def mds(classical: Boolean, termVectors: Iterable[LongDoubleMap], rtp: AggregateTermVectorProcessingParameters): Array[Array[Double]] = {
     val tvms = termVectors.toSeq
     val matrix = new Array[Array[Double]](tvms.size)
     for (i <- 0 until matrix.length)
@@ -249,7 +310,7 @@ object TermVectors {
         matrix(j)(i) = dis
       }
     }
-    return MDSJ.stressMinimization(matrix, rtp.mdsDimensions).transpose
+    return (if (classical) MDSJ.classicalScaling(matrix, rtp.dimensions) else MDSJ.stressMinimization(matrix, rtp.dimensions)).transpose
   }
   
   def termOrdMapToTermMap(ir: IndexReader, m: LongDoubleMap)(implicit ia: IndexAccess): collection.Map[String,Double] = {

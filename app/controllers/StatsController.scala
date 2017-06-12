@@ -9,10 +9,8 @@ import org.apache.lucene.search.SimpleCollector
 import org.apache.lucene.search.Scorer
 import org.apache.lucene.index.LeafReaderContext
 import play.api.libs.json.Json
-import play.api.mvc.Action
 import javax.inject.Inject
 import org.apache.lucene.queryparser.classic.QueryParser
-import play.api.mvc.Controller
 import javax.inject.Named
 import services.IndexAccess
 import parameters.SumScaling
@@ -28,9 +26,10 @@ import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 import services.IndexAccessProvider
+import play.api.mvc.InjectedController
 
 @Singleton
-class StatsController @Inject() (iap: IndexAccessProvider) extends Controller {
+class StatsController @Inject() (iap: IndexAccessProvider) extends InjectedController {
   
   var dft: TDigest = null
   var ttft: TDigest = null

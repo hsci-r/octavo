@@ -8,7 +8,7 @@ import org.apache.lucene.index.DocValues
 import services.IndexAccess
 import play.api.libs.json.Json
 
-case class QueryReturnParameters(implicit request: Request[AnyContent], ia: IndexAccess) {
+case class QueryReturnParameters()(implicit request: Request[AnyContent], ia: IndexAccess) {
   import ia._
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   val termVectorFields: Seq[String] = p.get("field").getOrElse(Seq.empty).filter(ia.indexMetadata.termVectorFields.contains(_))

@@ -25,12 +25,21 @@ case class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: 
   }
   val limitOpt = p.get(prefix+"limit"+suffix).map(_(0).toInt)
   val limit: Int = limitOpt.getOrElse(20)
-  private val mdsDimensionsOpt = p.get("mdsDimensions").map(_(0).toInt)
+  private val dimensionsOpt = p.get(prefix+"dimensions"+suffix).map(_(0).toInt)
   /** amount of dimensions for dimensionally reduced term vector coordinates */
-  val mdsDimensions: Int = mdsDimensionsOpt.getOrElse(0)    
+  val dimensions: Int = dimensionsOpt.getOrElse(0)
+  
+  private val dimensionalityReductionOpt = p.get(prefix+"dimReduct"+suffix).map(v => DimensionalityReduction.withName(v(0).toUpperCase))
+  val dimensionalityReduction: DimensionalityReduction = dimensionalityReductionOpt.getOrElse(DimensionalityReduction.SMDS)
+  
+  val tsnePerplexity: Double = 20.0
+  val tsneMaxIter: Int = 1000
+  val tsneUsePCA: Boolean = true
+  val tsneTheta: Double = 0.5
+  
   private val distanceOpt = p.get("distance").map(v => DistanceMetric.withName(v(0).toUpperCase))
   /** distance metric used for term vector comparisons */
   val distance: DistanceMetric = distanceOpt.getOrElse(DistanceMetric.COSINE)
-  val defined: Boolean = sumScalingStringOpt.isDefined || minSumFreqOpt.isDefined || maxSumFreqOpt.isDefined || limitOpt.isDefined || mdsDimensionsOpt.isDefined || distanceOpt.isDefined
-  def toJson(): JsObject = Json.obj(prefix+"smoothing"+suffix->smoothing,prefix+"sumScaling"+suffix->sumScalingString,prefix+"minSumFreq"+suffix->minSumFreq,prefix+"maxSumFreq"+suffix->maxSumFreq,prefix+"limit"+suffix->limit, prefix+"mdsDimensions"+suffix->mdsDimensions, prefix+"distance"+suffix->distance.entryName) 
+  val defined: Boolean = sumScalingStringOpt.isDefined || minSumFreqOpt.isDefined || maxSumFreqOpt.isDefined || limitOpt.isDefined || dimensionsOpt.isDefined || distanceOpt.isDefined
+  def toJson(): JsObject = Json.obj(prefix+"dimReduct"+suffix->dimensionalityReduction.entryName,prefix+"smoothing"+suffix->smoothing,prefix+"sumScaling"+suffix->sumScalingString,prefix+"minSumFreq"+suffix->minSumFreq,prefix+"maxSumFreq"+suffix->maxSumFreq,prefix+"limit"+suffix->limit, prefix+"dimensions"+suffix->dimensions, prefix+"distance"+suffix->distance.entryName) 
 }
