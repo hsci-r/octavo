@@ -36,7 +36,7 @@ libraryDependencies ++= Seq(
   "org.apache.lucene" % "lucene-core" % "6.6.0",
   "org.apache.lucene" % "lucene-analyzers-common" % "6.6.0",
   "fi.seco" %% "lucene-morphologicalanalyzer" % "1.1.2",
-  "fi.seco" %% "lucene-fstordtermvectorscodec" % "1.3.0",
+  "fi.seco" %% "lucene-fstordtermvectorscodec" % "1.4.0",
   "org.apache.lucene" % "lucene-queryparser" % "6.6.0",
   "org.apache.lucene" % "lucene-highlighter" % "6.6.0",
   "com.koloboke" % "koloboke-api-jdk8" % "1.0.0",
