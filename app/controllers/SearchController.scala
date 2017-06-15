@@ -136,6 +136,11 @@ import org.apache.lucene.search.uhighlight.DefaultPassageFormatter
 import services.ExtendedUnifiedHighlighter
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource
 import services.IndexAccessProvider
+import java.text.BreakIterator
+import java.text.CharacterIterator
+import java.text.StringCharacterIterator
+import scala.collection.Searching
+import parameters.ContextLevel
 
 /**
  * This controller creates an `Action` to handle HTTP requests to the
@@ -145,10 +150,6 @@ import services.IndexAccessProvider
 class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
   
   import TermVectors._
-  
-/*  private def counts[T](xs: TraversableOnce[T]): Map[T, Int] = {
-    xs.foldLeft(HashMap.empty[T, Int].withDefaultValue(0))((acc, x) => { acc(x) += 1; acc}).toMap
-  } */
   
   def search(index: String) = Action { implicit request =>
     implicit val ia = iap(index)
@@ -297,6 +298,9 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
       } else null
       val matchesByDocs = if (srp.returnMatches) {
         val highlighter = new ExtendedUnifiedHighlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField)) {
+          
+          override def getBreakIterator(field: String): BreakIterator = srp.contextLevel(srp.contextExpand)
+          
           override def getOffsetSource(field: String): OffsetSource = {
             val fieldInfo = getFieldInfo(field)
             if (fieldInfo != null) {

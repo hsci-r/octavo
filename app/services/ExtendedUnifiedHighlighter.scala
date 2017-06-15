@@ -20,4 +20,5 @@ class ExtendedUnifiedHighlighter(is: IndexSearcher, analyzer: Analyzer) extends 
   
   def highlight(field: String, query: Query, docIds: Array[Int], maxPassages: Int): Array[Array[String]] = highlightFieldsAsObjects(Array(field), query, docIds, Array(maxPassages)).get(field).map(o => o.asInstanceOf[Array[String]])
   
+  setMaxLength(Int.MaxValue - 1)
 }
