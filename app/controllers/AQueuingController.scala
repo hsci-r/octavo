@@ -20,20 +20,24 @@ import play.api.libs.json.Json
 import play.api.Configuration
 import services.IndexMetadata
 import play.api.mvc.InjectedController
+import org.apache.commons.codec.digest.DigestUtils
 
 abstract class AQueuingController(env: Environment, configuration: Configuration) extends InjectedController {
   
   private final val version = configuration.get[String]("app.version") 
   
-  private val tmpDir = {
-    val tmpDir = env.getFile("tmp")
-    tmpDir.mkdir()
-    for (tf <- tmpDir.listFiles()) // clean up calls that were aborted when the application shut down/crashed
-      if (tf.isFile && tf.getName.startsWith("result-") && tf.getName.endsWith(".json") && tf.length == 0) {
-        Logger.warn("Cleaning up aborted call "+tf)
-        tf.delete()
-      }
-    tmpDir.getPath
+  private val mtmpDir = {
+    val mtmpDir = env.getFile("tmp")
+    for (i <- ('0' to '9') ++ ('a' to 'f');j <- ('0' to '9') ++ ('a' to 'f')) {
+      val tmpDir = new File(mtmpDir.getPath + '/'+i+'/'+j)
+      tmpDir.mkdirs()
+      for (tf <- tmpDir.listFiles()) // clean up calls that were aborted when the application shut down/crashed
+        if (tf.isFile && tf.getName.startsWith("result-") && tf.getName.endsWith(".json") && tf.length == 0) {
+          Logger.warn("Cleaning up aborted call "+tf)
+          tf.delete()
+        }
+    }
+    mtmpDir.getPath
   }
   
   private def getStackTraceAsString(t: Throwable) = {
@@ -41,8 +45,6 @@ abstract class AQueuingController(env: Environment, configuration: Configuration
     t.printStackTrace(new PrintWriter(sw))
     sw.toString
   }
-  
-  val sha1md = java.security.MessageDigest.getInstance("SHA-1")
   
   val processing = new ConcurrentHashMap[String,Future[Result]]
   
@@ -55,7 +57,8 @@ abstract class AQueuingController(env: Environment, configuration: Configuration
   protected def getOrCreateResult(index: IndexMetadata, qm: JsObject, force: Boolean, pretty: Boolean, call: () => JsValue)(implicit ec: ExecutionContext): Result = {
     val callId = index.indexName + ':' + index.indexVersion + ':' + qm.toString
     Logger.info(callId)
-    val name = play.api.libs.Codecs.sha1(sha1md.digest(callId.getBytes))
+    val name = DigestUtils.sha256Hex(callId)
+    val tmpDir = mtmpDir+'/'+name.charAt(0)+'/'+name.charAt(1)
     val tf = new File(tmpDir+"/result-"+name+".json")
     if (force) tf.delete()
     if (tf.createNewFile()) {
