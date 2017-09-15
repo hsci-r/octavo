@@ -142,10 +142,6 @@ import java.text.StringCharacterIterator
 import scala.collection.Searching
 import parameters.ContextLevel
 
-/**
- * This controller creates an `Action` to handle HTTP requests to the
- * application's home page.
- */
 @Singleton
 class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
   
@@ -163,12 +159,13 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
     val ctvpa = AggregateTermVectorProcessingParameters("r_")
     val termVectors = p.get("termVectors").exists(v => v(0)=="" || v(0).toBoolean)
     implicit val iec = gp.executionContext
-    val qm = Json.obj("method"->"search","termVector"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ ctvpl.toJson ++ ctvpa.toJson
-    getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
+    val qm = Json.obj("termVector"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ ctvpl.toJson ++ ctvpa.toJson
+    getOrCreateResult("search",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       implicit val ifjp = gp.forkJoinPool
       val (queryLevel,query) = buildFinalQueryRunningSubQueries(true, qp.requiredQuery)
       Logger.debug(f"Final query: $query%s, level: $queryLevel%s")
+      val ql = ia.indexMetadata.levelMap(queryLevel)
       val is = searcher(queryLevel,srp.sumScaling)
       val ir = is.getIndexReader
       var total = 0
@@ -180,33 +177,38 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
       val (we, normTerms) = if (srp.returnNorms)
         (query.createWeight(is, true), extractContentTermsFromQuery(query))
       else (null, null)
+      val storedSingularFields = srp.fields.filter(ql.storedSingularFields.contains(_))
+      val storedMultiFields = srp.fields.filter(ql.storedMultiFields.contains(_))
+      val termVectorFields = srp.fields.filter(ql.termVectorFields.contains(_))
+      val sortedDocValuesFields = srp.fields.filter(ql.sortedDocValuesFields.contains(_))
+      val numericDocValuesFields = srp.fields.filter(ql.numericDocValuesFields.contains(_))
       val processDocFields = (context: LeafReaderContext, doc: Int, sdvs: Map[String,SortedDocValues], ndvs: Map[String,NumericDocValues]) => {
         val fields = new HashMap[String, JsValue]
         for ((field, dv) <- sdvs) fields += ((field -> {
           val value = dv.get(doc).utf8ToString
-          if (indexMetadata.jsonFields.contains(field)) 
+          if (indexMetadata.levelMap(queryLevel).jsonFields.contains(field)) 
             Json.parse(value)
           else Json.toJson(value)
         }))
         for ((field, dv) <- ndvs) fields += ((field -> Json.toJson(dv.get(doc))))
-        val document = if (srp.returnMatches || !srp.storedSingularFields.isEmpty || !srp.storedMultiFields.isEmpty) {
+        val document = if (srp.returnMatches || !storedSingularFields.isEmpty || !storedMultiFields.isEmpty) {
           val fields = new java.util.HashSet[String]
-          for (field <- srp.storedSingularFields) fields.add(field)
-          for (field <- srp.storedMultiFields) fields.add(field)
+          for (field <- storedSingularFields) fields.add(field)
+          for (field <- storedMultiFields) fields.add(field)
           if (srp.returnMatches) fields.add(indexMetadata.contentField)
           context.reader.document(doc, fields)
         } else null
-        for (field <- srp.storedSingularFields) fields += ((field -> {
+        for (field <- storedSingularFields) fields += ((field -> {
           val value = document.get(field)
-          if (indexMetadata.jsonFields.contains(field)) 
+          if (indexMetadata.levelMap(queryLevel).jsonFields.contains(field)) 
             Json.parse(value)
           else Json.toJson(value)
         }))
-        for (field <- srp.storedMultiFields) fields += ((field -> 
-          (if (indexMetadata.jsonFields.contains(field)) Json.toJson(document.getValues(field).map(Json.parse(_))) 
+        for (field <- storedMultiFields) fields += ((field -> 
+          (if (indexMetadata.levelMap(queryLevel).jsonFields.contains(field)) Json.toJson(document.getValues(field).map(Json.parse(_))) 
           else Json.toJson(document.getValues(field)))
         ))
-        for (field <- srp.termVectorFields) {
+        for (field <- termVectorFields) {
           val ft = context.reader.getTermVector(doc, field)
           if (ft != null) {
             val fte = ft.iterator()
@@ -219,9 +221,9 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
             fields += ((field -> Json.toJson(map)))
           }
         }
-        val cv = if (termVectors || ctvpa.defined || ctvpl.defined || ctvpa.dimensions > 0 || ctv.query.isDefined) getTermVectorForDocument(ir, doc, ctvpl, ctvpa) else null 
+        val cv = if (termVectors || ctv.query.isDefined) getTermVectorForDocument(ir, doc, ctvpl, ctvpa) else null 
         if (ctv.query.isDefined)
-          fields += (("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._2))))
+          fields += (("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._2,ctvpa))))
         if (srp.returnNorms) {
           fields += (("explanation" -> Json.toJson(we.explain(context, doc).toString)))
         fields += (("norms" -> Json.toJson(normTerms.map(t => Json.toJson(Map("term"->t, "docFreq"->(""+ir.docFreq(new Term(indexMetadata.contentField, t))), "totalTermFreq"->(""+ir.totalTermFreq(new Term(indexMetadata.contentField,t)))))))))
@@ -263,8 +265,8 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
         override def doSetNextReader(context: LeafReaderContext) = {
           this.context = context
           if (srp.limit == -1) {
-            this.sdvs = srp.sortedDocValuesFields.map(f => (f -> DocValues.getSorted(context.reader, f))).toMap
-            this.ndvs = srp.numericDocValuesFields.map(f => (f -> DocValues.getNumeric(context.reader, f))).toMap
+            this.sdvs = sortedDocValuesFields.map(f => (f -> DocValues.getSorted(context.reader, f))).toMap
+            this.ndvs = numericDocValuesFields.map(f => (f -> DocValues.getNumeric(context.reader, f))).toMap
             
           }
         }
@@ -274,8 +276,8 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
       if (srp.limit!= -1) {
         val dvs = new HashMap[Int,(Map[String,SortedDocValues],Map[String,NumericDocValues])]
         for (lr <- ir.leaves.asScala) {
-          val sdvs = srp.sortedDocValuesFields.map(f => (f -> DocValues.getSorted(lr.reader, f))).toMap
-          val ndvs = srp.numericDocValuesFields.map(f => (f -> DocValues.getNumeric(lr.reader, f))).toMap
+          val sdvs = sortedDocValuesFields.map(f => (f -> DocValues.getSorted(lr.reader, f))).toMap
+          val ndvs = numericDocValuesFields.map(f => (f -> DocValues.getNumeric(lr.reader, f))).toMap
           dvs += ((lr.docBase, (sdvs, ndvs)))          
         }
         maxHeap.foreach(p =>
@@ -284,7 +286,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
             val doc = p._1 - lr.docBase
             val (cdocFields, cdocVectors) = processDocFields(lr, doc, sdvs, ndvs)
             if (ctv.query.isDefined)
-              cdocFields += (("distance" -> Json.toJson(ctvpa.distance(cdocVectors, compareTermVector._2))))
+              cdocFields += (("distance" -> Json.toJson(ctvpa.distance(cdocVectors, compareTermVector._2,ctvpa))))
             docFields.put(p._1, cdocFields)
             if (cdocVectors != null) docVectorsForMDS.put(p._1, cdocVectors)
         })

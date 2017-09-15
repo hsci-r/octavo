@@ -48,18 +48,18 @@ class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, env
     val meaningfulTerms: Int = p.get("meaningfulTerms").map(_(0).toInt).getOrElse(0)
     implicit val tlc = gp.tlc
     implicit val ec = gp.executionContext
-    val qm = Json.obj("method"->"termVectorDiff","attr"->attr,"attrLength"->attrLength,"meaningfulTerms"->meaningfulTerms) ++ gp.toJson ++ tvq1.toJson ++ tvq2.toJson ++ tvpl.toJson ++ tvpa.toJson
-    getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
+    val qm = Json.obj("attr"->attr,"attrLength"->attrLength,"meaningfulTerms"->meaningfulTerms) ++ gp.toJson ++ tvq1.toJson ++ tvq2.toJson ++ tvpl.toJson ++ tvpa.toJson
+    getOrCreateResult("termVectorDiff",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       val (qlevel1,termVector1Query) = buildFinalQueryRunningSubQueries(false, tvq1.requiredQuery)
       val (qlevel2,termVector2Query) = buildFinalQueryRunningSubQueries(false, tvq2.requiredQuery)
-      val tvm1f = Future { getGroupedAggregateContextVectorsForQuery(searcher(qlevel1, SumScaling.ABSOLUTE), termVector1Query,tvpl,extractContentTermsFromQuery(termVector1Query),attr,attrLength,tvpa,gp.maxDocs/2) }
-      val tvm2f = Future { getGroupedAggregateContextVectorsForQuery(searcher(qlevel2, SumScaling.ABSOLUTE), termVector2Query,tvpl,extractContentTermsFromQuery(termVector2Query),attr,attrLength,tvpa,gp.maxDocs/2) }
+      val tvm1f = Future { getGroupedAggregateContextVectorsForQuery(ia.indexMetadata.levelMap(qlevel1),searcher(qlevel1, SumScaling.ABSOLUTE), termVector1Query,tvpl,extractContentTermsFromQuery(termVector1Query),attr,attrLength,tvpa,gp.maxDocs/2) }
+      val tvm2f = Future { getGroupedAggregateContextVectorsForQuery(ia.indexMetadata.levelMap(qlevel2),searcher(qlevel2, SumScaling.ABSOLUTE), termVector2Query,tvpl,extractContentTermsFromQuery(termVector2Query),attr,attrLength,tvpa,gp.maxDocs/2) }
       val tvm1 = Await.result(tvm1f, Duration.Inf)
       val tvm2 = Await.result(tvm2f, Duration.Inf)
       val obj = (tvm1.keySet ++ tvm2.keySet).map(key => {
         var map = Map("attr"->Json.toJson(key),
             "distance"->(if (!tvm1.contains(key) || !tvm2.contains(key)) JsNull else {
-              val distance = tvpa.distance(tvm1(key).cv,tvm2(key).cv)
+              val distance = tvpa.distance(tvm1(key).cv,tvm2(key).cv, tvpa)
               if (distance.isNaN) JsNull else Json.toJson(distance)
             }), 
             "df1"->Json.toJson(tvm1.get(key).map(_.docFreq).getOrElse(0l)),"df2"->Json.toJson(tvm2.get(key).map(_.docFreq).getOrElse(0l)),"tf1"->Json.toJson(tvm1.get(key).map(_.totalTermFreq).getOrElse(0l)),"tf2"->Json.toJson(tvm2.get(key).map(_.totalTermFreq).getOrElse(0l)))

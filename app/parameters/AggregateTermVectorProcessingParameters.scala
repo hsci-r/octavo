@@ -40,6 +40,13 @@ case class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: 
   private val distanceOpt = p.get("distance").map(v => DistanceMetric.withName(v(0).toUpperCase))
   /** distance metric used for term vector comparisons */
   val distance: DistanceMetric = distanceOpt.getOrElse(DistanceMetric.COSINE)
-  val defined: Boolean = sumScalingStringOpt.isDefined || minSumFreqOpt.isDefined || maxSumFreqOpt.isDefined || limitOpt.isDefined || dimensionsOpt.isDefined || distanceOpt.isDefined
-  def toJson(): JsObject = Json.obj(prefix+"dimReduct"+suffix->dimensionalityReduction.entryName,prefix+"smoothing"+suffix->smoothing,prefix+"sumScaling"+suffix->sumScalingString,prefix+"minSumFreq"+suffix->minSumFreq,prefix+"maxSumFreq"+suffix->maxSumFreq,prefix+"limit"+suffix->limit, prefix+"dimensions"+suffix->dimensions, prefix+"distance"+suffix->distance.entryName) 
+  
+  /** are vectors normalized before distance calculation? */
+  val normalize: Boolean = p.get("normalize").exists(v => v(0)=="" || v(0).toBoolean)
+  /** are vectors centered before distance calculation? */
+  val center: Boolean = p.get("center").exists(v => v(0)=="" || v(0).toBoolean)
+  /** does distance calculation only operate on dimensions where both vectors have a value? (does not apply to DICE/JACCARD metrics)*/
+  val onlyCommon: Boolean = p.get("onlyCommon").exists(v => v(0)=="" || v(0).toBoolean)
+  
+  def toJson(): JsObject = Json.obj(prefix+"normalize"+suffix->normalize,prefix+"center"+suffix->center,prefix+"onlyCommon"+suffix->onlyCommon,prefix+"dimReduct"+suffix->dimensionalityReduction.entryName,prefix+"smoothing"+suffix->smoothing,prefix+"sumScaling"+suffix->sumScalingString,prefix+"minSumFreq"+suffix->minSumFreq,prefix+"maxSumFreq"+suffix->maxSumFreq,prefix+"limit"+suffix->limit, prefix+"dimensions"+suffix->dimensions, prefix+"distance"+suffix->distance.entryName) 
 }

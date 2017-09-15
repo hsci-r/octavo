@@ -54,8 +54,8 @@ abstract class AQueuingController(env: Environment, configuration: Configuration
     pw.close()
   }
 
-  protected def getOrCreateResult(index: IndexMetadata, qm: JsObject, force: Boolean, pretty: Boolean, call: () => JsValue)(implicit ec: ExecutionContext): Result = {
-    val callId = index.indexName + ':' + index.indexVersion + ':' + qm.toString
+  protected def getOrCreateResult(method: String, index: IndexMetadata, parameters: JsObject, force: Boolean, pretty: Boolean, call: () => JsValue)(implicit ec: ExecutionContext): Result = {
+    val callId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.toString
     Logger.info(callId)
     val name = DigestUtils.sha256Hex(callId)
     val tmpDir = mtmpDir+'/'+name.charAt(0)+'/'+name.charAt(1)
@@ -67,7 +67,7 @@ abstract class AQueuingController(env: Environment, configuration: Configuration
       val future = Future {
         val startTime = System.currentTimeMillis
         val resultsJson = call() 
-        val json = Json.obj("queryMetadata"->Json.obj("parameters"->qm,"index"->Json.obj("name"->index.indexName,"version"->index.indexVersion),"octavoVersion"->version,"timeTakenMS"->(System.currentTimeMillis()-startTime)),"results"->resultsJson)
+        val json = Json.obj("queryMetadata"->Json.obj("method"->method,"parameters"->parameters,"index"->Json.obj("name"->index.indexName,"version"->index.indexVersion),"octavoVersion"->version,"timeTakenMS"->(System.currentTimeMillis()-startTime)),"results"->resultsJson)
         if (pretty)
           Json.prettyPrint(json)
         else

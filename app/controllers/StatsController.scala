@@ -28,9 +28,12 @@ import scala.concurrent.duration.Duration
 import services.IndexAccessProvider
 import play.api.mvc.InjectedController
 import scala.collection.mutable.HashMap
+import play.api.Environment
+import play.api.Configuration
+import parameters.GeneralParameters
 
 @Singleton
-class StatsController @Inject() (iap: IndexAccessProvider) extends InjectedController {
+class StatsController @Inject() (iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
   
   var dft = new HashMap[String,TDigest]
   var ttft = new HashMap[String,TDigest]
@@ -38,7 +41,7 @@ class StatsController @Inject() (iap: IndexAccessProvider) extends InjectedContr
   private def calc(level: String)(implicit ia: IndexAccess): Unit = {
     synchronized {
       import IndexAccess._
-      if (dft == null) {
+      if (!dft.contains(level)) {
         val ir = ia.reader(level)
         val dft = TDigest.createDigest(100)
         val ttft = TDigest.createDigest(100)
@@ -56,22 +59,23 @@ class StatsController @Inject() (iap: IndexAccessProvider) extends InjectedContr
     }
   }
   
-  def stats(index: String, from: Double, to: Double, byS: String, levelO: Option[String]) = Action {
-    val by = byS.toDouble
+  def stats(index: String, from: Double, to: Double, byS: String, levelO: Option[String]) = Action { implicit request =>
     implicit val ia = iap(index)
+    import ia._
+    val gp = GeneralParameters()
     val level = levelO.getOrElse(ia.indexMetadata.defaultLevel.id)
-    if (!dft.contains(level)) calc(level)
-    val formatString = "%."+(byS.length-2)+"f"
-    Ok(Json.prettyPrint(Json.obj(
-        "level"->level,
-        "from"->from,
-        "to"->to,
-        "by"->by,
+    val qm = Json.obj("from"->from,"to"->to,"by"->byS,"level"->level)
+    val by = byS.toDouble
+    getOrCreateResult("stats", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
+      if (!dft.contains(level)) calc(level)
+      val formatString = "%."+(byS.length-2)+"f"
+      Json.obj(
         "totalDocs" -> ia.reader(level).getDocCount(ia.indexMetadata.contentField),
         "totalTerms" -> ia.reader(level).leaves.get(0).reader().terms(ia.indexMetadata.contentField).size(),
         "totalDocFreq" -> ia.reader(level).getSumDocFreq(ia.indexMetadata.contentField),
         "totalTermFreq" -> ia.reader(level).getSumTotalTermFreq(ia.indexMetadata.contentField),
         "termFreqQuantiles"-> (from to to by by).map(q => Json.obj("quantile"->(formatString format q), "freq" -> ttft(level).quantile(Math.min(q, 1.0)).toLong)),
-        "docFreqQuantiles" -> (from to to by by).map(q => Json.obj("quantile"->(formatString format q), "freq" -> dft(level).quantile(Math.min(q, 1.0)).toLong)))))
-  }  
+        "docFreqQuantiles" -> (from to to by by).map(q => Json.obj("quantile"->(formatString format q), "freq" -> dft(level).quantile(Math.min(q, 1.0)).toLong)))
+      })
+  }
 }

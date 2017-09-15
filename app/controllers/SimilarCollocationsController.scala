@@ -55,8 +55,8 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
     val finalTermVectorLimitQueryParameters = QueryParameters("f_")
     val finalTermVectorLocalProcessingParameters = LocalTermVectorProcessingParameters("f_")
     val finalTermVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters("f_")
-    val qm = Json.obj("method"->"similarCollocations") ++ gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ intermediaryTermVectorLimitQueryParameters.toJson ++ intermediaryTermVectorLocalProcessingParameters.toJson ++ finalTermVectorLimitQueryParameters.toJson ++ finalTermVectorLocalProcessingParameters.toJson ++ finalTermVectorAggregateProcessingParameters.toJson  
-    getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
+    val qm = gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ intermediaryTermVectorLimitQueryParameters.toJson ++ intermediaryTermVectorLocalProcessingParameters.toJson ++ finalTermVectorLimitQueryParameters.toJson ++ finalTermVectorLocalProcessingParameters.toJson ++ finalTermVectorAggregateProcessingParameters.toJson  
+    getOrCreateResult("similarCollocations",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(false, termVectorQueryParameters.requiredQuery)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
@@ -101,7 +101,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
       val cmaxHeap = PriorityQueue.empty[(String,Double)](ordering)
       val dmaxHeap = PriorityQueue.empty[(String,Double)](ordering)
       var total = 0
-      val termsToScores = thirdOrderCollocations.filter(!_._2.isEmpty).map(p => (p._1,Distance.cosineSimilarity(collocations,p._2),Distance.diceSimilarity(collocations,p._2)))
+      val termsToScores = thirdOrderCollocations.filter(!_._2.isEmpty).map(p => (p._1,Distance.cosineSimilarity(collocations,p._2,finalTermVectorAggregateProcessingParameters.onlyCommon),Distance.diceSimilarity(collocations,p._2)))
       for ((term,cscore,dscore) <- termsToScores.seq) {
         if (cscore != 0.0 || dscore != 0.0) total+=1
         if (finalTermVectorAggregateProcessingParameters.limit == -1 || total<=finalTermVectorAggregateProcessingParameters.limit) { 

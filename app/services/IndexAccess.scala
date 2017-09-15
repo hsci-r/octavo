@@ -204,7 +204,6 @@ object IndexAccess {
   }
   
   private implicit def termsEnumToBytesRefAndTotalTermFreqIterator(te: TermsEnum): Iterator[(BytesRef,Long)] = TermsEnumToBytesRefAndTotalTermFreqIterator(te)
-
   
   private case class TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te: TermsEnum) extends Iterator[(BytesRef,Int,Long)] {
     var br: BytesRef = te.next()
@@ -331,9 +330,51 @@ case class LevelMetadata(
   id: String,
   term: String,
   index: String,
-  preload: Boolean) {
+  preload: Boolean,
+  textFields: Map[String,String],
+  intPointFields: Map[String,String],
+  longPointFields: Map[String,String],
+  termVectorFields: Map[String,String],
+  sortedDocValuesFields: Map[String,String],
+  storedSingularFields: Map[String,String],
+  storedMultiFields: Map[String,String],
+  numericDocValuesFields: Map[String,String],
+  jsonFields: Map[String,String]) {
+  import IndexAccess._
   val termAsTerm = new Term(term,"")
-  def toJson = Json.obj("id"->id,"term"->term,"index"->index,"preload"->preload)
+  def toJson = Json.obj(
+    "id"->id,
+    "term"->term,
+    "index"->index,
+    "preload"->preload,
+    "textFields"->textFields,
+    "intPointFields"->intPointFields,
+    "longPointFields"->longPointFields,
+    "termVectorFields"->termVectorFields,
+    "sortedDocValuesFields"->sortedDocValuesFields,
+    "storedSingularFields"->storedSingularFields,
+    "storedMultiFields"->storedMultiFields,
+    "numericDocValuesFields"->numericDocValuesFields
+  )
+  val levelType: QueryByType = if (numericDocValuesFields.contains(term)) QueryByType.NUMERIC else QueryByType.SORTED
+  def getter(lr: LeafReader, field: String): (Int) => Iterable[String] = {
+    if (storedSingularFields.contains(field) || storedMultiFields.contains(field)) {
+      val fieldS = Collections.singleton(field)
+      return (doc: Int) => lr.document(doc,fieldS).getValues(field).toSeq
+    }
+    if (sortedDocValuesFields.contains(field)) {
+      val dvs = DocValues.getSorted(lr, field)
+      return (doc: Int) => Seq(dvs.get(doc).utf8ToString())
+    }
+    if (numericDocValuesFields.contains(field)) {
+      val dvs = DocValues.getNumeric(lr, field)
+      return (doc: Int) => Seq(""+dvs.get(doc))
+    }
+    if (termVectorFields.contains(field))
+      return (doc: Int) => lr.getTermVector(doc, field).asBytesRefIterable().map(_.utf8ToString)
+    return null
+  }
+  
 }
 
 case class IndexMetadata(
@@ -344,16 +385,7 @@ case class IndexMetadata(
   contentTokensField: String,
   levels: Seq[LevelMetadata],
   defaultLevelS: Option[String],
-  indexingAnalyzersAsText: Map[String,String],
-  textFields: Set[String],
-  intPointFields: Set[String],
-  longPointFields: Set[String],
-  termVectorFields: Set[String],
-  sortedDocValuesFields: Set[String],
-  storedSingularFields: Set[String],
-  storedMultiFields: Set[String],
-  numericDocValuesFields: Set[String],
-  jsonFields: Set[String]
+  indexingAnalyzersAsText: Map[String,String]
 ) {
   import IndexAccess._
   
@@ -377,42 +409,24 @@ case class IndexMetadata(
   val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap
   val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
   val defaultLevel: LevelMetadata = defaultLevelS.map(levelMap(_)).getOrElse(levels.last)
-  val levelType: Map[String,QueryByType] = levels.map(l => (l.id,if (numericDocValuesFields.contains(l.term)) QueryByType.NUMERIC else QueryByType.SORTED)).toMap
-  def getter(lr: LeafReader, field: String): (Int) => Iterable[String] = {
-    if (storedSingularFields.contains(field) || storedMultiFields.contains(field)) {
-      val fieldS = Collections.singleton(field)
-      return (doc: Int) => lr.document(doc,fieldS).getValues(field).toSeq
-    }
-    if (sortedDocValuesFields.contains(field)) {
-      val dvs = DocValues.getSorted(lr, field)
-      return (doc: Int) => Seq(dvs.get(doc).utf8ToString())
-    }
-    if (numericDocValuesFields.contains(field)) {
-      val dvs = DocValues.getNumeric(lr, field)
-      return (doc: Int) => Seq(""+dvs.get(doc))
-    }
-    if (termVectorFields.contains(field))
-      return (doc: Int) => lr.getTermVector(doc, field).asBytesRefIterable().map(_.utf8ToString)
-    return null
-  }
-    def toJson = Json.obj(
-        "name"->indexName,
-        "version"->indexVersion,
-        "indexType"->indexType,
-        "contentField"->contentField,
-        "contentTokensField"->contentTokensField,
-        "levels"->levels.map(_.toJson),
-        "defaultLevel"->defaultLevel.id,
-        "indexingAnalyzers"->indexingAnalyzersAsText,
-        "textFields"->textFields,
-        "intPointFields"->intPointFields,
-        "longPointFields"->longPointFields,
-        "termVectorFields"->termVectorFields,
-        "sortedDocValuesFields"->sortedDocValuesFields,
-        "storedSingularFields"->storedSingularFields,
-        "storedMultiFields"->storedMultiFields,
-        "numericDocValuesFields"->numericDocValuesFields,
-        "jsonFields"->jsonFields)
+  def toJson = Json.obj(
+    "name"->indexName,
+    "version"->indexVersion,
+    "indexType"->indexType,
+    "contentField"->contentField,
+    "contentTokensField"->contentTokensField,
+    "levels"->levels.map(_.toJson),
+    "defaultLevel"->defaultLevel.id,
+    "indexingAnalyzers"->indexingAnalyzersAsText,
+    "commonTextFields"->levels.map(_.textFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
+    "commonIntPointFields"->levels.map(_.intPointFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
+    "commonLongPointFields"->levels.map(_.longPointFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
+    "commonTermVectorFields"->levels.map(_.termVectorFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
+    "commonSortedDocValuesFields"->levels.map(_.sortedDocValuesFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
+    "commonStoredSingularFields"->levels.map(_.storedSingularFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
+    "commonStoredMultiFields"->levels.map(_.storedMultiFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
+    "commonNumericDocValuesFields"->levels.map(_.numericDocValuesFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
+    "commonJsonFields"->levels.map(_.jsonFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))))
 
 }
 
@@ -424,11 +438,31 @@ class IndexAccess(path: String) {
   private val tfSearchers: collection.mutable.Map[String,IndexSearcher] = new HashMap[String,IndexSearcher]
   private val tfidfSearchers: collection.mutable.Map[String,IndexSearcher] = new HashMap[String,IndexSearcher]
   
-  def readLevelMetadata(c: JsValue) = LevelMetadata(
+  def readLevelMetadata(
+    c: JsValue,
+    commonTextFields: Map[String,String],
+    commonIntPointFields: Map[String,String],
+    commonLongPointFields: Map[String,String],
+    commonTermVectorFields: Map[String,String],
+    commonSortedDocValuesFields: Map[String,String],
+    commonStoredSingularFields: Map[String,String],
+    commonStoredMultiFields: Map[String,String],
+    commonNumericDocValuesFields: Map[String,String],
+    commonJsonFields: Map[String,String]
+  ) = LevelMetadata(
       (c \ "id").as[String],
       (c \ "term").as[String],
       (c \ "index").as[String],
-      (c \ "preload").asOpt[Boolean].getOrElse(false)
+      (c \ "preload").asOpt[Boolean].getOrElse(false),
+      (c \ "textFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonTextFields,
+      (c \ "intPointFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonIntPointFields,
+      (c \ "longPointFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonLongPointFields,
+      (c \ "termVectorFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonTermVectorFields,
+      (c \ "sortedDocValuesFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonSortedDocValuesFields,
+      (c \ "storedSingularFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonStoredSingularFields,
+      (c \ "storedMultiFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonStoredMultiFields,
+      (c \ "numericDocValuesFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonNumericDocValuesFields,
+      (c \ "jsonFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonJsonFields
   )
   
   def readIndexMetadata(c: JsValue) = IndexMetadata(
@@ -437,18 +471,19 @@ class IndexAccess(path: String) {
     (c \ "indexType").asOpt[String].getOrElse("MMapDirectory"),
     (c \ "contentField").as[String],
     (c \ "contentTokensField").as[String],
-    (c \ "levels").as[Seq[JsValue]].map(readLevelMetadata(_)),
+    (c \ "levels").as[Seq[JsValue]].map(readLevelMetadata(_,
+      (c \ "commonTextFields").asOpt[Map[String,String]].getOrElse(Map.empty),
+      (c \ "commonIntPointFields").asOpt[Map[String,String]].getOrElse(Map.empty),
+      (c \ "commonLongPointFields").asOpt[Map[String,String]].getOrElse(Map.empty),
+      (c \ "commonTermVectorFields").asOpt[Map[String,String]].getOrElse(Map.empty),
+      (c \ "commonSortedDocValuesFields").asOpt[Map[String,String]].getOrElse(Map.empty),
+      (c \ "commonStoredSingularFields").asOpt[Map[String,String]].getOrElse(Map.empty),
+      (c \ "commonStoredMultiFields").asOpt[Map[String,String]].getOrElse(Map.empty),
+      (c \ "commonNumericDocValuesFields").asOpt[Map[String,String]].getOrElse(Map.empty),
+      (c \ "commonJsonFields").asOpt[Map[String,String]].getOrElse(Map.empty)
+    )),
     (c \ "defaultLevel").asOpt[String],
-    (c \ "indexingAnalyzers").asOpt[Map[String,String]].getOrElse(Map.empty),
-    (c \ "textFields").as[Set[String]],
-    (c \ "intPointFields").as[Set[String]],
-    (c \ "longPointFields").asOpt[Set[String]].getOrElse(Set.empty),
-    (c \ "termVectorFields").as[Set[String]],
-    (c \ "sortedDocValuesFields").as[Set[String]],
-    (c \ "storedSingularFields").as[Set[String]],
-    (c \ "storedMultiFields").as[Set[String]],
-    (c \ "numericDocValuesFields").as[Set[String]],
-    (c \ "jsonFields").asOpt[Set[String]].getOrElse(Set.empty)
+    (c \ "indexingAnalyzers").asOpt[Map[String,String]].getOrElse(Map.empty)
   )
   
   val indexMetadata: IndexMetadata = readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
@@ -483,17 +518,17 @@ class IndexAccess(path: String) {
     }
   }
   
-  val queryAnalyzer = new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),
-      (indexMetadata.textFields).map((_,whitespaceAnalyzer)).toMap[String,Analyzer].asJava)
+  val queryAnalyzers = indexMetadata.levels.map(level => (level.id, new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),
+      (level.textFields.keys).map((_,whitespaceAnalyzer)).toMap[String,Analyzer].asJava))).toMap
   
-  private def newQueryParser() = {
-    val qp = new QueryParser(indexMetadata.contentField,queryAnalyzer) {
+  private def newQueryParser(level: LevelMetadata) = {
+    val qp = new QueryParser(indexMetadata.contentField,queryAnalyzers(level.id)) {
         override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
-          if (indexMetadata.intPointFields.contains(field)) {
+          if (level.intPointFields.contains(field)) {
             val low = if (part1.equals("*")) Int.MinValue else if (startInclusive) part1.toInt else part1.toInt + 1
             val high = if (part2.equals("*")) Int.MaxValue else if (endInclusive) part2.toInt else part2.toInt - 1
             IntPoint.newRangeQuery(field, low, high)
-          } else if (indexMetadata.longPointFields.contains(field)) {
+          } else if (level.longPointFields.contains(field)) {
              val low = if (part1.equals("*")) Long.MinValue else {
               val low = if (part1.contains("-")) {
                 ISODateTimeFormat.dateOptionalTimeParser().parseMillis(part1)
@@ -517,26 +552,25 @@ class IndexAccess(path: String) {
       qp
   }
   
-  val termVectorQueryParsers = new ThreadLocal[QueryParser] {
+  val termVectorQueryParsers: Map[String,ThreadLocal[QueryParser]] = indexMetadata.levels.map(level => (level.id, new ThreadLocal[QueryParser] {
     
     override def initialValue(): QueryParser = {
-      val qp = newQueryParser()
+      val qp = newQueryParser(level)
       qp.setMultiTermRewriteMethod(MultiTermQuery.CONSTANT_SCORE_REWRITE)
       qp
     }
 
-  }
-
+  })).toMap
   
-  val documentQueryParsers = new ThreadLocal[QueryParser] {
+  val documentQueryParsers: Map[String,ThreadLocal[QueryParser]] = indexMetadata.levels.map(level => (level.id, new ThreadLocal[QueryParser] {
     
     override def initialValue(): QueryParser = {
-      val qp = newQueryParser()
+      val qp = newQueryParser(level)
       qp.setMultiTermRewriteMethod(MultiTermQuery.SCORING_BOOLEAN_REWRITE)
       qp
     }
 
-  }
+  })).toMap
    
   private val queryPartStart = "(?<!\\\\)<".r
   private val queryPartEnd = "(?<!\\\\)>".r
@@ -564,11 +598,11 @@ class IndexAccess(path: String) {
   private def runSubQuery(queryLevel: String, query: Query, targetLevel: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): Future[Query] = Future {
     val (idTerm: Term, values: scala.collection.Set[BytesRef]) =
       if (!indexMetadata.levelOrder.contains(targetLevel)) 
-        (new Term(targetLevel,""), (if (indexMetadata.numericDocValuesFields.contains(targetLevel)) QueryByType.NUMERIC else QueryByType.SORTED)(searcher(queryLevel, SumScaling.ABSOLUTE), query, targetLevel)) 
+        (new Term(targetLevel,""), (if (indexMetadata.levelMap(queryLevel).numericDocValuesFields.contains(targetLevel)) QueryByType.NUMERIC else QueryByType.SORTED)(searcher(queryLevel, SumScaling.ABSOLUTE), query, targetLevel)) 
       else if (indexMetadata.levelOrder(queryLevel)<indexMetadata.levelOrder(targetLevel)) // DOCUMENT < PARAGRAPH
-        (indexMetadata.levelMap(queryLevel).termAsTerm, indexMetadata.levelType(queryLevel)(searcher(targetLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(queryLevel).term))
+        (indexMetadata.levelMap(queryLevel).termAsTerm, indexMetadata.levelMap(queryLevel).levelType(searcher(targetLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(queryLevel).term))
       else 
-        (indexMetadata.levelMap(targetLevel).termAsTerm, indexMetadata.levelType(targetLevel)(searcher(queryLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(targetLevel).term))
+        (indexMetadata.levelMap(targetLevel).termAsTerm, indexMetadata.levelMap(targetLevel).levelType(searcher(queryLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(targetLevel).term))
     new TermInSetQuery(idTerm.field, values.asJava)
   }
   
@@ -595,7 +629,7 @@ class IndexAccess(path: String) {
       if (exactCounts) new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField)
       else new MatchAllDocsQuery()
     } else {
-      val q = (if (exactCounts) documentQueryParsers.get else termVectorQueryParsers.get).parse(query) 
+      val q = (if (exactCounts) documentQueryParsers(queryLevel).get else termVectorQueryParsers(queryLevel).get).parse(query) 
       if (exactCounts && q.isInstanceOf[BooleanQuery]) {
         val bq = q.asInstanceOf[BooleanQuery]
         if (bq.clauses.asScala.forall(c => c.getOccur == Occur.MUST_NOT || (c.getQuery.isInstanceOf[BoostQuery]) && c.getQuery.asInstanceOf[BoostQuery].getBoost == 0.0f)) {

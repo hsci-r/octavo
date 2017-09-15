@@ -17,6 +17,7 @@ case class GeneralParameters()(implicit request: Request[AnyContent]) {
   
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   val pretty: Boolean = p.get("pretty").exists(v => v(0)=="" || v(0).toBoolean)
+  /** maximum number of documents to process */
   val maxDocs: Int = p.get("maxDocs").map(_(0).toInt).getOrElse(50000)
   private val timeout = p.get("timeout").map(_(0).toLong).map(t => if (t == -1l) Long.MaxValue else t*1000l).getOrElse(30000l)
   val forkJoinPool: ForkJoinPool = if (timeout>60000l) longTaskForkJoinPool else shortTaskForkJoinPool

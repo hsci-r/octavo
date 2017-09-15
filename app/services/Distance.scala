@@ -39,6 +39,20 @@ object Distance {
     return (nom*2.0)/denom
   }
   
+  def center(x: LongDoubleMap): Unit = {
+    if (x.size == 0) return
+    var sum = 0.0
+    x.values.forEach(new DoubleConsumer() {
+      override def accept(freq: Double) {
+        sum += freq
+      }
+    })
+    val mean = sum / x.size
+    x.replaceAll(new LongDoubleToDoubleFunction() {
+      override def applyAsDouble(key: Long, value: Double): Double = value - mean
+    })
+  }
+  
   def normalize(x: LongDoubleMap): Unit = {
     if (x.size == 0) return
     var sum = 0.0
@@ -52,8 +66,8 @@ object Distance {
       override def applyAsDouble(key: Long, value: Double): Double = value / length
     })
   }
-  
-  def euclideanDistance(x: LongDoubleMap, y: LongDoubleMap): Double = {
+    
+  def euclideanDistance(x: LongDoubleMap, y: LongDoubleMap, onlyCommon: Boolean): Double = {
     if (x.size==0) return Double.NaN
     if (y.size==0) return Double.NaN
     val keys = HashLongSets.newImmutableSet(x.keySet, y.keySet)
@@ -62,14 +76,16 @@ object Distance {
       override def accept(key: Long) {
         val f1 = x.getOrDefault(key, 0.0)
         val f2 = y.getOrDefault(key, 0.0)
-        val diff = f1 - f2
-        sum += diff*diff
+        if (!onlyCommon || (f1 != 0.0 && f2 != 0.0)) {
+          val diff = f1 - f2
+          sum += diff*diff 
+        }
       }
     })
     return math.sqrt(sum)
   }
   
-  def manhattanDistance(x: LongDoubleMap, y: LongDoubleMap): Double = {
+  def manhattanDistance(x: LongDoubleMap, y: LongDoubleMap, onlyCommon: Boolean): Double = {
     if (x.size==0) return Double.NaN
     if (y.size==0) return Double.NaN
     val keys = HashLongSets.newImmutableSet(x.keySet, y.keySet)
@@ -78,13 +94,14 @@ object Distance {
       override def accept(key: Long) {
         val f1 = x.getOrDefault(key, 0.0)
         val f2 = y.getOrDefault(key, 0.0)
-        sum += math.abs(f1 - f2)
+        if (!onlyCommon || (f1 != 0.0 && f2 != 0.0))
+          sum += math.abs(f1 - f2)
       }
     })
     return math.sqrt(sum)
   }
   
-  def cosineSimilarity(x: LongDoubleMap, y: LongDoubleMap): Double = {
+  def cosineSimilarity(x: LongDoubleMap, y: LongDoubleMap, onlyCommon: Boolean): Double = {
     //word, t1 freq, t2 freq
     val m = scala.collection.mutable.HashMap[String, (Double, Double)]()
 
@@ -106,11 +123,15 @@ object Distance {
     var s1,s2,s3 = 0.0
     keys.forEach(new LongConsumer {
       override def accept(key: Long) {
-        val f1 = x.getOrDefault(key, 0.0) / sum1
-        val f2 = y.getOrDefault(key, 0.0) / sum2
-        s1 += f1 * f2
-        s2 += f1 * f1
-        s3 += f2 * f2
+        var f1 = x.getOrDefault(key, 0.0)
+        var f2 = y.getOrDefault(key, 0.0)
+        if (!onlyCommon || (f1 != 0.0 && f2 != 0.0)) {
+          f1 = f1 / sum1
+          f2 = f2 / sum2
+          s1 += f1 * f2
+          s2 += f1 * f1
+          s3 += f2 * f2
+        }
       }
     })
     return s1 / (math.sqrt(s2) * math.sqrt(s3))

@@ -63,7 +63,7 @@ class SimilarTermsController @Inject() (iap: IndexAccessProvider) extends Inject
     val callId = s"similarTerms: query:$q, maxEditDistance:$maxEditDistance, minCommonPrefix:$minCommonPrefix, transposeIsSingleEdit:$transposeIsSingleEdit"
     Logger.info(callId)
     val qm = Json.obj("method"->"similarTerms","callId"->callId,"term"->q,"maxEditDistance"->maxEditDistance,"minCommonPrefix"->minCommonPrefix,"transposeIsSingleEdit"->transposeIsSingleEdit)
-    val ts = queryAnalyzer.tokenStream(indexMetadata.contentField, q)
+    val ts = ia.queryAnalyzers(indexMetadata.defaultLevel.id).tokenStream(indexMetadata.contentField, q)
     val ta = ts.addAttribute(classOf[CharTermAttribute])
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
     ts.reset()

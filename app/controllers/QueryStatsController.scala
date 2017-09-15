@@ -30,6 +30,7 @@ import org.apache.lucene.search.TimeLimitingCollector
 import org.apache.lucene.search.MatchAllDocsQuery
 import org.apache.lucene.index.DocValues
 import org.apache.lucene.index.NumericDocValues
+import services.LevelMetadata
 
 @Singleton
 class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
@@ -43,7 +44,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
       else Json.obj("totalTermFreq"->totalTermFreq,"docFreq"->docFreq)
   }
   
-  private def getStats(is: IndexSearcher, q: Query, grouper: Option[Script], attrs: Seq[String], attrLengths: Seq[Int], attrTransformer: Option[Script], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
+  private def getStats(level: LevelMetadata, is: IndexSearcher, q: Query, grouper: Option[Script], attrs: Seq[String], attrLengths: Seq[Int], attrTransformer: Option[Script], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
     if (!attrs.isEmpty) {
       var attrGetters: Seq[(Int) => String] = null
       val groupedStats = new HashMap[Seq[String],Stats]
@@ -75,7 +76,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
         
         override def doSetNextReader(context: LeafReaderContext) = {
           grouper.foreach(_.invokeMethod("setContext",context))
-          attrGetters = attrs.map(ia.indexMetadata.getter(context.reader,_).andThen(_.iterator.next))
+          attrGetters = attrs.map(level.getter(context.reader,_).andThen(_.iterator.next))
         }
       })
       is.search(q, tlc.get)
@@ -123,13 +124,13 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
       b.setProperty("attrTransformer", attrTransformer)
       s
     })
-    val qm = Json.obj("method"->"termStats","grouper"->p.get("grouper").map(_(0)),"attrs"->attrs,"attrLengths"->attrLengths,"attrTransformer"->p.get("attrTransformer").map(_(0))) ++ gp.toJson ++ q.toJson
+    val qm = Json.obj("grouper"->p.get("grouper").map(_(0)),"attrs"->attrs,"attrLengths"->attrLengths,"attrTransformer"->p.get("attrTransformer").map(_(0))) ++ gp.toJson ++ q.toJson
     implicit val ec = gp.executionContext
-    getOrCreateResult(ia.indexMetadata, qm, gp.force, gp.pretty, () => {
+    getOrCreateResult("termStats", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       implicit val qps = documentQueryParsers
       val (qlevel,query) = buildFinalQueryRunningSubQueries(true, q.requiredQuery)
-      getStats(searcher(qlevel, SumScaling.ABSOLUTE), query, grouper, attrs, attrLengths, attrTransformer, gatherTermFreqsPerDoc)
+      getStats(ia.indexMetadata.levelMap(qlevel),searcher(qlevel, SumScaling.ABSOLUTE), query, grouper, attrs, attrLengths, attrTransformer, gatherTermFreqsPerDoc)
     })
   }  
 }
