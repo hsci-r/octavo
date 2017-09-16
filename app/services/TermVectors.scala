@@ -157,7 +157,7 @@ object TermVectors {
         term = tvt.nextOrd()
       }
     }
-    scaleAndFilterTermVector(ir, cv, ctvpa)
+    scaleTermVector(ir, cv, ctvpa)
   }
 
   private def getUnscaledAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): (TermVectorQueryMetadata,LongIntMap) = {
@@ -166,26 +166,26 @@ object TermVectors {
      (md,cv)
   }
   
-  private def scaleAndFilterTermVector(ir: IndexReader, cv: LongIntMap, ctvp: AggregateTermVectorProcessingParameters)(implicit ia: IndexAccess): LongDoubleMap = {
+  def limitTermVector(m: LongDoubleMap, ctvp: AggregateTermVectorProcessingParameters)(implicit ia: IndexAccess): LongDoubleMap = {
+      val best = filterHighestScores(m, ctvp.limit)
+      val m2 = HashLongDoubleMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
+      for ((key,value) <- best) m2.put(key, value)
+      m2
+  }
+  
+  private def scaleTermVector(ir: IndexReader, cv: LongIntMap, ctvp: AggregateTermVectorProcessingParameters)(implicit ia: IndexAccess): LongDoubleMap = {
     val m = HashLongDoubleMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
     cv.forEach(new LongIntConsumer {
        override def accept(k: Long, v: Int) {
          if (ctvp.matches(v)) m.put(k, ctvp.sumScaling(ir, k, v))
        }
     })
-    if (ctvp.limit == -1)
-      m
-    else {
-      val best = filterHighestScores(m, ctvp.limit)
-      val m2 = HashLongDoubleMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
-      for ((key,value) <- best) m2.put(key, value)
-      m2
-    }
+    m
   }
   
   def getAggregateContextVectorForQuery(is: IndexSearcher, q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): (TermVectorQueryMetadata,LongDoubleMap) = {
     val (md, cv) = getUnscaledAggregateContextVectorForQuery(is, q, ctvpl, minScalingTerms, maxDocs)
-    (md, scaleAndFilterTermVector(is.getIndexReader, cv, ctvpa))
+    (md, scaleTermVector(is.getIndexReader, cv, ctvpa))
   }
   
   private final class UnscaledVectorInfo {
@@ -217,7 +217,7 @@ object TermVectors {
   final class VectorInfo(ir: IndexReader, value: UnscaledVectorInfo, ctvpa: AggregateTermVectorProcessingParameters)(implicit ia: IndexAccess) {
     val docFreq = value.docFreq
     val totalTermFreq = value.totalTermFreq
-    val cv: LongDoubleMap = scaleAndFilterTermVector(ir, value.cv,ctvpa)
+    val cv: LongDoubleMap = scaleTermVector(ir, value.cv,ctvpa)
   }
 
   def getGroupedAggregateContextVectorsForQuery(level: LevelMetadata, is: IndexSearcher, q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], attr: String, attrLength: Int, ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): collection.Map[String,VectorInfo] = {

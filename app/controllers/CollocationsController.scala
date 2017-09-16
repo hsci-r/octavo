@@ -62,7 +62,7 @@ class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: 
       val maxDocs = if (gp.maxDocs == -1 || termVectorAggregateProcessingParameters.limit == -1) -1 else if (termVectors) gp.maxDocs / (termVectorAggregateProcessingParameters.limit + 1) else gp.maxDocs / 2
       val (md, collocationsMap) = getAggregateContextVectorForQuery(is, termVectorQuery,termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters,maxDocs)
       val collocations = new ArrayBuffer[(Long,Double)]
-      collocationsMap.forEach(new LongDoubleConsumer {
+      limitTermVector(collocationsMap,termVectorAggregateProcessingParameters).forEach(new LongDoubleConsumer {
          override def accept(k: Long, v: Double) {
            collocations += ((k,v))
          }
@@ -75,7 +75,7 @@ class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: 
           for (q <- resultLimitQuery) bqb.add(q, Occur.FILTER)
           getAggregateContextVectorForQuery(is, bqb.build(), resultTermVectorLocalProcessingParameters, Seq(termS), resultTermVectorAggregateProcessingParameters, maxDocs)
         }.seq
-        val mdsMatrix = resultTermVectorAggregateProcessingParameters.dimensionalityReduction(ctermVectors.map(_._2),resultTermVectorAggregateProcessingParameters)
+        val mdsMatrix = resultTermVectorAggregateProcessingParameters.dimensionalityReduction(ctermVectors.map(p => limitTermVector(p._2,resultTermVectorAggregateProcessingParameters)),resultTermVectorAggregateProcessingParameters)
         collocations.zipWithIndex.toSeq.sortBy(-_._1._2).map{ case ((term,weight),i) =>
           val r = Json.obj("term"->termOrdToTerm(ir, term), "termVector"->Json.obj("metadata"->ctermVectors(i)._1.toJson,"terms"->mdsMatrix(i)), "weight"->weight)
           if (distances) 
@@ -89,7 +89,7 @@ class CollocationsController @Inject() (implicit iap: IndexAccessProvider, env: 
           val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,termS)), Occur.FILTER)
           for (q <- resultLimitQuery) bqb.add(q, Occur.FILTER)
           val (md, ctermVector) = getAggregateContextVectorForQuery(is, bqb.build(), resultTermVectorLocalProcessingParameters, Seq(termS), resultTermVectorAggregateProcessingParameters, maxDocs) 
-          val r = Json.obj("term" -> termS, "termVector"->Json.obj("metadata"->md.toJson, "terms"->termOrdMapToOrderedTermSeq(ir, ctermVector).map(p=>Json.obj("term" -> p._1, "weight" -> p._2)),"weight"->weight))
+          val r = Json.obj("term" -> termS, "termVector"->Json.obj("metadata"->md.toJson, "terms"->termOrdMapToOrderedTermSeq(ir, limitTermVector(ctermVector,resultTermVectorAggregateProcessingParameters)).map(p=>Json.obj("term" -> p._1, "weight" -> p._2)),"weight"->weight))
           if (distances) 
             r ++ Json.obj("distance"->termVectorAggregateProcessingParameters.distance(collocationsMap,ctermVector))
           else r

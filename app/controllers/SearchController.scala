@@ -228,7 +228,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
           fields += (("explanation" -> Json.toJson(we.explain(context, doc).toString)))
         fields += (("norms" -> Json.toJson(normTerms.map(t => Json.toJson(Map("term"->t, "docFreq"->(""+ir.docFreq(new Term(indexMetadata.contentField, t))), "totalTermFreq"->(""+ir.totalTermFreq(new Term(indexMetadata.contentField,t)))))))))
         }
-        if (cv != null && ctvpa.dimensions == 0) fields += (("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, cv).map(p=>Json.obj("term" -> p._1, "weight" -> p._2)))))
+        if (cv != null && ctvpa.dimensions == 0) fields += (("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, limitTermVector(cv,ctvpa)).map(p=>Json.obj("term" -> p._1, "weight" -> p._2)))))
         (fields, if (ctvpa.dimensions >0) cv else null)    
       }
       val docFields = HashIntObjMaps.getDefaultFactory[collection.Map[String,JsValue]]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[collection.Map[String,JsValue]]
@@ -288,7 +288,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
             if (ctv.query.isDefined)
               cdocFields += (("distance" -> Json.toJson(ctvpa.distance(cdocVectors, compareTermVector._2))))
             docFields.put(p._1, cdocFields)
-            if (cdocVectors != null) docVectorsForMDS.put(p._1, cdocVectors)
+            if (cdocVectors != null) docVectorsForMDS.put(p._1, limitTermVector(cdocVectors,ctvpa))
         })
       }
       val values = maxHeap.dequeueAll.reverse
