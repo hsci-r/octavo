@@ -269,7 +269,7 @@ object TermVectors {
       matrix(i) = new Array[Double](matrix.length)
     for (i <- 0 until matrix.length)
       for (j <- i + 1 until matrix.length) {
-        val dis = rtp.distance(tvms(i), tvms(j), rtp)
+        val dis = rtp.distance(tvms(i), tvms(j))
         matrix(i)(j) = dis
         matrix(j)(i) = dis
       }
@@ -305,7 +305,7 @@ object TermVectors {
       matrix(i) = new Array[Double](matrix.length)
     for (i <- 0 until matrix.length) {
       for (j <- i + 1 until matrix.length) {
-        val dis = rtp.distance(tvms(i), tvms(j), rtp)
+        val dis = rtp.distance(tvms(i), tvms(j))
         matrix(i)(j) = dis
         matrix(j)(i) = dis
       }

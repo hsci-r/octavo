@@ -4,6 +4,9 @@ import play.api.mvc.Request
 import play.api.mvc.AnyContent
 import play.api.libs.json.JsObject
 import play.api.libs.json.Json
+import com.koloboke.collect.map.LongDoubleMap
+import services.Filtering
+import services.Normalization
 
 case class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent]) {
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
@@ -39,14 +42,17 @@ case class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: 
   
   private val distanceOpt = p.get("distance").map(v => DistanceMetric.withName(v(0).toUpperCase))
   /** distance metric used for term vector comparisons */
-  val distance: DistanceMetric = distanceOpt.getOrElse(DistanceMetric.COSINE)
+  val distanceMetric: DistanceMetric = distanceOpt.getOrElse(DistanceMetric.COSINE)
   
+  def distance(t1: LongDoubleMap, t2: LongDoubleMap): Double = distanceMetric(t1, t2, this)
+  
+  private val normalizationOpt = p.get("normalization").map(v => Normalization.withName(v(0).toUpperCase))
   /** are vectors normalized before distance calculation? */
-  val normalize: Boolean = p.get("normalize").exists(v => v(0)=="" || v(0).toBoolean)
-  /** are vectors centered before distance calculation? */
-  val center: Boolean = p.get("center").exists(v => v(0)=="" || v(0).toBoolean)
-  /** does distance calculation only operate on dimensions where both vectors have a value? (does not apply to DICE/JACCARD metrics)*/
-  val onlyCommon: Boolean = p.get("onlyCommon").exists(v => v(0)=="" || v(0).toBoolean)
+  val normalization: Normalization = normalizationOpt.getOrElse(Normalization.NONE)
   
-  def toJson(): JsObject = Json.obj(prefix+"normalize"+suffix->normalize,prefix+"center"+suffix->center,prefix+"onlyCommon"+suffix->onlyCommon,prefix+"dimReduct"+suffix->dimensionalityReduction.entryName,prefix+"smoothing"+suffix->smoothing,prefix+"sumScaling"+suffix->sumScalingString,prefix+"minSumFreq"+suffix->minSumFreq,prefix+"maxSumFreq"+suffix->maxSumFreq,prefix+"limit"+suffix->limit, prefix+"dimensions"+suffix->dimensions, prefix+"distance"+suffix->distance.entryName) 
+  private val filteringOpt = p.get("filtering").map(v => Filtering.withName(v(0).toUpperCase))
+  /** does distance calculation only operate on dimensions where both vectors have a value? (does not apply to DICE/JACCARD metrics)*/
+  val filtering: Filtering = filteringOpt.getOrElse(Filtering.EITHER)
+  
+  def toJson(): JsObject = Json.obj(prefix+"normalization"+suffix->normalization.entryName,prefix+"filtering"+suffix->filtering.entryName,prefix+"dimReduct"+suffix->dimensionalityReduction.entryName,prefix+"smoothing"+suffix->smoothing,prefix+"sumScaling"+suffix->sumScalingString,prefix+"minSumFreq"+suffix->minSumFreq,prefix+"maxSumFreq"+suffix->maxSumFreq,prefix+"limit"+suffix->limit, prefix+"dimensions"+suffix->dimensions, prefix+"distance"+suffix->distanceMetric.entryName) 
 }

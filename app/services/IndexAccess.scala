@@ -88,6 +88,7 @@ import java.util.concurrent.ForkJoinPool.ForkJoinWorkerThreadFactory
 import java.util.concurrent.ForkJoinWorkerThread
 import scala.collection.parallel.ForkJoinTaskSupport
 import play.api.Configuration
+import org.apache.lucene.index.ParallelCompositeReader
 
 object IndexAccess {
     
@@ -118,8 +119,6 @@ object IndexAccess {
 
   BooleanQuery.setMaxClauseCount(Int.MaxValue)
 
-  //private val standardAnayzer = new StandardAnalyzer(CharArraySet.EMPTY_SET)
-  
   private val whitespaceAnalyzer = new WhitespaceAnalyzer()
   
   private val termFrequencySimilarity = new SimilarityBase() {
@@ -329,9 +328,10 @@ object QueryByType extends Enum[QueryByType] {
 case class LevelMetadata(
   id: String,
   term: String,
-  index: String,
+  indices: Seq[String],
   preload: Boolean,
   textFields: Map[String,String],
+  stringFields: Map[String,String],
   intPointFields: Map[String,String],
   longPointFields: Map[String,String],
   termVectorFields: Map[String,String],
@@ -345,9 +345,10 @@ case class LevelMetadata(
   def toJson = Json.obj(
     "id"->id,
     "term"->term,
-    "index"->index,
+    "indices"->indices,
     "preload"->preload,
     "textFields"->textFields,
+    "stringFields"->stringFields,
     "intPointFields"->intPointFields,
     "longPointFields"->longPointFields,
     "termVectorFields"->termVectorFields,
@@ -419,6 +420,7 @@ case class IndexMetadata(
     "defaultLevel"->defaultLevel.id,
     "indexingAnalyzers"->indexingAnalyzersAsText,
     "commonTextFields"->levels.map(_.textFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
+    "commonStringFields"->levels.map(_.stringFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
     "commonIntPointFields"->levels.map(_.intPointFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
     "commonLongPointFields"->levels.map(_.longPointFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
     "commonTermVectorFields"->levels.map(_.termVectorFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
@@ -441,6 +443,7 @@ class IndexAccess(path: String) {
   def readLevelMetadata(
     c: JsValue,
     commonTextFields: Map[String,String],
+    commonStringFields: Map[String,String],
     commonIntPointFields: Map[String,String],
     commonLongPointFields: Map[String,String],
     commonTermVectorFields: Map[String,String],
@@ -452,9 +455,10 @@ class IndexAccess(path: String) {
   ) = LevelMetadata(
       (c \ "id").as[String],
       (c \ "term").as[String],
-      (c \ "index").as[String],
+      Seq((c \ "index").as[String]) ++ (c \ "indices").as[Seq[String]],
       (c \ "preload").asOpt[Boolean].getOrElse(false),
       (c \ "textFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonTextFields,
+      (c \ "stringFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonStringFields,
       (c \ "intPointFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonIntPointFields,
       (c \ "longPointFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonLongPointFields,
       (c \ "termVectorFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonTermVectorFields,
@@ -473,6 +477,7 @@ class IndexAccess(path: String) {
     (c \ "contentTokensField").as[String],
     (c \ "levels").as[Seq[JsValue]].map(readLevelMetadata(_,
       (c \ "commonTextFields").asOpt[Map[String,String]].getOrElse(Map.empty),
+      (c \ "commonStringFields").asOpt[Map[String,String]].getOrElse(Map.empty),
       (c \ "commonIntPointFields").asOpt[Map[String,String]].getOrElse(Map.empty),
       (c \ "commonLongPointFields").asOpt[Map[String,String]].getOrElse(Map.empty),
       (c \ "commonTermVectorFields").asOpt[Map[String,String]].getOrElse(Map.empty),
@@ -490,11 +495,14 @@ class IndexAccess(path: String) {
   
   {
     val readerFs = for (level <- indexMetadata.levels) yield Future {
-      Logger.info("Initializing index at "+path+"/"+level.index)
-      val directory = indexMetadata.directoryCreator(FileSystems.getDefault().getPath(path+"/"+level.index))
-      if (level.preload && directory.isInstanceOf[MMapDirectory]) directory.asInstanceOf[MMapDirectory].setPreload(true)
-      val reader = DirectoryReader.open(directory)
-      Logger.info("Initialized index at "+path+"/"+level.index)
+      Logger.info("Initializing index at "+path+"/"+level.indices)
+      val readers = level.indices.map(index => { 
+        val directory = indexMetadata.directoryCreator(FileSystems.getDefault().getPath(path+"/"+level.indices(0)))
+        if (level.preload && directory.isInstanceOf[MMapDirectory]) directory.asInstanceOf[MMapDirectory].setPreload(true)
+        DirectoryReader.open(directory)
+      })
+      val reader = if (readers.length == 1) readers(0) else new ParallelCompositeReader(readers:_*)
+      Logger.info("Initialized index at "+path+"/"+level.indices)
       (level.id, reader)
     }(shortTaskExecutionContext)
     for (readerF <- readerFs) {

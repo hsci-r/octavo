@@ -159,7 +159,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
     val ctvpa = AggregateTermVectorProcessingParameters("r_")
     val termVectors = p.get("termVectors").exists(v => v(0)=="" || v(0).toBoolean)
     implicit val iec = gp.executionContext
-    val qm = Json.obj("termVector"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ ctvpl.toJson ++ ctvpa.toJson
+    val qm = Json.obj("termVectors"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ ctvpl.toJson ++ ctvpa.toJson
     getOrCreateResult("search",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       implicit val ifjp = gp.forkJoinPool
@@ -223,7 +223,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
         }
         val cv = if (termVectors || ctv.query.isDefined) getTermVectorForDocument(ir, doc, ctvpl, ctvpa) else null 
         if (ctv.query.isDefined)
-          fields += (("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._2,ctvpa))))
+          fields += (("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._2))))
         if (srp.returnNorms) {
           fields += (("explanation" -> Json.toJson(we.explain(context, doc).toString)))
         fields += (("norms" -> Json.toJson(normTerms.map(t => Json.toJson(Map("term"->t, "docFreq"->(""+ir.docFreq(new Term(indexMetadata.contentField, t))), "totalTermFreq"->(""+ir.totalTermFreq(new Term(indexMetadata.contentField,t)))))))))
@@ -286,7 +286,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
             val doc = p._1 - lr.docBase
             val (cdocFields, cdocVectors) = processDocFields(lr, doc, sdvs, ndvs)
             if (ctv.query.isDefined)
-              cdocFields += (("distance" -> Json.toJson(ctvpa.distance(cdocVectors, compareTermVector._2,ctvpa))))
+              cdocFields += (("distance" -> Json.toJson(ctvpa.distance(cdocVectors, compareTermVector._2))))
             docFields.put(p._1, cdocFields)
             if (cdocVectors != null) docVectorsForMDS.put(p._1, cdocVectors)
         })

@@ -10,6 +10,61 @@ import java.util.function.IntConsumer
 import java.util.function.DoubleConsumer
 import com.koloboke.function.LongDoubleToDoubleFunction
 
+import enumeratum.EnumEntry
+import enumeratum.Enum
+import com.koloboke.collect.set.LongSet
+
+sealed abstract class Filtering extends EnumEntry {
+  def apply(x: LongSet, y: LongSet): LongSet 
+}
+
+object Filtering extends Enum[Filtering] {
+  case object BOTH extends Filtering {
+    def apply(xo: LongSet, yo: LongSet): LongSet = {
+      val (x,y) = if (xo.size < yo.size) (xo,yo) else (yo,xo) 
+      val ret = HashLongSets.newUpdatableSet(x.size)
+      x.forEach(new LongConsumer() {
+        override def accept(key: Long) = if (y.contains(key)) ret.add(key)
+      })
+      ret
+    }
+  }
+  case object EITHER extends Filtering {
+    def apply(x: LongSet, y: LongSet): LongSet = HashLongSets.newImmutableSet(x,y)
+  }
+  case object LEFT extends Filtering {
+    def apply(x: LongSet, y: LongSet): LongSet = x
+  }
+  case object RIGHT extends Filtering {
+    def apply(x: LongSet, y: LongSet): LongSet = y
+  }
+  
+  val values = findValues
+}
+
+sealed abstract class Normalization extends EnumEntry {
+  def apply(x: LongDoubleMap): Unit 
+}
+
+object Normalization extends Enum[Normalization] {
+  case object NONE extends Normalization {
+    def apply(x: LongDoubleMap): Unit = {
+    }
+  }
+  case object NORMALIZE extends Normalization {
+    def apply(x: LongDoubleMap): Unit = {
+      Distance.normalize(x)
+    }
+  }
+  case object CENTERNORM extends Normalization {
+    def apply(x: LongDoubleMap): Unit = {
+      Distance.normalize(x)
+      Distance.center(x)
+    }
+  }
+  
+  val values = findValues
+}
 
 object Distance {
   
@@ -67,73 +122,50 @@ object Distance {
     })
   }
     
-  def euclideanDistance(x: LongDoubleMap, y: LongDoubleMap, onlyCommon: Boolean): Double = {
+  def euclideanDistance(x: LongDoubleMap, y: LongDoubleMap, filtering: Filtering): Double = {
     if (x.size==0) return Double.NaN
     if (y.size==0) return Double.NaN
-    val keys = HashLongSets.newImmutableSet(x.keySet, y.keySet)
+    val keys = filtering(x.keySet, y.keySet)
     var sum = 0.0
     keys.forEach(new LongConsumer {
       override def accept(key: Long) {
         val f1 = x.getOrDefault(key, 0.0)
         val f2 = y.getOrDefault(key, 0.0)
-        if (!onlyCommon || (f1 != 0.0 && f2 != 0.0)) {
-          val diff = f1 - f2
-          sum += diff*diff 
-        }
+        val diff = f1 - f2
+        sum += diff*diff 
       }
     })
     return math.sqrt(sum)
   }
   
-  def manhattanDistance(x: LongDoubleMap, y: LongDoubleMap, onlyCommon: Boolean): Double = {
+  def manhattanDistance(x: LongDoubleMap, y: LongDoubleMap, filtering: Filtering): Double = {
     if (x.size==0) return Double.NaN
     if (y.size==0) return Double.NaN
-    val keys = HashLongSets.newImmutableSet(x.keySet, y.keySet)
+    val keys = filtering(x.keySet, y.keySet)
     var sum = 0.0
     keys.forEach(new LongConsumer {
       override def accept(key: Long) {
         val f1 = x.getOrDefault(key, 0.0)
         val f2 = y.getOrDefault(key, 0.0)
-        if (!onlyCommon || (f1 != 0.0 && f2 != 0.0))
-          sum += math.abs(f1 - f2)
+        sum += math.abs(f1 - f2)
       }
     })
     return math.sqrt(sum)
   }
   
-  def cosineSimilarity(x: LongDoubleMap, y: LongDoubleMap, onlyCommon: Boolean): Double = {
-    //word, t1 freq, t2 freq
-    val m = scala.collection.mutable.HashMap[String, (Double, Double)]()
-
-    if (x.size==0) return Double.NaN
-    var sum1 = 0.0
-    x.values.forEach(new DoubleConsumer() {
-      override def accept(freq: Double) {
-        sum1 += freq
-      }
-    })
-    if (y.size==0) return Double.NaN
-    var sum2 = 0.0
-    y.values.forEach(new DoubleConsumer() {
-      override def accept(freq: Double) {
-        sum2 += freq
-      }
-    })
-    val keys = HashLongSets.newImmutableSet(x.keySet, y.keySet)
+  def cosineSimilarity(x: LongDoubleMap, y: LongDoubleMap, filtering: Filtering): Double = {
+    val keys = filtering(x.keySet, y.keySet)
     var s1,s2,s3 = 0.0
     keys.forEach(new LongConsumer {
       override def accept(key: Long) {
-        var f1 = x.getOrDefault(key, 0.0)
-        var f2 = y.getOrDefault(key, 0.0)
-        if (!onlyCommon || (f1 != 0.0 && f2 != 0.0)) {
-          f1 = f1 / sum1
-          f2 = f2 / sum2
-          s1 += f1 * f2
-          s2 += f1 * f1
-          s3 += f2 * f2
-        }
+        val f1 = x.getOrDefault(key, 0.0)
+        val f2 = y.getOrDefault(key, 0.0)
+        s1 += f1 * f2
+        s2 += f1 * f1
+        s3 += f2 * f2
       }
     })
+    if (s2 == 0.0 || s3 == 0.0) return 0.0
     return s1 / (math.sqrt(s2) * math.sqrt(s3))
   }
 }
