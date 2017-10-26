@@ -1,119 +1,60 @@
 package services
 
-import org.apache.lucene.queryparser.classic.QueryParser
-import org.apache.lucene.document.IntPoint
-import scala.util.Try
-import org.apache.lucene.search.Query
-import org.apache.lucene.analysis.Analyzer
-import org.apache.lucene.analysis.standard.StandardAnalyzer
-import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper
-import org.apache.lucene.analysis.core.KeywordAnalyzer
-import javax.inject.Inject
-import javax.inject.Singleton
-import org.apache.lucene.search.BooleanQuery
-import org.apache.lucene.search.similarities.SimilarityBase
-import org.apache.lucene.search.similarities.BasicStats
-import org.apache.lucene.search.Explanation
-import org.apache.lucene.search.IndexSearcher
-import org.apache.lucene.store.MMapDirectory
-import org.apache.lucene.index.DirectoryReader
-import java.nio.file.FileSystems
-import org.apache.lucene.index.IndexReader
-import org.apache.lucene.index.Terms
-import org.apache.lucene.util.BytesRef
-import org.apache.lucene.index.TermsEnum
-import org.apache.lucene.index.LeafReaderContext
-import org.apache.lucene.index.DocValues
-import org.apache.lucene.index.NumericDocValues
-import org.apache.lucene.index.SortedDocValues
-import org.apache.lucene.search.SimpleCollector
-import scala.collection.mutable.HashSet
-import scala.collection.JavaConverters._
-import scala.concurrent.ExecutionContext
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.ArrayBlockingQueue
-import parameters.SumScaling
-import org.apache.lucene.search.TimeLimitingCollector
-import scala.collection.mutable.HashMap
-import scala.util.matching.Regex.Match
-import org.apache.lucene.search.TermQuery
-import org.apache.lucene.search.AutomatonQuery
-import org.apache.lucene.util.automaton.Automata
-import org.apache.lucene.index.Term
-import org.apache.lucene.util.automaton.Automaton
-import org.apache.lucene.search.highlight.QueryTermExtractor
-import org.apache.lucene.search.TotalHitCountCollector
-import play.api.Logger
-import java.io.File
-import java.io.FileInputStream
-import play.api.libs.json._
-import play.api.libs.json.Reads._
-import play.api.libs.functional.syntax._
-import enumeratum.EnumEntry
-import enumeratum.Enum
-import org.apache.lucene.index.LeafReader
-import java.util.Collections
-import org.apache.lucene.analysis.CharArraySet
-import scala.language.implicitConversions
-import org.apache.lucene.analysis.core.WhitespaceAnalyzer
-import fi.seco.lucene.MorphologicalAnalyzer
-import java.util.Locale
-import org.apache.lucene.search.MultiTermQuery
-import org.apache.lucene.util.AttributeSource
-import org.apache.lucene.index.TermsEnum.SeekStatus
-import org.apache.lucene.index.PostingsEnum
-import org.apache.lucene.index.FilteredTermsEnum
-import org.apache.lucene.index.FilteredTermsEnum.AcceptStatus
-import scala.collection.Searching._
-import org.apache.lucene.search.MatchAllDocsQuery
-import org.apache.lucene.store.Directory
-import java.nio.file.Path
-import org.apache.lucene.store.NIOFSDirectory
-import org.apache.lucene.store.SimpleFSDirectory
-import org.apache.lucene.store.RAMDirectory
-import org.apache.lucene.store.IOContext
-import scala.concurrent.Future
-import scala.concurrent.Await
-import scala.concurrent.duration.Duration
-import org.apache.lucene.search.TermInSetQuery
-import java.util.SortedSet
-import org.apache.lucene.document.LongPoint
-import org.joda.time.format.ISODateTimeFormat
-import org.apache.lucene.search.BooleanClause.Occur
-import org.apache.lucene.search.BoostQuery
-import org.apache.lucene.queryparser.classic.QueryParser.Operator
+import java.io.{File, FileInputStream}
+import java.nio.file.{FileSystems, Path}
 import java.util.concurrent.ForkJoinPool
-import java.util.concurrent.ForkJoinPool.ForkJoinWorkerThreadFactory
-import java.util.concurrent.ForkJoinWorkerThread
+import java.util.{Collections, Locale}
+import javax.inject.{Inject, Singleton}
+
+import enumeratum.{Enum, EnumEntry}
+import fi.seco.lucene.MorphologicalAnalyzer
+import org.apache.lucene.analysis.core.{KeywordAnalyzer, WhitespaceAnalyzer}
+import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper
+import org.apache.lucene.analysis.standard.StandardAnalyzer
+import org.apache.lucene.analysis.{Analyzer, CharArraySet}
+import org.apache.lucene.document.{IntPoint, LongPoint}
+import org.apache.lucene.index._
+import org.apache.lucene.queryparser.classic.QueryParser
+import org.apache.lucene.queryparser.classic.QueryParser.Operator
+import org.apache.lucene.search.BooleanClause.Occur
+import org.apache.lucene.search._
+import org.apache.lucene.search.highlight.QueryTermExtractor
+import org.apache.lucene.search.similarities.{BasicStats, SimilarityBase}
+import org.apache.lucene.store._
+import org.apache.lucene.util.BytesRef
+import org.joda.time.format.ISODateTimeFormat
+import parameters.SumScaling
+import play.api.libs.json.Reads._
+import play.api.libs.json._
+import play.api.{Configuration, Logger}
+
+import scala.collection.JavaConverters._
+import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 import scala.collection.parallel.ForkJoinTaskSupport
-import play.api.Configuration
-import org.apache.lucene.index.ParallelCompositeReader
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.language.implicitConversions
 
 object IndexAccess {
     
   private val numShortWorkers = sys.runtime.availableProcessors
   private val numLongWorkers = Math.max(sys.runtime.availableProcessors - 2, 1)
-  private val queueCapacity = 10
-  
-  val longTaskForkJoinPool = new ForkJoinPool(numLongWorkers, new ForkJoinWorkerThreadFactory() {
-     override def newThread(pool: ForkJoinPool): ForkJoinWorkerThread = {
-       val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
-       worker.setName("long-task-worker-" + worker.getPoolIndex())
-       worker
-     }
-   }, null, true)
+
+  val longTaskForkJoinPool = new ForkJoinPool(numLongWorkers, (pool: ForkJoinPool) => {
+    val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
+    worker.setName("long-task-worker-" + worker.getPoolIndex)
+    worker
+  }, null, true)
   
   val longTaskTaskSupport = new ForkJoinTaskSupport(longTaskForkJoinPool)
   val longTaskExecutionContext = ExecutionContext.fromExecutorService(longTaskForkJoinPool)
   
-  val shortTaskForkJoinPool = new ForkJoinPool(numShortWorkers, new ForkJoinWorkerThreadFactory() {
-     override def newThread(pool: ForkJoinPool): ForkJoinWorkerThread = {
-       val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
-       worker.setName("short-task-worker-" + worker.getPoolIndex())
-       worker
-     }
-   }, null, true)
+  val shortTaskForkJoinPool = new ForkJoinPool(numShortWorkers, (pool: ForkJoinPool) => {
+    val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
+    worker.setName("short-task-worker-" + worker.getPoolIndex)
+    worker
+  }, null, true)
   val shortTaskTaskSupport = new ForkJoinTaskSupport(shortTaskForkJoinPool)
   val shortTaskExecutionContext = ExecutionContext.fromExecutorService(shortTaskForkJoinPool)
 
@@ -122,26 +63,20 @@ object IndexAccess {
   private val whitespaceAnalyzer = new WhitespaceAnalyzer()
   
   private val termFrequencySimilarity = new SimilarityBase() {
-    override def score(stats: BasicStats, freq: Float, docLen: Float): Float = {
-      return freq
-    }
-    override def explain(stats: BasicStats, doc: Int, freq: Explanation, docLen: Float): Explanation = {
-      return Explanation.`match`(freq.getValue,"")
-    }
-    override def toString(): String = {
-      ""
-    }
+    override def score(stats: BasicStats, freq: Float, docLen: Float): Float = freq
+    override def explain(stats: BasicStats, doc: Int, freq: Explanation, docLen: Float): Explanation = Explanation.`match`(freq.getValue,"")
+    override def toString: String = ""
   }
   
   private case class TermsEnumToBytesRefIterator(te: TermsEnum) extends Iterator[BytesRef] {
     var br: BytesRef = te.next()
     var nextFetched: Boolean = true
-    def next(): BytesRef = {
+    override def next(): BytesRef = {
       if (!nextFetched) br = te.next()
       else nextFetched = false
-      return br
+      br
     }
-    def hasNext() = {
+    override def hasNext(): Boolean = {
       if (!nextFetched) {
         br = te.next()
         nextFetched = true
@@ -159,13 +94,13 @@ object IndexAccess {
   private case class TermsEnumToBytesRefAndDocFreqIterator(te: TermsEnum) extends Iterator[(BytesRef,Int)] {
     var br: BytesRef = te.next()
     var nextFetched: Boolean = true
-    def next(): (BytesRef,Int) = {
+    override def next(): (BytesRef,Int) = {
       if (!nextFetched) br = te.next()
       else nextFetched = false
       val ret = (br, te.docFreq)
-      return ret
+      ret
     }
-    def hasNext() = {
+    override def hasNext(): Boolean = {
       if (!nextFetched) {
         br = te.next()
         nextFetched = true
@@ -183,13 +118,13 @@ object IndexAccess {
   private case class TermsEnumToBytesRefAndTotalTermFreqIterator(te: TermsEnum) extends Iterator[(BytesRef,Long)] {
     var br: BytesRef = te.next()
     var nextFetched: Boolean = true
-    def next(): (BytesRef,Long) = {
+    override def next(): (BytesRef,Long) = {
       if (!nextFetched) br = te.next()
       else nextFetched = false
       val ret = (br, te.totalTermFreq)
-      return ret
+      ret
     }
-    def hasNext() = {
+    override def hasNext(): Boolean = {
       if (!nextFetched) {
         br = te.next()
         nextFetched = true
@@ -207,13 +142,13 @@ object IndexAccess {
   private case class TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te: TermsEnum) extends Iterator[(BytesRef,Int,Long)] {
     var br: BytesRef = te.next()
     var nextFetched: Boolean = true
-    def next(): (BytesRef,Int,Long) = {
+    override def next(): (BytesRef,Int,Long) = {
       if (!nextFetched) br = te.next()
       else nextFetched = false
       val ret = (br, te.docFreq, te.totalTermFreq)
-      return ret
+      ret
     }
-    def hasNext() = {
+    override def hasNext(): Boolean = {
       if (!nextFetched) {
         br = te.next()
         nextFetched = true
@@ -229,71 +164,28 @@ object IndexAccess {
   private implicit def termsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te: TermsEnum): Iterator[(BytesRef,Int,Long)] = TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te)
 
   case class RichTermsEnum(te: TermsEnum) {
-    def asBytesRefIterator(): Iterator[BytesRef] = TermsEnumToBytesRefIterator(te)
-    def asBytesRefAndDocFreqIterator(): Iterator[(BytesRef,Int)] = TermsEnumToBytesRefAndDocFreqIterator(te)
-    def asBytesRefAndDocFreqAndTotalTermFreqIterator(): Iterator[(BytesRef,Int,Long)] = TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te)
-    def asBytesRefAndTotalTermFreqIterator(): Iterator[(BytesRef,Long)] = TermsEnumToBytesRefAndTotalTermFreqIterator(te)
+    def asBytesRefIterator: Iterator[BytesRef] = TermsEnumToBytesRefIterator(te)
+    def asBytesRefAndDocFreqIterator: Iterator[(BytesRef,Int)] = TermsEnumToBytesRefAndDocFreqIterator(te)
+    def asBytesRefAndDocFreqAndTotalTermFreqIterator: Iterator[(BytesRef,Int,Long)] = TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te)
+    def asBytesRefAndTotalTermFreqIterator: Iterator[(BytesRef,Long)] = TermsEnumToBytesRefAndTotalTermFreqIterator(te)
   }
   
-  implicit def termsEnumToRichTermsEnum(te: TermsEnum) = RichTermsEnum(te)
+  implicit def termsEnumToRichTermsEnum(te: TermsEnum): RichTermsEnum = RichTermsEnum(te)
   
   case class RichTerms(te: Terms) {
-    def asBytesRefIterable(): Iterable[BytesRef] = TermsToBytesRefIterable(te)
-    def asBytesRefAndDocFreqIterable(): Iterable[(BytesRef,Int)] = TermsToBytesRefAndDocFreqIterable(te)
-    def asBytesRefAndTotalTermFreqIterable(): Iterable[(BytesRef,Long)] = TermsToBytesRefAndTotalTermFreqIterable(te)
-    def asBytesRefAndDocFreqAndTotalTermFreqIterable(): Iterable[(BytesRef,Int,Long)] = TermsToBytesRefAndDocFreqAndTotalTermFreqIterable(te)
+    def asBytesRefIterable: Iterable[BytesRef] = TermsToBytesRefIterable(te)
+    def asBytesRefAndDocFreqIterable: Iterable[(BytesRef,Int)] = TermsToBytesRefAndDocFreqIterable(te)
+    def asBytesRefAndTotalTermFreqIterable: Iterable[(BytesRef,Long)] = TermsToBytesRefAndTotalTermFreqIterable(te)
+    def asBytesRefAndDocFreqAndTotalTermFreqIterable: Iterable[(BytesRef,Int,Long)] = TermsToBytesRefAndDocFreqAndTotalTermFreqIterable(te)
   }
   
-  implicit def termsToRichTerms(te: Terms) = RichTerms(te)
+  implicit def termsToRichTerms(te: Terms): RichTerms = RichTerms(te)
   
   def getHitCountForQuery(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Long = {
     val hc = new TotalHitCountCollector()
     tlc.get.setCollector(hc)
     is.search(q,tlc.get)
-    return hc.getTotalHits
-  }
-
-  
-  def getMatchingValuesFromSortedDocValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): scala.collection.Set[BytesRef] = {
-    val ret = new HashSet[BytesRef]
-    tlc.get.setCollector(new SimpleCollector() {
-      
-      override def needsScores: Boolean = false
-      
-      var dv: SortedDocValues = null
-
-      override def collect(doc: Int) {
-        ret += BytesRef.deepCopyOf(this.dv.get(doc))
-      }
-      
-      override def doSetNextReader(context: LeafReaderContext) = {
-        this.dv = DocValues.getSorted(context.reader, field)
-      }
-    })
-    is.search(q, tlc.get)
-    Logger.debug(f"SortedDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
-    ret
-  }
-
-  def getMatchingValuesFromNumericDocValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): scala.collection.Set[BytesRef] = {
-    val ret = new HashSet[BytesRef]
-    tlc.get.setCollector(new SimpleCollector() {
-      
-      override def needsScores: Boolean = false
-      
-      var dv: NumericDocValues = null
-
-      override def collect(doc: Int) {
-        ret += new BytesRef(""+this.dv.get(doc))
-      }
-      
-      override def doSetNextReader(context: LeafReaderContext) = {
-        this.dv = DocValues.getNumeric(context.reader, field)
-      }
-    })
-    is.search(q, tlc.get)
-    Logger.debug(f"NumericDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
-    ret
+    hc.getTotalHits
   }
   
 }
@@ -310,19 +202,296 @@ class IndexAccessProvider @Inject() (config: Configuration) {
   def apply(id: String): IndexAccess = indexAccesses(id)
 }
 
-sealed abstract class QueryByType extends EnumEntry {
-  def apply(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] 
-}  
-  
-object QueryByType extends Enum[QueryByType] {
-  import IndexAccess._
-  case object NUMERIC extends QueryByType {
-    def apply(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = getMatchingValuesFromNumericDocValues(is, q, field)
+sealed abstract class StoredFieldType extends EnumEntry {
+  def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef]
+  def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue]
+}
+
+object StoredFieldType extends Enum[StoredFieldType] {
+  case object NUMERICDOCVALUES extends StoredFieldType {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+      val dvs = DocValues.getNumeric(lr, field)
+      (doc: Int) => if (dvs.advanceExact(doc)) Some(JsNumber(dvs.longValue)) else None
+    }
+    def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = {
+      val ret = new mutable.HashSet[BytesRef]
+      tlc.get.setCollector(new SimpleCollector() {
+        
+        override def needsScores: Boolean = false
+        
+        var dv: NumericDocValues = _
+
+        override def collect(doc: Int) {
+          if (this.dv.advanceExact(doc))
+            ret += new BytesRef(""+this.dv.longValue())
+        }
+        
+        override def doSetNextReader(context: LeafReaderContext) {
+          this.dv = DocValues.getNumeric(context.reader, field)
+        }
+      })
+      is.search(q, tlc.get)
+      Logger.debug(f"NumericDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      ret
+    }
   }
-  case object SORTED extends QueryByType {
-    def apply(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = getMatchingValuesFromSortedDocValues(is, q, field)
+  case object SORTEDDOCVALUES extends StoredFieldType {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+      val dvs = DocValues.getSorted(lr, field)
+      if (containsJson)
+        (doc: Int) => if (dvs.advanceExact(doc)) Some(Json.parse(dvs.binaryValue.utf8ToString())) else None
+      else
+        (doc: Int) => if (dvs.advanceExact(doc)) Some(JsString(dvs.binaryValue.utf8ToString())) else None
+    }
+    def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = {
+      val ret = new mutable.HashSet[BytesRef]
+      tlc.get.setCollector(new SimpleCollector() {
+        
+        override def needsScores: Boolean = false
+        
+        var dv: SortedDocValues = _
+  
+        override def collect(doc: Int) {
+          if (this.dv.advanceExact(doc))
+            ret += BytesRef.deepCopyOf(this.dv.binaryValue())
+        }
+        
+        override def doSetNextReader(context: LeafReaderContext) {
+          this.dv = DocValues.getSorted(context.reader, field)
+        }
+      })
+      is.search(q, tlc.get)
+      Logger.debug(f"SortedDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      ret
+    }
+  }    
+  case object SORTEDNUMERICDOCVALUES extends StoredFieldType {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+      val dvs = DocValues.getSortedNumeric(lr, field)
+      (doc: Int) => if (dvs.advanceExact(doc)) Some({
+        val values = new Array[JsValue](dvs.docValueCount)
+        var i = 0
+        while (i<values.length) {
+          values(i)=JsNumber(dvs.nextValue)
+          i += 1
+        }
+        JsArray(values)
+      }) else None
+    }
+    def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = {
+      val ret = new mutable.HashSet[BytesRef]
+      tlc.get.setCollector(new SimpleCollector() {
+        
+        override def needsScores: Boolean = false
+        
+        var dv: SortedNumericDocValues = _
+  
+        override def collect(doc: Int) {
+          if (this.dv.advanceExact(doc)) {
+            var i = 0
+            while (i<values.length) {
+              ret += new BytesRef(""+this.dv.nextValue())
+              i += 1
+            }
+          }
+        }
+        
+        override def doSetNextReader(context: LeafReaderContext) {
+          this.dv = DocValues.getSortedNumeric(context.reader, field)
+        }
+      })
+      is.search(q, tlc.get)
+      Logger.debug(f"SortedNumericDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      ret
+    }        
+  }
+  case object SORTEDSETDOCVALUES extends StoredFieldType {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+      val dvs = DocValues.getSortedSet(lr, field)
+      if (containsJson)
+        (doc: Int) => if (dvs.advanceExact(doc)) Some({
+          val values = new ArrayBuffer[JsValue]
+          var ord = dvs.nextOrd
+          while (ord != SortedSetDocValues.NO_MORE_ORDS) {
+            values += Json.parse(dvs.lookupOrd(ord).utf8ToString)
+            ord = dvs.nextOrd
+          }
+          JsArray(values)
+        }) else None
+      else
+        (doc: Int) => if (dvs.advanceExact(doc)) Some({
+          val values = new ArrayBuffer[JsValue]
+          var ord = dvs.nextOrd
+          while (ord != SortedSetDocValues.NO_MORE_ORDS) {
+            values += JsString(dvs.lookupOrd(ord).utf8ToString)
+            ord = dvs.nextOrd
+          }
+          JsArray(values)
+        }) else None
+
+    }
+    def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = {
+      val ret = new mutable.HashSet[BytesRef]
+      tlc.get.setCollector(new SimpleCollector() {
+        
+        override def needsScores: Boolean = false
+        
+        var dv: SortedSetDocValues = _
+  
+        override def collect(doc: Int) {
+          if (this.dv.advanceExact(doc)) {
+            var ord = this.dv.nextOrd
+            while (ord != SortedSetDocValues.NO_MORE_ORDS) {
+              ret += BytesRef.deepCopyOf(this.dv.lookupOrd(ord))
+              ord = this.dv.nextOrd
+            }
+          }
+        }
+        
+        override def doSetNextReader(context: LeafReaderContext) {
+          this.dv = DocValues.getSortedSet(context.reader, field)
+        }
+      })
+      is.search(q, tlc.get)
+      Logger.debug(f"SortedSetDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      ret
+    }    
+  }
+  case object SINGULARSTOREDFIELD extends StoredFieldType {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+      val fieldS = Collections.singleton(field)
+      if (containsJson)
+        (doc: Int) => Option(lr.document(doc,fieldS).get(field)).map(Json.parse)
+      else
+        (doc: Int) => Option(lr.document(doc,fieldS).get(field)).map(JsString)
+    }
+    def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = {
+      val ret = new mutable.HashSet[BytesRef]
+      val fieldS = Collections.singleton(field)
+      tlc.get.setCollector(new SimpleCollector() {
+        
+        override def needsScores: Boolean = false
+        
+        var r: LeafReader = _
+  
+        override def collect(doc: Int) {
+          val fv = r.document(doc, fieldS).getBinaryValue(field)
+          if (fv != null) ret += BytesRef.deepCopyOf(fv)
+        }
+        
+        override def doSetNextReader(context: LeafReaderContext) {
+          this.r = context.reader
+        }
+      })
+      is.search(q, tlc.get)
+      Logger.debug(f"SingularStoredField -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      ret
+    }    
+  }
+  case object MULTISTOREDFIELD extends StoredFieldType {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+      val fieldS = Collections.singleton(field)
+      if (containsJson)
+        (doc: Int) => {
+          val values = lr.document(doc,fieldS).getValues(field).map(Json.parse)
+          if (values.isEmpty) None else Some(JsArray(values))
+        }
+      else
+        (doc: Int) => {
+          val values = lr.document(doc,fieldS).getValues(field).map(JsString)
+          if (values.isEmpty) None else Some(JsArray(values))
+        }
+    }    
+    def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = {
+      val ret = new mutable.HashSet[BytesRef]
+      val fieldS = Collections.singleton(field)
+      tlc.get.setCollector(new SimpleCollector() {
+        
+        override def needsScores: Boolean = false
+        
+        var r: LeafReader = _
+  
+        override def collect(doc: Int) {
+          for (fv <- r.document(doc, fieldS).getBinaryValues(field)) ret += BytesRef.deepCopyOf(fv)
+        }
+        
+        override def doSetNextReader(context: LeafReaderContext) {
+          this.r = context.reader
+        }
+      })
+      is.search(q, tlc.get)
+      Logger.debug(f"MultiStoredField -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      ret
+    }    
+  }
+  case object TERMVECTOR extends StoredFieldType {
+    import IndexAccess._
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] =
+      if (containsJson)
+        (doc: Int) => {
+          val values = lr.getTermVector(doc, field).asBytesRefIterable.map(br => Json.parse(br.utf8ToString)).toSeq
+          if (values.isEmpty) None else Some(JsArray(values))
+        }
+      else
+        (doc: Int) => {
+          val values = lr.getTermVector(doc, field).asBytesRefIterable.map(br => JsString(br.utf8ToString)).toSeq
+          if (values.isEmpty) None else Some(JsArray(values))
+        }
+    def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = {
+      val ret = new mutable.HashSet[BytesRef]
+      tlc.get.setCollector(new SimpleCollector() {
+        
+        override def needsScores: Boolean = false
+        
+        var r: LeafReader = _
+  
+        override def collect(doc: Int) {
+          r.getTermVector(doc, field).asBytesRefIterable.foreach(ret += BytesRef.deepCopyOf(_))
+        }
+        
+        override def doSetNextReader(context: LeafReaderContext) {
+          this.r = context.reader
+        }
+      })
+      is.search(q, tlc.get)
+      Logger.debug(f"Termvector -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      ret
+    }    
+  }
+  case object NONE extends StoredFieldType {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = throw new IllegalArgumentException
+    def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = throw new IllegalArgumentException    
   }
   val values = findValues
+}
+
+sealed abstract class IndexedFieldType extends EnumEntry {
+}
+
+object IndexedFieldType extends Enum[IndexedFieldType] {
+  case object TEXT extends IndexedFieldType
+  case object STRING extends IndexedFieldType
+  case object INTPOINT extends IndexedFieldType
+  case object LONGPOINT extends IndexedFieldType
+  case object NONE extends IndexedFieldType
+  val values = findValues
+}
+
+case class FieldInfo(
+  id: String,
+  description: String,
+  storedAs: StoredFieldType,
+  indexedAs: IndexedFieldType,
+  containsJson: Boolean
+) {
+  def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = storedAs.getMatchingValues(is, q, id)
+  def jsGetter(lr: LeafReader): (Int) => Option[JsValue] = storedAs.jsGetter(lr, id, containsJson)
+  def toJson = Json.obj(
+      "description"->description,
+      "storedAs"->storedAs.toString,
+      "indexedAs"->indexedAs.toString,
+      "containsJson"->containsJson
+  )  
 }
 
 case class LevelMetadata(
@@ -330,52 +499,16 @@ case class LevelMetadata(
   term: String,
   indices: Seq[String],
   preload: Boolean,
-  textFields: Map[String,String],
-  stringFields: Map[String,String],
-  intPointFields: Map[String,String],
-  longPointFields: Map[String,String],
-  termVectorFields: Map[String,String],
-  sortedDocValuesFields: Map[String,String],
-  storedSingularFields: Map[String,String],
-  storedMultiFields: Map[String,String],
-  numericDocValuesFields: Map[String,String],
-  jsonFields: Map[String,String]) {
-  import IndexAccess._
+  fields: Map[String,FieldInfo]) {
   val termAsTerm = new Term(term,"")
   def toJson = Json.obj(
     "id"->id,
     "term"->term,
     "indices"->indices,
     "preload"->preload,
-    "textFields"->textFields,
-    "stringFields"->stringFields,
-    "intPointFields"->intPointFields,
-    "longPointFields"->longPointFields,
-    "termVectorFields"->termVectorFields,
-    "sortedDocValuesFields"->sortedDocValuesFields,
-    "storedSingularFields"->storedSingularFields,
-    "storedMultiFields"->storedMultiFields,
-    "numericDocValuesFields"->numericDocValuesFields
+    "fields"->fields.mapValues(_.toJson)
   )
-  val levelType: QueryByType = if (numericDocValuesFields.contains(term)) QueryByType.NUMERIC else QueryByType.SORTED
-  def getter(lr: LeafReader, field: String): (Int) => Iterable[String] = {
-    if (storedSingularFields.contains(field) || storedMultiFields.contains(field)) {
-      val fieldS = Collections.singleton(field)
-      return (doc: Int) => lr.document(doc,fieldS).getValues(field).toSeq
-    }
-    if (sortedDocValuesFields.contains(field)) {
-      val dvs = DocValues.getSorted(lr, field)
-      return (doc: Int) => Seq(dvs.get(doc).utf8ToString())
-    }
-    if (numericDocValuesFields.contains(field)) {
-      val dvs = DocValues.getNumeric(lr, field)
-      return (doc: Int) => Seq(""+dvs.get(doc))
-    }
-    if (termVectorFields.contains(field))
-      return (doc: Int) => lr.getTermVector(doc, field).asBytesRefIterable().map(_.utf8ToString)
-    return null
-  }
-  
+  def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = fields(term).getMatchingValues(is, q)
 }
 
 case class IndexMetadata(
@@ -388,7 +521,6 @@ case class IndexMetadata(
   defaultLevelS: Option[String],
   indexingAnalyzersAsText: Map[String,String]
 ) {
-  import IndexAccess._
   
   val directoryCreator: (Path) => Directory = (path: Path) => indexType match {
     case "MMapDirectory" =>
@@ -402,11 +534,11 @@ case class IndexMetadata(
     case "NIOFSDirectory" => new NIOFSDirectory(path)
     case any => throw new IllegalArgumentException("Unknown directory type "+any)
   }
-  val indexingAnalyzers: Map[String,Analyzer] = indexingAnalyzersAsText.mapValues(_ match {
+  val indexingAnalyzers: Map[String,Analyzer] = indexingAnalyzersAsText.mapValues{
     case "StandardAnalyzer" => new StandardAnalyzer(CharArraySet.EMPTY_SET)
-    case a if a.startsWith("MorphologicalAnalyzer_") => new MorphologicalAnalyzer(new Locale(a.substring(23)))  
-    case any => throw new IllegalArgumentException("Unknown analyzer type "+any) 
-  }).withDefaultValue(new KeywordAnalyzer()) 
+    case a if a.startsWith("MorphologicalAnalyzer_") => new MorphologicalAnalyzer(new Locale(a.substring(23)))
+    case any => throw new IllegalArgumentException("Unknown analyzer type " + any)
+  }.withDefaultValue(new KeywordAnalyzer())
   val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap
   val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
   val defaultLevel: LevelMetadata = defaultLevelS.map(levelMap(_)).getOrElse(levels.last)
@@ -419,54 +551,30 @@ case class IndexMetadata(
     "levels"->levels.map(_.toJson),
     "defaultLevel"->defaultLevel.id,
     "indexingAnalyzers"->indexingAnalyzersAsText,
-    "commonTextFields"->levels.map(_.textFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
-    "commonStringFields"->levels.map(_.stringFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
-    "commonIntPointFields"->levels.map(_.intPointFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
-    "commonLongPointFields"->levels.map(_.longPointFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
-    "commonTermVectorFields"->levels.map(_.termVectorFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
-    "commonSortedDocValuesFields"->levels.map(_.sortedDocValuesFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
-    "commonStoredSingularFields"->levels.map(_.storedSingularFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
-    "commonStoredMultiFields"->levels.map(_.storedMultiFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
-    "commonNumericDocValuesFields"->levels.map(_.numericDocValuesFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))),
-    "commonJsonFields"->levels.map(_.jsonFields).reduce((l,r) => l.filter(lp => r.get(lp._1).exists(_ == lp._2))))
-
+    "commonFields"->levels.map(_.fields).reduce((l,r) => l.filter(lp => r.get(lp._1).contains(lp._2))).mapValues(_.toJson)
+  )
 }
 
 class IndexAccess(path: String) {
   
   import IndexAccess._
  
-  private val readers: collection.mutable.Map[String,IndexReader] = new HashMap[String,IndexReader]  
-  private val tfSearchers: collection.mutable.Map[String,IndexSearcher] = new HashMap[String,IndexSearcher]
-  private val tfidfSearchers: collection.mutable.Map[String,IndexSearcher] = new HashMap[String,IndexSearcher]
+  private val readers = new mutable.HashMap[String,IndexReader]
+  private val tfSearchers = new mutable.HashMap[String,IndexSearcher]
+  private val tfidfSearchers = new mutable.HashMap[String,IndexSearcher]
+  
+  def readFieldInfos(
+      c: Map[String,JsValue]): Map[String,FieldInfo] = c.map{ case (fieldId,v) => (fieldId,FieldInfo(fieldId,(v \ "description").as[String], StoredFieldType.withName((v \ "storedAs").asOpt[String].getOrElse("NONE").toUpperCase) , IndexedFieldType.withName((v \ "indexedAs").asOpt[String].getOrElse("NONE").toUpperCase), (v \ "containsJson").asOpt[Boolean].getOrElse(false))) }
   
   def readLevelMetadata(
     c: JsValue,
-    commonTextFields: Map[String,String],
-    commonStringFields: Map[String,String],
-    commonIntPointFields: Map[String,String],
-    commonLongPointFields: Map[String,String],
-    commonTermVectorFields: Map[String,String],
-    commonSortedDocValuesFields: Map[String,String],
-    commonStoredSingularFields: Map[String,String],
-    commonStoredMultiFields: Map[String,String],
-    commonNumericDocValuesFields: Map[String,String],
-    commonJsonFields: Map[String,String]
+    commonFields: Map[String,FieldInfo]
   ) = LevelMetadata(
       (c \ "id").as[String],
       (c \ "term").as[String],
-      Seq((c \ "index").as[String]) ++ (c \ "indices").as[Seq[String]],
+      Seq((c \ "index").as[String]) ++ (c \ "indices").asOpt[Seq[String]].getOrElse(Seq.empty),
       (c \ "preload").asOpt[Boolean].getOrElse(false),
-      (c \ "textFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonTextFields,
-      (c \ "stringFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonStringFields,
-      (c \ "intPointFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonIntPointFields,
-      (c \ "longPointFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonLongPointFields,
-      (c \ "termVectorFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonTermVectorFields,
-      (c \ "sortedDocValuesFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonSortedDocValuesFields,
-      (c \ "storedSingularFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonStoredSingularFields,
-      (c \ "storedMultiFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonStoredMultiFields,
-      (c \ "numericDocValuesFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonNumericDocValuesFields,
-      (c \ "jsonFields").asOpt[Map[String,String]].getOrElse(Map.empty) ++ commonJsonFields
+      (c \ "fields").asOpt[Map[String,JsValue]].map(readFieldInfos).getOrElse(Map.empty) ++ commonFields
   )
   
   def readIndexMetadata(c: JsValue) = IndexMetadata(
@@ -476,16 +584,7 @@ class IndexAccess(path: String) {
     (c \ "contentField").as[String],
     (c \ "contentTokensField").as[String],
     (c \ "levels").as[Seq[JsValue]].map(readLevelMetadata(_,
-      (c \ "commonTextFields").asOpt[Map[String,String]].getOrElse(Map.empty),
-      (c \ "commonStringFields").asOpt[Map[String,String]].getOrElse(Map.empty),
-      (c \ "commonIntPointFields").asOpt[Map[String,String]].getOrElse(Map.empty),
-      (c \ "commonLongPointFields").asOpt[Map[String,String]].getOrElse(Map.empty),
-      (c \ "commonTermVectorFields").asOpt[Map[String,String]].getOrElse(Map.empty),
-      (c \ "commonSortedDocValuesFields").asOpt[Map[String,String]].getOrElse(Map.empty),
-      (c \ "commonStoredSingularFields").asOpt[Map[String,String]].getOrElse(Map.empty),
-      (c \ "commonStoredMultiFields").asOpt[Map[String,String]].getOrElse(Map.empty),
-      (c \ "commonNumericDocValuesFields").asOpt[Map[String,String]].getOrElse(Map.empty),
-      (c \ "commonJsonFields").asOpt[Map[String,String]].getOrElse(Map.empty)
+      (c \ "commonFields").asOpt[Map[String,JsValue]].map(readFieldInfos).getOrElse(Map.empty)
     )),
     (c \ "defaultLevel").asOpt[String],
     (c \ "indexingAnalyzers").asOpt[Map[String,String]].getOrElse(Map.empty)
@@ -496,12 +595,12 @@ class IndexAccess(path: String) {
   {
     val readerFs = for (level <- indexMetadata.levels) yield Future {
       Logger.info("Initializing index at "+path+"/"+level.indices)
-      val readers = level.indices.map(index => { 
-        val directory = indexMetadata.directoryCreator(FileSystems.getDefault().getPath(path+"/"+level.indices(0)))
+      val readers = level.indices.map(index => {
+        val directory = indexMetadata.directoryCreator(FileSystems.getDefault.getPath(path+"/"+index))
         if (level.preload && directory.isInstanceOf[MMapDirectory]) directory.asInstanceOf[MMapDirectory].setPreload(true)
         DirectoryReader.open(directory)
       })
-      val reader = if (readers.length == 1) readers(0) else new ParallelCompositeReader(readers:_*)
+      val reader = if (readers.length == 1) readers.head else new ParallelCompositeReader(readers:_*)
       Logger.info("Initialized index at "+path+"/"+level.indices)
       (level.id, reader)
     }(shortTaskExecutionContext)
@@ -527,16 +626,16 @@ class IndexAccess(path: String) {
   }
   
   val queryAnalyzers = indexMetadata.levels.map(level => (level.id, new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),
-      (level.textFields.keys).map((_,whitespaceAnalyzer)).toMap[String,Analyzer].asJava))).toMap
+      level.fields.values.filter(_.indexedAs == IndexedFieldType.TEXT).map(_.id).map((_,whitespaceAnalyzer)).toMap[String,Analyzer].asJava))).toMap
   
   private def newQueryParser(level: LevelMetadata) = {
     val qp = new QueryParser(indexMetadata.contentField,queryAnalyzers(level.id)) {
         override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
-          if (level.intPointFields.contains(field)) {
+          if (level.fields(field).indexedAs == IndexedFieldType.INTPOINT) {
             val low = if (part1.equals("*")) Int.MinValue else if (startInclusive) part1.toInt else part1.toInt + 1
             val high = if (part2.equals("*")) Int.MaxValue else if (endInclusive) part2.toInt else part2.toInt - 1
             IntPoint.newRangeQuery(field, low, high)
-          } else if (level.longPointFields.contains(field)) {
+          } else if (level.fields(field).indexedAs == IndexedFieldType.LONGPOINT) {
              val low = if (part1.equals("*")) Long.MinValue else {
               val low = if (part1.contains("-")) {
                 ISODateTimeFormat.dateOptionalTimeParser().parseMillis(part1)
@@ -554,7 +653,7 @@ class IndexAccess(path: String) {
         } 
       }
       qp.setAllowLeadingWildcard(true)
-      qp.setLowercaseExpandedTerms(false)
+      qp.setSplitOnWhitespace(false)
       qp.setDefaultOperator(Operator.AND)
       qp.setMaxDeterminizedStates(Int.MaxValue)
       qp
@@ -586,19 +685,19 @@ class IndexAccess(path: String) {
   def docFreq(ir: IndexReader, term: Long): Int = {
     val it = ir.leaves.get(0).reader.terms(indexMetadata.contentField).iterator
     it.seekExact(term)
-    return it.docFreq
+    it.docFreq
   }
 
   def totalTermFreq(ir: IndexReader, term: Long): Long = {
     val it = ir.leaves.get(0).reader.terms(indexMetadata.contentField).iterator
     it.seekExact(term)
-    return it.totalTermFreq
+    it.totalTermFreq
   }
 
   def termOrdToTerm(ir: IndexReader, term: Long): String = {
     val it = ir.leaves.get(0).reader.terms(indexMetadata.contentField).iterator
     it.seekExact(term)
-    return it.term.utf8ToString
+    it.term.utf8ToString
   }
   
   def extractContentTermsFromQuery(q: Query): Seq[String] = QueryTermExtractor.getTerms(q, false, indexMetadata.contentField).map(_.getTerm).toSeq
@@ -606,11 +705,11 @@ class IndexAccess(path: String) {
   private def runSubQuery(queryLevel: String, query: Query, targetLevel: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): Future[Query] = Future {
     val (idTerm: Term, values: scala.collection.Set[BytesRef]) =
       if (!indexMetadata.levelOrder.contains(targetLevel)) 
-        (new Term(targetLevel,""), (if (indexMetadata.levelMap(queryLevel).numericDocValuesFields.contains(targetLevel)) QueryByType.NUMERIC else QueryByType.SORTED)(searcher(queryLevel, SumScaling.ABSOLUTE), query, targetLevel)) 
+        (new Term(targetLevel,""), indexMetadata.levelMap(queryLevel).fields(targetLevel).getMatchingValues(searcher(queryLevel, SumScaling.ABSOLUTE), query))
       else if (indexMetadata.levelOrder(queryLevel)<indexMetadata.levelOrder(targetLevel)) // DOCUMENT < PARAGRAPH
-        (indexMetadata.levelMap(queryLevel).termAsTerm, indexMetadata.levelMap(queryLevel).levelType(searcher(targetLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(queryLevel).term))
+        (indexMetadata.levelMap(queryLevel).termAsTerm, indexMetadata.levelMap(queryLevel).getMatchingValues(searcher(targetLevel, SumScaling.ABSOLUTE), query))
       else 
-        (indexMetadata.levelMap(targetLevel).termAsTerm, indexMetadata.levelMap(targetLevel).levelType(searcher(queryLevel, SumScaling.ABSOLUTE), query, indexMetadata.levelMap(targetLevel).term))
+        (indexMetadata.levelMap(targetLevel).termAsTerm, indexMetadata.levelMap(targetLevel).getMatchingValues(searcher(queryLevel, SumScaling.ABSOLUTE), query))
     new TermInSetQuery(idTerm.field, values.asJava)
   }
   
@@ -619,12 +718,12 @@ class IndexAccess(path: String) {
     val targetLevelOrig = queryIn.substring(queryIn.lastIndexOf('§') + 1, queryIn.length - 1)
     val targetLevel = if (indexMetadata.levelOrder.contains(targetLevelOrig.toUpperCase)) targetLevelOrig.toUpperCase else targetLevelOrig
     var query = queryIn.substring(queryIn.indexOf('§') + 1, queryIn.lastIndexOf('§'))
-    val replacements = new HashMap[String,Future[Query]]
+    val replacements = new mutable.HashMap[String,Future[Query]]
     var firstStart = queryPartStart.findFirstMatchIn(query)
-    while (firstStart.isDefined) { // we have (more) subqueries
+    while (firstStart.isDefined) { // we have (more) sub-queries
       val ends = queryPartEnd.findAllMatchIn(query)
       var curEnd = ends.next().start
-      var neededEnds = queryPartStart.findAllIn(query.substring(0, curEnd)).size - 1
+      val neededEnds = queryPartStart.findAllIn(query.substring(0, curEnd)).size - 1
       while (neededEnds > 0) curEnd = ends.next().start
       val (subQueryQueryLevel, subQuery, subQueryTargetLevel) = processQueryInternal(exactCounts, query.substring(firstStart.get.start, curEnd + 1))
       val processedSubQuery = if (subQueryQueryLevel == queryLevel && subQueryTargetLevel == targetLevel) Future.successful(subQuery) else runSubQuery(subQueryQueryLevel,subQuery,subQueryTargetLevel)
@@ -632,7 +731,7 @@ class IndexAccess(path: String) {
       query = query.substring(0, firstStart.get.start) + "MAGIC:" + replacements.size + query.substring(curEnd + 1)
       firstStart = queryPartStart.findFirstMatchIn(query)
     }
-    Logger.debug(s"Query ${queryIn} rewritten to $query with replacements $replacements.")
+    Logger.debug(s"Query $queryIn rewritten to $query with replacements $replacements.")
     val q = if (query.isEmpty) {
       if (exactCounts) new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField)
       else new MatchAllDocsQuery()
@@ -640,7 +739,7 @@ class IndexAccess(path: String) {
       val q = (if (exactCounts) documentQueryParsers(queryLevel).get else termVectorQueryParsers(queryLevel).get).parse(query) 
       if (exactCounts && q.isInstanceOf[BooleanQuery]) {
         val bq = q.asInstanceOf[BooleanQuery]
-        if (bq.clauses.asScala.forall(c => c.getOccur == Occur.MUST_NOT || (c.getQuery.isInstanceOf[BoostQuery]) && c.getQuery.asInstanceOf[BoostQuery].getBoost == 0.0f)) {
+        if (bq.clauses.asScala.forall(c => c.getOccur == Occur.MUST_NOT || (c.getQuery.isInstanceOf[BoostQuery] && c.getQuery.asInstanceOf[BoostQuery].getBoost == 0.0f))) {
           val bqb = new BooleanQuery.Builder()
           bqb.add(new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField), Occur.MUST)
           bq.clauses.asScala.foreach(bc => { 
@@ -649,30 +748,35 @@ class IndexAccess(path: String) {
           })
           bqb.build
         } else bq
-      } else if (q.isInstanceOf[BoostQuery] && q.asInstanceOf[BoostQuery].getBoost == 0.0) {
-        val bqb = new BooleanQuery.Builder()
-        bqb.add(new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField), Occur.MUST)
-        bqb.add(q, Occur.FILTER)
-        bqb.build
-      } else q
+      } else q match {
+        case bq: BoostQuery if bq.getBoost == 0.0 =>
+          val bqb = new BooleanQuery.Builder()
+          bqb.add(new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField), Occur.MUST)
+          bqb.add(q, Occur.FILTER)
+          bqb.build
+        case _ => q
+      }
     }
     if (replacements.isEmpty) (queryLevel,q,targetLevel) 
-    else if (q.isInstanceOf[BooleanQuery]) {
-      val bqb = new BooleanQuery.Builder()
-      for (clause <- q.asInstanceOf[BooleanQuery].clauses.asScala)
-        if (clause.getQuery.isInstanceOf[TermQuery]) {
-          val tq = clause.getQuery.asInstanceOf[TermQuery]
-          if (tq.getTerm.field == "MAGIC") bqb.add(Await.result(replacements(tq.getTerm.text), Duration.Inf),clause.getOccur)
-          else bqb.add(clause)
-        } else bqb.add(clause)
-      (queryLevel,bqb.build,targetLevel)
-    } else {
-      val q2 = if (q.isInstanceOf[TermQuery]) {
-          val tq = q.asInstanceOf[TermQuery]
-          if (tq.getTerm.field == "MAGIC") Await.result(replacements(tq.getTerm.text), Duration.Inf)
-          else q
-      } else q
-      (queryLevel,q2,targetLevel)
+    else q match {
+      case bq: BooleanQuery =>
+        val bqb = new BooleanQuery.Builder()
+        for (clause <- bq.clauses.asScala)
+          clause.getQuery match {
+            case tq: TermQuery =>
+              if (tq.getTerm.field == "MAGIC") bqb.add(Await.result(replacements(tq.getTerm.text), Duration.Inf), clause.getOccur)
+              else bqb.add(clause)
+            case _ => bqb.add(clause)
+          }
+        (queryLevel, bqb.build, targetLevel)
+      case _ =>
+        val q2 = q match {
+          case tq: TermQuery =>
+            if (tq.getTerm.field == "MAGIC") Await.result(replacements(tq.getTerm.text), Duration.Inf)
+            else q
+          case _ => q
+        }
+        (queryLevel, q2, targetLevel)
     }
   }
   

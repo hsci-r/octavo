@@ -1,8 +1,6 @@
 package parameters
 
-import enumeratum.EnumEntry
 import org.apache.lucene.index.IndexReader
-import enumeratum.Enum
 import services.IndexAccess
 
 trait SumScaling {

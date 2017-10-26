@@ -1,18 +1,12 @@
 package services
 
-import com.koloboke.collect.map.ObjIntMap
-import java.util.function.ObjIntConsumer
-import scala.collection.JavaConverters._
-import com.koloboke.collect.map.LongDoubleMap
-import com.koloboke.collect.set.hash.HashLongSets
-import java.util.function.LongConsumer
-import java.util.function.IntConsumer
-import java.util.function.DoubleConsumer
-import com.koloboke.function.LongDoubleToDoubleFunction
+import java.util.function.{DoubleConsumer, LongConsumer}
 
-import enumeratum.EnumEntry
-import enumeratum.Enum
+import com.koloboke.collect.map.LongDoubleMap
 import com.koloboke.collect.set.LongSet
+import com.koloboke.collect.set.hash.HashLongSets
+import com.koloboke.function.LongDoubleToDoubleFunction
+import enumeratum.{Enum, EnumEntry}
 
 sealed abstract class Filtering extends EnumEntry {
   def apply(x: LongSet, y: LongSet): LongSet 
@@ -21,10 +15,10 @@ sealed abstract class Filtering extends EnumEntry {
 object Filtering extends Enum[Filtering] {
   case object BOTH extends Filtering {
     def apply(xo: LongSet, yo: LongSet): LongSet = {
-      val (x,y) = if (xo.size < yo.size) (xo,yo) else (yo,xo) 
+      val (x,y) = if (xo.size < yo.size) (xo,yo) else (yo,xo)
       val ret = HashLongSets.newUpdatableSet(x.size)
       x.forEach(new LongConsumer() {
-        override def accept(key: Long) = if (y.contains(key)) ret.add(key)
+        override def accept(key: Long) { if (y.contains(key)) ret.add(key) }
       })
       ret
     }
@@ -78,7 +72,7 @@ object Distance {
         denom+=math.max(x.getOrDefault(key,0.0),y.getOrDefault(key,0.0))
       }
     })
-    return nom.toDouble/denom
+    nom /denom
   }
   
   def diceSimilarity(x: LongDoubleMap, y: LongDoubleMap): Double = {
@@ -91,7 +85,7 @@ object Distance {
         denom+=x.getOrDefault(key,0.0)+y.getOrDefault(key,0.0)
       }
     })
-    return (nom*2.0)/denom
+    (nom*2.0)/denom
   }
   
   def center(x: LongDoubleMap): Unit = {
@@ -135,7 +129,7 @@ object Distance {
         sum += diff*diff 
       }
     })
-    return math.sqrt(sum)
+    math.sqrt(sum)
   }
   
   def manhattanDistance(x: LongDoubleMap, y: LongDoubleMap, filtering: Filtering): Double = {
@@ -150,7 +144,7 @@ object Distance {
         sum += math.abs(f1 - f2)
       }
     })
-    return math.sqrt(sum)
+    math.sqrt(sum)
   }
   
   def cosineSimilarity(x: LongDoubleMap, y: LongDoubleMap, filtering: Filtering): Double = {
@@ -166,6 +160,6 @@ object Distance {
       }
     })
     if (s2 == 0.0 || s3 == 0.0) return 0.0
-    return s1 / (math.sqrt(s2) * math.sqrt(s3))
+    s1 / (math.sqrt(s2) * math.sqrt(s3))
   }
 }

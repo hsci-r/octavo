@@ -1,35 +1,22 @@
 package controllers
 
-import javax.inject.Singleton
-import javax.inject.Inject
-import services.IndexAccess
-import akka.stream.Materializer
-import play.api.Environment
-import parameters.GeneralParameters
-import play.api.mvc.Action
-import parameters.QueryParameters
-import parameters.AggregateTermVectorProcessingParameters
-import parameters.LocalTermVectorProcessingParameters
-import org.apache.lucene.search.BooleanQuery
-import org.apache.lucene.search.TermQuery
-import org.apache.lucene.index.Term
-import play.api.libs.json.Json
-import parameters.SumScaling
-import org.apache.lucene.search.BooleanClause.Occur
-import services.TermVectors
-import org.apache.lucene.search.Query
-import scala.collection.mutable.ArrayBuffer
-import com.koloboke.function.LongDoubleConsumer
-import scala.concurrent.Await
-import scala.concurrent.Future
-import com.koloboke.collect.set.hash.HashLongSets
-import scala.concurrent.duration.Duration
-import scala.collection.mutable.PriorityQueue
-import com.koloboke.collect.set.LongSet
 import java.util.function.LongConsumer
-import services.Distance
-import services.IndexAccessProvider
-import play.api.Configuration
+import javax.inject.{Inject, Singleton}
+
+import com.koloboke.collect.set.LongSet
+import com.koloboke.collect.set.hash.HashLongSets
+import com.koloboke.function.LongDoubleConsumer
+import org.apache.lucene.index.Term
+import org.apache.lucene.search.BooleanClause.Occur
+import org.apache.lucene.search.{BooleanQuery, TermQuery}
+import parameters._
+import play.api.{Configuration, Environment}
+import play.api.libs.json.Json
+import services.{Distance, IndexAccessProvider, TermVectors}
+
+import scala.collection.mutable.ArrayBuffer
+import scala.concurrent.{Await, Future}
+import scala.concurrent.duration.Duration
 
 @Singleton
 class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
@@ -40,7 +27,6 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
   def similarCollocations(index: String) = Action { implicit request =>
     implicit val ia = iap(index)
     import ia._
-    val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val gp = new GeneralParameters
     implicit val iec = gp.executionContext
     implicit val its = gp.taskSupport
@@ -58,7 +44,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
     val qm = gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ intermediaryTermVectorLimitQueryParameters.toJson ++ intermediaryTermVectorLocalProcessingParameters.toJson ++ finalTermVectorLimitQueryParameters.toJson ++ finalTermVectorLocalProcessingParameters.toJson ++ finalTermVectorAggregateProcessingParameters.toJson  
     getOrCreateResult("similarCollocations",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
-      val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(false, termVectorQueryParameters.requiredQuery)
+      val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(exactCounts = false, termVectorQueryParameters.requiredQuery)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
       val maxDocs2 = if (gp.maxDocs == -1) -1 else gp.maxDocs / 3
@@ -98,8 +84,8 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
       val ordering = new Ordering[(String,Double)] {
         override def compare(x: (String,Double), y: (String,Double)) = y._2 compare x._2
       }
-      val cmaxHeap = PriorityQueue.empty[(String,Double)](ordering)
-      val dmaxHeap = PriorityQueue.empty[(String,Double)](ordering)
+      val cmaxHeap = collection.mutable.PriorityQueue.empty[(String,Double)](ordering)
+      val dmaxHeap = collection.mutable.PriorityQueue.empty[(String,Double)](ordering)
       var total = 0
       val termsToScores = thirdOrderCollocations.filter(!_._2.isEmpty).map(p => (p._1,Distance.cosineSimilarity(collocations,p._2,finalTermVectorAggregateProcessingParameters.filtering),Distance.diceSimilarity(collocations,p._2)))
       for ((term,cscore,dscore) <- termsToScores.seq) {

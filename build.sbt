@@ -19,7 +19,7 @@ lazy val root = (project in file(".")).enablePlugins(
   DockerPlugin,
   AshScriptPlugin)
 
-scalaVersion := "2.12.2"
+scalaVersion := "2.12.4"
 
 resolvers += Resolver.mavenLocal
 
@@ -33,12 +33,12 @@ dockerExposedPorts in Docker := Seq(9000, 9443)
 
 libraryDependencies ++= Seq(
   guice,
-  "org.apache.lucene" % "lucene-core" % "6.6.0",
-  "org.apache.lucene" % "lucene-analyzers-common" % "6.6.0",
-  "fi.seco" %% "lucene-morphologicalanalyzer" % "1.1.2",
-  "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.0.7",
-  "org.apache.lucene" % "lucene-queryparser" % "6.6.0",
-  "org.apache.lucene" % "lucene-highlighter" % "6.6.0",
+  "org.apache.lucene" % "lucene-core" % "7.1.0",
+  "org.apache.lucene" % "lucene-analyzers-common" % "7.1.0",
+  "fi.seco" %% "lucene-morphologicalanalyzer" % "1.1.3",
+  "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.0",
+  "org.apache.lucene" % "lucene-queryparser" % "7.1.0",
+  "org.apache.lucene" % "lucene-highlighter" % "7.1.0",
   "com.koloboke" % "koloboke-api-jdk8" % "1.0.0",
   "com.koloboke" % "koloboke-impl-jdk8" % "1.0.0",
   "com.beachape" %% "enumeratum" % "1.5.12",

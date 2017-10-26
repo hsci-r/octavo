@@ -1,12 +1,14 @@
+package filters
+
 import javax.inject.Inject
+
 import akka.stream.Materializer
-import play.api.mvc.{Result, RequestHeader, Filter}
-import play.api.Logger
-import scala.concurrent.Future
 import com.google.common.net.InetAddresses
-import play.api.routing.HandlerDef
+import play.api.Logger
+import play.api.mvc.{Filter, RequestHeader, Result}
 import play.api.routing.Router
-import scala.concurrent.ExecutionContext
+
+import scala.concurrent.{ExecutionContext, Future}
 
 class LoggingFilter @Inject() (implicit val mat: Materializer, ec: ExecutionContext) extends Filter {
   def apply(nextFilter: RequestHeader => Future[Result])
@@ -20,19 +22,19 @@ class LoggingFilter @Inject() (implicit val mat: Materializer, ec: ExecutionCont
     
     val remoteHost = InetAddresses.forString(requestHeader.remoteAddress).getCanonicalHostName
       
-    Logger.info(f"${remoteHost}%s requesting ${action}%s.")
+    Logger.info(f"$remoteHost%s requesting $action%s.")
 
     nextFilter(requestHeader).transform(result => { 
       val endTime = System.currentTimeMillis
       val requestTime = endTime - startTime
 
-      Logger.info(f"${action}%s for ${remoteHost}%s took ${requestTime}%,dms and returned ${result.header.status}%s")
+      Logger.info(f"$action%s for $remoteHost%s took $requestTime%,dms and returned ${result.header.status}%s")
 
       result.withHeaders("Request-Time" -> requestTime.toString)
     }, failure => {
       val endTime = System.currentTimeMillis
       val requestTime = endTime - startTime
-      Logger.warn(f"${action}%s for ${remoteHost}%s took ${requestTime}%,dms, but failed.", failure)
+      Logger.warn(f"$action%s for $remoteHost%s took $requestTime%,dms, but failed.", failure)
       failure
     })
   }

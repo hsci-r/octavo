@@ -1,26 +1,17 @@
 package controllers
 
-import play.api.mvc.Result
-import scala.concurrent.ExecutionContext
-import java.io.File
-import play.api.Logger
-import org.apache.lucene.search.TimeLimitingCollector
-import scala.concurrent.duration.Duration
-import scala.concurrent.Await
+import java.io.{File, PrintWriter, StringWriter}
 import java.util.concurrent.ConcurrentHashMap
-import java.io.PrintWriter
-import scala.concurrent.Future
-import javax.inject.Inject
-import akka.stream.Materializer
-import java.io.StringWriter
-import play.api.Environment
-import play.api.libs.json.JsValue
-import play.api.libs.json.JsObject
-import play.api.libs.json.Json
-import play.api.Configuration
-import services.IndexMetadata
-import play.api.mvc.InjectedController
+
 import org.apache.commons.codec.digest.DigestUtils
+import org.apache.lucene.search.TimeLimitingCollector
+import play.api.{Configuration, Environment, Logger}
+import play.api.libs.json.{JsObject, JsValue, Json}
+import play.api.mvc.{InjectedController, Result}
+import services.IndexMetadata
+
+import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.duration.Duration
 
 abstract class AQueuingController(env: Environment, configuration: Configuration) extends InjectedController {
   
@@ -80,10 +71,11 @@ abstract class AQueuingController(env: Environment, configuration: Configuration
         Logger.error("Error processing "+callId+": "+getStackTraceAsString(cause))
         tf.delete()
         processing.remove(name)
-        if (cause.isInstanceOf[TimeLimitingCollector.TimeExceededException]) {
-          val tlcause = cause.asInstanceOf[TimeLimitingCollector.TimeExceededException]
-          BadRequest(s"Query timeout ${tlcause.getTimeAllowed/1000}s exceeded. If you want this to succeed, increase the timeout parameter.")
-        } else throw cause
+        cause match {
+          case tlcause: TimeLimitingCollector.TimeExceededException =>
+            BadRequest(s"Query timeout ${tlcause.getTimeAllowed / 1000}s exceeded. If you want this to succeed, increase the timeout parameter.")
+          case _ => throw cause
+        }
       }
       processing.put(name, future)
     } else {

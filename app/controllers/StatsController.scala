@@ -1,42 +1,24 @@
 package controllers
 
-import javax.inject.Singleton
-import scala.collection.mutable.ArrayBuffer
-import org.apache.lucene.search.IndexSearcher
-import org.apache.lucene.search.Query
-import play.api.libs.json.JsValue
-import org.apache.lucene.search.SimpleCollector
-import org.apache.lucene.search.Scorer
-import org.apache.lucene.index.LeafReaderContext
-import play.api.libs.json.Json
-import javax.inject.Inject
-import org.apache.lucene.queryparser.classic.QueryParser
-import javax.inject.Named
-import services.IndexAccess
-import parameters.SumScaling
-import play.api.libs.json.JsObject
-import scala.collection.JavaConverters._
+import javax.inject.{Inject, Singleton}
+
 import com.tdunning.math.stats.TDigest
-import org.apache.commons.lang3.SerializationUtils
-import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
-import scala.concurrent.Future
-import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.Await
-import scala.concurrent.duration.Duration
-import services.IndexAccessProvider
-import play.api.mvc.InjectedController
-import scala.collection.mutable.HashMap
-import play.api.Environment
-import play.api.Configuration
 import parameters.GeneralParameters
+import play.api.{Configuration, Environment}
+import play.api.libs.json.Json
+import services.{IndexAccess, IndexAccessProvider}
+
+import scala.collection.JavaConverters._
+import scala.collection.mutable
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.{Await, Future}
+import scala.concurrent.duration.Duration
 
 @Singleton
 class StatsController @Inject() (iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
   
-  var dft = new HashMap[String,TDigest]
-  var ttft = new HashMap[String,TDigest]
+  var dft = new mutable.HashMap[String,TDigest]
+  var ttft = new mutable.HashMap[String,TDigest]
   
   private def calc(level: String)(implicit ia: IndexAccess): Unit = {
     synchronized {
@@ -46,10 +28,10 @@ class StatsController @Inject() (iap: IndexAccessProvider, env: Environment, con
         val dft = TDigest.createDigest(100)
         val ttft = TDigest.createDigest(100)
         val f1 = Future {
-          for (lr <- ir.leaves.asScala; (term,df) <- lr.reader.terms(ia.indexMetadata.contentField).asBytesRefAndDocFreqIterable()) dft.add(df)
+          for (lr <- ir.leaves.asScala; (_,df) <- lr.reader.terms(ia.indexMetadata.contentField).asBytesRefAndDocFreqIterable) dft.add(df)
         }
         val f2 = Future {
-          for (lr <- ir.leaves.asScala; (term,ttf) <- lr.reader.terms(ia.indexMetadata.contentField).asBytesRefAndTotalTermFreqIterable()) ttft.add(ttf)
+          for (lr <- ir.leaves.asScala; (_,ttf) <- lr.reader.terms(ia.indexMetadata.contentField).asBytesRefAndTotalTermFreqIterable) ttft.add(ttf)
         }
         Await.ready(f1, Duration.Inf)
         Await.ready(f2, Duration.Inf)
@@ -61,7 +43,6 @@ class StatsController @Inject() (iap: IndexAccessProvider, env: Environment, con
   
   def stats(index: String, from: Double, to: Double, byS: String, levelO: Option[String]) = Action { implicit request =>
     implicit val ia = iap(index)
-    import ia._
     val gp = GeneralParameters()
     val level = levelO.getOrElse(ia.indexMetadata.defaultLevel.id)
     val qm = Json.obj("from"->from,"to"->to,"by"->byS,"level"->level)

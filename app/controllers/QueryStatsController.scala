@@ -1,36 +1,17 @@
 package controllers
 
-import javax.inject.Singleton
-import scala.collection.mutable.ArrayBuffer
-import org.apache.lucene.search.IndexSearcher
-import org.apache.lucene.search.Query
-import play.api.libs.json.JsValue
-import org.apache.lucene.search.SimpleCollector
-import org.apache.lucene.search.Scorer
+import javax.inject.{Inject, Singleton}
+
+import groovy.lang.{GroovyShell, Script}
 import org.apache.lucene.index.LeafReaderContext
-import play.api.libs.json.Json
-import play.api.mvc.Action
-import javax.inject.Inject
-import org.apache.lucene.queryparser.classic.QueryParser
-import play.api.mvc.Controller
-import javax.inject.Named
-import services.IndexAccess
-import parameters.SumScaling
-import play.api.libs.json.JsObject
-import parameters.QueryParameters
-import akka.stream.Materializer
-import play.api.Environment
-import parameters.GeneralParameters
-import scala.collection.mutable.HashMap
-import services.IndexAccessProvider
-import play.api.Configuration
-import groovy.lang.GroovyShell
-import groovy.lang.Script
-import org.apache.lucene.search.TimeLimitingCollector
-import org.apache.lucene.search.MatchAllDocsQuery
-import org.apache.lucene.index.DocValues
-import org.apache.lucene.index.NumericDocValues
-import services.LevelMetadata
+import org.apache.lucene.search._
+import parameters.{GeneralParameters, QueryParameters, SumScaling}
+import play.api.{Configuration, Environment}
+import play.api.libs.json.{JsString, JsValue, Json}
+import services.{IndexAccess, IndexAccessProvider, LevelMetadata}
+
+import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable
 
 @Singleton
 class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
@@ -40,29 +21,29 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
     var totalTermFreq = 0l
     var docFreq = 0l
     def toJson = 
-      if (!termFreqs.isEmpty) Json.obj("termFreqs"->termFreqs.sorted,"totalTermFreq"->totalTermFreq,"docFreq"->docFreq)
+      if (termFreqs.nonEmpty) Json.obj("termFreqs"->termFreqs.sorted,"totalTermFreq"->totalTermFreq,"docFreq"->docFreq)
       else Json.obj("totalTermFreq"->totalTermFreq,"docFreq"->docFreq)
   }
   
   private def getStats(level: LevelMetadata, is: IndexSearcher, q: Query, grouper: Option[Script], attrs: Seq[String], attrLengths: Seq[Int], attrTransformer: Option[Script], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
-    if (!attrs.isEmpty) {
-      var attrGetters: Seq[(Int) => String] = null
-      val groupedStats = new HashMap[Seq[String],Stats]
+    if (attrs.nonEmpty) {
+      var attrGetters: Seq[(Int) => JsValue] = null
+      val groupedStats = new mutable.HashMap[Seq[JsValue],Stats]
       val gs = new Stats
       tlc.get.setCollector(new SimpleCollector() {
         override def needsScores: Boolean = true
         
-        override def setScorer(scorer: Scorer) = this.scorer = scorer
+        override def setScorer(scorer: Scorer) { this.scorer = scorer }
   
-        var scorer: Scorer = null
+        var scorer: Scorer = _
   
         override def collect(doc: Int) {
           val s = groupedStats.getOrElseUpdate(grouper.map(ap => {
-            ap.invokeMethod("group", doc).asInstanceOf[Seq[String]]
+            ap.invokeMethod("group", doc).asInstanceOf[Seq[JsValue]]
           }).getOrElse(attrTransformer.map(ap => {
             ap.getBinding.setProperty("attrs", attrGetters.map(_(doc)))
-            ap.run().asInstanceOf[Seq[String]]
-          }).getOrElse(if (attrLengths.isEmpty) attrGetters.map(_(doc)) else attrGetters.zip(attrLengths).map(p => p._1(doc).substring(0,p._2)))), new Stats)
+            ap.run().asInstanceOf[Seq[JsValue]]
+          }).getOrElse(if (attrLengths.isEmpty) attrGetters.map(_(doc)) else attrGetters.zip(attrLengths).map(p => JsString(p._1(doc).as[String].substring(0,p._2))))), new Stats)
           s.docFreq += 1
           gs.docFreq += 1
           val score = scorer.score().toInt
@@ -74,21 +55,21 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
           gs.totalTermFreq += score
         }
         
-        override def doSetNextReader(context: LeafReaderContext) = {
+        override def doSetNextReader(context: LeafReaderContext) {
           grouper.foreach(_.invokeMethod("setContext",context))
-          attrGetters = attrs.map(level.getter(context.reader,_).andThen(_.iterator.next))
+          attrGetters = attrs.map(level.fields(_).jsGetter(context.reader).andThen(_.iterator.next))
         }
       })
       is.search(q, tlc.get)
-      Json.obj("general"->gs.toJson,"grouped"->groupedStats.toIterable.map(p => Json.toJson(attrs.zip(p._1.map(Json.toJson(_))).toMap ++ Map("stats" -> p._2.toJson))))
+      Json.obj("general"->gs.toJson,"grouped"->groupedStats.map(p => Json.obj("attrs"->Json.toJson(attrs.zip(p._1.map(Json.toJson(_))).toMap,"stats" -> p._2.toJson))))
     } else {
       val s = new Stats
       is.search(q, new SimpleCollector() {
         override def needsScores: Boolean = true
         
-        override def setScorer(scorer: Scorer) = this.scorer = scorer
+        override def setScorer(scorer: Scorer) { this.scorer = scorer }
   
-        var scorer: Scorer = null
+        var scorer: Scorer = _
   
         override def collect(doc: Int) {
           s.docFreq += 1
@@ -108,11 +89,11 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val gp = new GeneralParameters
     val q = new QueryParameters
-    val gatherTermFreqsPerDoc = p.get("termFreqs").exists(v => v(0)=="" || v(0).toBoolean)
-    val attrs = p.get("attr").getOrElse(Seq.empty)
-    val attrLengths = p.get("attrLength").map(_.map(_.toInt)).getOrElse(Seq.empty)
-    val attrTransformer = p.get("attrTransformer").map(_(0)).map(apScript => new GroovyShell().parse(apScript))
-    val grouper = p.get("grouper").map(_(0)).map(apScript => {
+    val gatherTermFreqsPerDoc = p.get("termFreqs").exists(v => v.head=="" || v.head.toBoolean)
+    val attrs = p.getOrElse("attr", Seq.empty)
+    val attrLengths = p.getOrElse("attrLength", Seq.empty).map(_.toInt)
+    val attrTransformer = p.get("attrTransformer").map(_.head).map(apScript => new GroovyShell().parse(apScript))
+    val grouper = p.get("grouper").map(_.head).map(apScript => {
       val s = new GroovyShell().parse(apScript)
       val b = s.getBinding
       b.setProperty("ia", ia)
@@ -124,12 +105,12 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
       b.setProperty("attrTransformer", attrTransformer)
       s
     })
-    val qm = Json.obj("grouper"->p.get("grouper").map(_(0)),"attrs"->attrs,"attrLengths"->attrLengths,"attrTransformer"->p.get("attrTransformer").map(_(0))) ++ gp.toJson ++ q.toJson
+    val qm = Json.obj("grouper"->p.get("grouper").map(_.head),"attrs"->attrs,"attrLengths"->attrLengths,"attrTransformer"->p.get("attrTransformer").map(_.head)) ++ gp.toJson ++ q.toJson
     implicit val ec = gp.executionContext
     getOrCreateResult("termStats", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       implicit val qps = documentQueryParsers
-      val (qlevel,query) = buildFinalQueryRunningSubQueries(true, q.requiredQuery)
+      val (qlevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, q.requiredQuery)
       getStats(ia.indexMetadata.levelMap(qlevel),searcher(qlevel, SumScaling.ABSOLUTE), query, grouper, attrs, attrLengths, attrTransformer, gatherTermFreqsPerDoc)
     })
   }  

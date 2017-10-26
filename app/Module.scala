@@ -1,5 +1,4 @@
 import com.google.inject.AbstractModule
-import java.time.Clock
 
 /**
  * This class is a Guice module that tells Guice how to bind several
@@ -13,7 +12,7 @@ import java.time.Clock
  */
 class Module extends AbstractModule {
 
-  override def configure() = {
+  override def configure() {
   }
 
 }
