@@ -388,7 +388,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
       ret
     }    
   }
-  case object MULTISTOREDFIELD extends StoredFieldType {
+  case object MULTIPLESTOREDFIELDS extends StoredFieldType {
     def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
       val fieldS = Collections.singleton(field)
       if (containsJson)
@@ -496,19 +496,21 @@ case class FieldInfo(
 
 case class LevelMetadata(
   id: String,
-  term: String,
+  description: String,
+  idField: String,
   indices: Seq[String],
   preload: Boolean,
   fields: Map[String,FieldInfo]) {
-  val termAsTerm = new Term(term,"")
-  def toJson = Json.obj(
+  val idFieldAsTerm = new Term(idField,"")
+  def toJson(commonFields: Set[FieldInfo]): JsValue = Json.obj(
     "id"->id,
-    "term"->term,
+    "description"->description,
+    "idField"->idField,
     "indices"->indices,
     "preload"->preload,
-    "fields"->fields.mapValues(_.toJson)
+    "fields"->fields.filter(p => !commonFields.contains(p._2)).mapValues(_.toJson)
   )
-  def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = fields(term).getMatchingValues(is, q)
+  def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Iterable[BytesRef] = fields(idField).getMatchingValues(is, q)
 }
 
 case class IndexMetadata(
@@ -542,16 +544,17 @@ case class IndexMetadata(
   val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap
   val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
   val defaultLevel: LevelMetadata = defaultLevelS.map(levelMap(_)).getOrElse(levels.last)
+  val commonFields: Map[String, FieldInfo] = levels.map(_.fields).reduce((l, r) => l.filter(lp => r.get(lp._1).contains(lp._2)))
   def toJson = Json.obj(
     "name"->indexName,
     "version"->indexVersion,
     "indexType"->indexType,
     "contentField"->contentField,
     "contentTokensField"->contentTokensField,
-    "levels"->levels.map(_.toJson),
+    "levels"->levels.map(_.toJson(commonFields.values.toSet)),
     "defaultLevel"->defaultLevel.id,
     "indexingAnalyzers"->indexingAnalyzersAsText,
-    "commonFields"->levels.map(_.fields).reduce((l,r) => l.filter(lp => r.get(lp._1).contains(lp._2))).mapValues(_.toJson)
+    "commonFields"->commonFields.mapValues(_.toJson)
   )
 }
 
@@ -571,6 +574,7 @@ class IndexAccess(path: String) {
     commonFields: Map[String,FieldInfo]
   ) = LevelMetadata(
       (c \ "id").as[String],
+      (c \ "description").as[String],
       (c \ "term").as[String],
       Seq((c \ "index").as[String]) ++ (c \ "indices").asOpt[Seq[String]].getOrElse(Seq.empty),
       (c \ "preload").asOpt[Boolean].getOrElse(false),
@@ -707,9 +711,9 @@ class IndexAccess(path: String) {
       if (!indexMetadata.levelOrder.contains(targetLevel)) 
         (new Term(targetLevel,""), indexMetadata.levelMap(queryLevel).fields(targetLevel).getMatchingValues(searcher(queryLevel, SumScaling.ABSOLUTE), query))
       else if (indexMetadata.levelOrder(queryLevel)<indexMetadata.levelOrder(targetLevel)) // DOCUMENT < PARAGRAPH
-        (indexMetadata.levelMap(queryLevel).termAsTerm, indexMetadata.levelMap(queryLevel).getMatchingValues(searcher(targetLevel, SumScaling.ABSOLUTE), query))
+        (indexMetadata.levelMap(queryLevel).idFieldAsTerm, indexMetadata.levelMap(queryLevel).getMatchingValues(searcher(targetLevel, SumScaling.ABSOLUTE), query))
       else 
-        (indexMetadata.levelMap(targetLevel).termAsTerm, indexMetadata.levelMap(targetLevel).getMatchingValues(searcher(queryLevel, SumScaling.ABSOLUTE), query))
+        (indexMetadata.levelMap(targetLevel).idFieldAsTerm, indexMetadata.levelMap(targetLevel).getMatchingValues(searcher(queryLevel, SumScaling.ABSOLUTE), query))
     new TermInSetQuery(idTerm.field, values.asJava)
   }
   
