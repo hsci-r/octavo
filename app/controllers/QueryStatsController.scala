@@ -107,7 +107,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
     })
     val qm = Json.obj("grouper"->p.get("grouper").map(_.head),"attrs"->attrs,"attrLengths"->attrLengths,"attrTransformer"->p.get("attrTransformer").map(_.head)) ++ gp.toJson ++ q.toJson
     implicit val ec = gp.executionContext
-    getOrCreateResult("termStats", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
+    getOrCreateResult("queryStats", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       implicit val qps = documentQueryParsers
       val (qlevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, q.requiredQuery)

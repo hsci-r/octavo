@@ -2,39 +2,27 @@
 # This file defines all application routes (Higher priority routes first)
 # ~~~~
 
+GET     /                               controllers.RootController.indices()
 GET		/:index/indexInfo				controllers.IndexInfoController.info(index)
-GET		/indexInfo						controllers.IndexInfoController.info(index = "default")
 
 GET     /:index/search           		controllers.SearchController.search(index)
-GET     /search           				controllers.SearchController.search(index = "default")
 POST    /:index/search           		controllers.SearchController.search(index)
-POST	/search							controllers.SearchController.search(index = "default")
 
-GET		/:index/terms					controllers.SimilarTermsController.similarTerms(index, term: String, maxEditDistance: Int ?= 2, minCommonPrefix: Int ?= 0, transposeIsSingleEdit: Option[String])
-GET		/terms							controllers.SimilarTermsController.similarTerms(index = "default", term: String, maxEditDistance: Int ?= 2, minCommonPrefix: Int ?= 0, transposeIsSingleEdit: Option[String])
+GET		/:index/similarTerms			controllers.SimilarTermsController.similarTerms(index, term: String, maxEditDistance: Int ?= 2, minCommonPrefix: Int ?= 0, transposeIsSingleEdit: Option[String])
 
 GET		/:index/stats					controllers.StatsController.stats(index, from: Double ?= 0.0, to: Double ?= 1.0, by: String ?= "0.1", levelO: Option[String])
-GET		/stats							controllers.StatsController.stats(index = "default", from: Double ?= 0.0, to: Double ?= 1.0, by: String ?= "0.1", levelO: Option[String])
 
 GET		/:index/queryStats				controllers.QueryStatsController.stats(index)
-GET		/queryStats						controllers.QueryStatsController.stats(index = "default")
 POST	/:index/queryStats				controllers.QueryStatsController.stats(index)
-POST	/queryStats						controllers.QueryStatsController.stats(index = "default")
 
 GET		/:index/collocations			controllers.CollocationsController.collocations(index)
-GET		/collocations					controllers.CollocationsController.collocations(index = "default")
 POST	/:index/collocations			controllers.CollocationsController.collocations(index)
-POST	/collocations					controllers.CollocationsController.collocations(index = "default")
 
 GET		/:index/termVectorDiff			controllers.TermVectorDiffController.termVectorDiff(index)
-GET		/termVectorDiff					controllers.TermVectorDiffController.termVectorDiff(index = "default")
 POST	/:index/termVectorDiff			controllers.TermVectorDiffController.termVectorDiff(index)
-POST	/termVectorDiff					controllers.TermVectorDiffController.termVectorDiff(index = "default")
 
 GET		/:index/similarCollocations		controllers.SimilarCollocationsController.similarCollocations(index)
-GET		/similarCollocations			controllers.SimilarCollocationsController.similarCollocations(index = "default")
 POST	/:index/similarCollocations		controllers.SimilarCollocationsController.similarCollocations(index)
-POST	/similarCollocations			controllers.SimilarCollocationsController.similarCollocations(index = "default")
 
 GET		/:index/runScript				controllers.RunScriptController.runScript(index)
 POST	/:index/runScript				controllers.RunScriptController.runScript(index)

@@ -46,7 +46,7 @@ abstract class AQueuingController(env: Environment, configuration: Configuration
   }
 
   protected def getOrCreateResult(method: String, index: IndexMetadata, parameters: JsObject, force: Boolean, pretty: Boolean, call: () => JsValue)(implicit ec: ExecutionContext): Result = {
-    val callId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.toString
+    val callId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.toString + ':' + pretty
     Logger.info(callId)
     val name = DigestUtils.sha256Hex(callId)
     val tmpDir = mtmpDir+'/'+name.charAt(0)+'/'+name.charAt(1)

@@ -192,14 +192,12 @@ object IndexAccess {
 
 @Singleton
 class IndexAccessProvider @Inject() (config: Configuration) {
-  private val defaultIndex = config.getOptional[String]("index.path").map(new IndexAccess(_))
-  private val indexAccesses = {
-    val m = config.getOptional[Configuration]("indices")
-      .map(c => c.keys.par.map(k => (k, new IndexAccess(c.get[String](k)))).seq.toMap).getOrElse(Map.empty)
-    if (defaultIndex.isDefined) m.withDefaultValue(defaultIndex.get)
-    else m
+  val indexAccesses = {
+    val c = config.get[Configuration]("indices")
+    c.keys.par.map(k => (k, new IndexAccess(c.get[String](k)))).seq.toMap
   }
   def apply(id: String): IndexAccess = indexAccesses(id)
+  def toJson: JsValue = Json.toJson(indexAccesses.mapValues(_.indexMetadata.toJson))
 }
 
 sealed abstract class StoredFieldType extends EnumEntry {
@@ -593,7 +591,7 @@ class IndexAccess(path: String) {
     (c \ "defaultLevel").asOpt[String],
     (c \ "indexingAnalyzers").asOpt[Map[String,String]].getOrElse(Map.empty)
   )
-  
+
   val indexMetadata: IndexMetadata = readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
   
   {
