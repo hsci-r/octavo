@@ -44,7 +44,7 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, env:
     import ia._
     val gp = GeneralParameters()
     val transposeIsSingleEdit: Boolean = transposeIsSingleEditg.exists(v => v == "" || v.toBoolean)
-    val qm = Json.obj("term" -> term, "maxEditDistance" -> maxEditDistance, "minCommonPrefix" -> minCommonPrefix, "transposeIsSingleEdit" -> transposeIsSingleEdit)
+    val qm = Json.obj("term" -> term, "maxEditDistance" -> maxEditDistance, "minCommonPrefix" -> minCommonPrefix, "transposeIsSingleEdit" -> transposeIsSingleEdit) ++ gp.toJson
     val ts = ia.queryAnalyzers(indexMetadata.defaultLevel.id).tokenStream(indexMetadata.contentField, term)
     val ta = ts.addAttribute(classOf[CharTermAttribute])
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])

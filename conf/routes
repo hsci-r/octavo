@@ -12,11 +12,17 @@ GET		/:index/similarTerms			controllers.SimilarTermsController.similarTerms(inde
 
 GET		/:index/stats					controllers.StatsController.stats(index, from: Double ?= 0.0, to: Double ?= 1.0, by: String ?= "0.1", levelO: Option[String])
 
-GET		/:index/queryStats				controllers.QueryStatsController.stats(index)
-POST	/:index/queryStats				controllers.QueryStatsController.stats(index)
+GET		/:index/queryStats				controllers.QueryStatsController.queryStats(index)
+POST	/:index/queryStats				controllers.QueryStatsController.queryStats(index)
 
-GET		/:index/collocations			controllers.CollocationsController.collocations(index)
-POST	/:index/collocations			controllers.CollocationsController.collocations(index)
+GET		/:index/groupedQueryStats		controllers.QueryStatsController.queryStats(index)
+POST	/:index/groupedQueryStats		controllers.QueryStatsController.queryStats(index)
+
+GET		/:index/termVectors			    controllers.TermVectorsController.termVectors(index)
+POST	/:index/termVectors			    controllers.TermVectorsController.termVectors(index)
+
+GET		/:index/groupedTermVectors		controllers.TermVectorsController.termVectors(index)
+POST	/:index/groupedTermVectors		controllers.TermVectorsController.termVectors(index)
 
 GET		/:index/termVectorDiff			controllers.TermVectorDiffController.termVectorDiff(index)
 POST	/:index/termVectorDiff			controllers.TermVectorDiffController.termVectorDiff(index)

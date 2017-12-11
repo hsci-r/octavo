@@ -45,7 +45,7 @@ class StatsController @Inject() (iap: IndexAccessProvider, env: Environment, con
     implicit val ia = iap(index)
     val gp = GeneralParameters()
     val level = levelO.getOrElse(ia.indexMetadata.defaultLevel.id)
-    val qm = Json.obj("from"->from,"to"->to,"by"->byS,"level"->level)
+    val qm = Json.obj("from"->from,"to"->to,"by"->byS,"level"->level) ++ gp.toJson
     val by = byS.toDouble
     getOrCreateResult("stats", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       if (!dft.contains(level)) calc(level)

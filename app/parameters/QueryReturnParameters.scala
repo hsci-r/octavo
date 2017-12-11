@@ -7,8 +7,8 @@ import services.IndexAccess
 case class QueryReturnParameters()(implicit request: Request[AnyContent], ia: IndexAccess) {
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   val fields: Seq[String] = p.getOrElse("field", Seq.empty)
-  /** return explanations and norms in search */
-  val returnNorms: Boolean = p.get("returnNorms").exists(v => v.head=="" || v.head.toBoolean)
+  /** return explanations for matches in search */
+  val returnExplanations: Boolean = p.get("returnExplanations").exists(v => v.head=="" || v.head.toBoolean)
   val returnMatches: Boolean = p.get("returnMatches").exists(v => v.head=="" || v.head.toBoolean)
   private val sumScalingStringOpt = p.get("sumScaling").map(v => v.head.toUpperCase)
   private val sumScalingString = sumScalingStringOpt.getOrElse("TTF")
@@ -23,5 +23,5 @@ case class QueryReturnParameters()(implicit request: Request[AnyContent], ia: In
   val contextLevel = p.get("contextLevel").map(v => ContextLevel.withName(v.head.toUpperCase)).getOrElse(ContextLevel.SENTENCE)
   /** how much to expand returned match context */
   val contextExpand = p.get("contextExpand").map(v => v.head.toInt).getOrElse(0)
-  def toJson = Json.obj("limit"->limit,"contextLevel"->contextLevel.entryName,"contextExpand"->contextExpand,"smoothing"->smoothing,"sumScaling"->sumScalingString,"fields"->fields,"returnMatches"->returnMatches,"returnNorms"->returnNorms)
+  def toJson = Json.obj("limit"->limit,"contextLevel"->contextLevel.entryName,"contextExpand"->contextExpand,"smoothing"->smoothing,"sumScaling"->sumScalingString,"fields"->fields,"returnMatches"->returnMatches,"returnExplanations"->returnExplanations)
 }

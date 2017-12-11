@@ -10,13 +10,12 @@ import com.koloboke.collect.map.{LongDoubleMap, LongIntMap}
 import com.koloboke.collect.set.LongSet
 import com.koloboke.collect.set.hash.HashLongSets
 import com.koloboke.function.{LongDoubleConsumer, LongIntConsumer}
-import groovy.lang.Script
 import mdsj.MDSJ
 import org.apache.lucene.codecs.compressing.OrdTermVectorsReader.TVTermsEnum
 import org.apache.lucene.index.{IndexReader, LeafReaderContext}
 import org.apache.lucene.search.{IndexSearcher, Query, SimpleCollector, TimeLimitingCollector}
 import org.apache.lucene.util.BytesRef
-import parameters.{AggregateTermVectorProcessingParameters, LocalTermVectorProcessingParameters, LocalTermVectorScaling}
+import parameters.{AggregateTermVectorProcessingParameters, GroupingParameters, LocalTermVectorProcessingParameters, LocalTermVectorScaling}
 import play.api.Logger
 import play.api.libs.json.{JsString, JsValue, Json}
 
@@ -171,28 +170,28 @@ object TermVectors {
     val cv: LongIntMap = HashLongIntMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
   }
   
-  private def getGroupedUnscaledAggregateContextVectorsForQuery(level: LevelMetadata, is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], grouper: Option[Script], attrs: Seq[String], attrLengths: Seq[Int], attrTransformer: Option[Script], maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): collection.Map[Seq[JsValue], UnscaledVectorInfo] = {
+  private def getGroupedUnscaledAggregateContextVectorsForQuery(level: LevelMetadata, is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], grpp: GroupingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): (TermVectorQueryMetadata,collection.Map[Seq[JsValue], UnscaledVectorInfo]) = {
     val cvm = new mutable.HashMap[Seq[JsValue],UnscaledVectorInfo]
     var cv: UnscaledVectorInfo = null
     var attrGetters: Seq[(Int) => JsValue] = null
     var anyMatches = false
-    runTermVectorQuery(is, q, ctvp, minScalingTerms, maxDocs, (nlrc: LeafReaderContext) => {
-      attrGetters = attrs.map(level.fields(_).jsGetter(nlrc.reader).andThen(_.iterator.next))
+    val tvm = runTermVectorQuery(is, q, ctvp, minScalingTerms, maxDocs, (nlrc: LeafReaderContext) => {
+      attrGetters = grpp.attrs.map(level.fields(_).jsGetter(nlrc.reader).andThen(_.iterator.next))
     }, (doc: Int) => {
       if (anyMatches) cv.docFreq += 1
-      cv = cvm.getOrElseUpdate(grouper.map(ap => {
+      cv = cvm.getOrElseUpdate(grpp.grouper.map(ap => {
         ap.invokeMethod("group", doc).asInstanceOf[Seq[JsValue]]
-      }).getOrElse(attrTransformer.map(ap => {
+      }).getOrElse(grpp.attrTransformer.map(ap => {
         ap.getBinding.setProperty("attrs", attrGetters.map(_(doc)))
         ap.run().asInstanceOf[Seq[JsValue]]
-      }).getOrElse(if (attrLengths.isEmpty) attrGetters.map(_(doc)) else attrGetters.zip(attrLengths).map(p => JsString(p._1(doc).as[String].substring(0,p._2))))), new UnscaledVectorInfo)
+      }).getOrElse(if (grpp.attrLengths.isEmpty) attrGetters.map(_(doc)) else attrGetters.zip(grpp.attrLengths).map(p => JsString(p._1(doc).as[String].substring(0,p._2))))), new UnscaledVectorInfo)
       anyMatches = false
     }, (term: Long, freq: Int) => {
         anyMatches = true
        cv.cv.addValue(term, freq)
        cv.totalTermFreq += freq
      })
-    cvm
+    (tvm,cvm)
   }  
 
   final class VectorInfo(ir: IndexReader, value: UnscaledVectorInfo, ctvpa: AggregateTermVectorProcessingParameters)(implicit ia: IndexAccess) {
@@ -201,9 +200,10 @@ object TermVectors {
     val cv: LongDoubleMap = scaleTermVector(ir, value.cv,ctvpa)
   }
 
-  def getGroupedAggregateContextVectorsForQuery(level: LevelMetadata, is: IndexSearcher, q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], grouper: Option[Script], attrs: Seq[String], attrLengths: Seq[Int], attrTransformer: Option[Script], ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): collection.Map[Seq[JsValue], VectorInfo] = {
+  def getGroupedAggregateContextVectorsForQuery(level: LevelMetadata, is: IndexSearcher, q: Query, ctvpl: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], grpp: GroupingParameters, ctvpa: AggregateTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): (TermVectorQueryMetadata, collection.Map[Seq[JsValue], VectorInfo]) = {
     val ir = is.getIndexReader
-    getGroupedUnscaledAggregateContextVectorsForQuery(level, is, q, ctvpl, minScalingTerms, grouper, attrs, attrLengths, attrTransformer, maxDocs).map{ case (key,value) => (key, new VectorInfo(ir, value,ctvpa)) }
+    val (tvm, cvm) = getGroupedUnscaledAggregateContextVectorsForQuery(level, is, q, ctvpl, minScalingTerms, grpp, maxDocs)
+    (tvm, cvm.map{ case (key,value) => (key, new VectorInfo(ir, value,ctvpa)) })
   }
   
   def getContextTermsForQuery(is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): (TermVectorQueryMetadata,LongSet) = {

@@ -5,9 +5,9 @@ import javax.inject._
 
 import com.koloboke.collect.map.LongDoubleMap
 import com.koloboke.collect.map.hash.HashIntObjMaps
-import org.apache.lucene.index.{IndexOptions, LeafReaderContext, Term}
-import org.apache.lucene.search.{Scorer, SimpleCollector}
+import org.apache.lucene.index.{IndexOptions, LeafReaderContext}
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource
+import org.apache.lucene.search.{Scorer, SimpleCollector}
 import parameters._
 import play.api._
 import play.api.libs.json.{JsNull, JsValue, Json}
@@ -30,11 +30,13 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
     val gp = GeneralParameters()
     val srp = QueryReturnParameters()
     val ctv = QueryParameters("ctv_")
-    val ctvpl = LocalTermVectorProcessingParameters("r_")
-    val ctvpa = AggregateTermVectorProcessingParameters("r_")
+    val ctvpl = LocalTermVectorProcessingParameters("ctv_")
+    val ctvpa = AggregateTermVectorProcessingParameters("ctv_")
+    val rtvpl = LocalTermVectorProcessingParameters()
+    val rtvpa = AggregateTermVectorProcessingParameters()
     val termVectors = p.get("termVectors").exists(v => v.head=="" || v.head.toBoolean)
     implicit val iec = gp.executionContext
-    val qm = Json.obj("termVectors"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ ctvpl.toJson ++ ctvpa.toJson
+    val qm = Json.obj("termVectors"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ rtvpl.toJson ++ rtvpa.toJson ++ ctvpl.toJson ++ ctvpa.toJson
     getOrCreateResult("search",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       implicit val ifjp = gp.forkJoinPool
@@ -47,25 +49,23 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
       val maxHeap = mutable.PriorityQueue.empty[(Int,Float)]((x: (Int, Float), y: (Int, Float)) => y._2 compare x._2)
       val compareTermVector = if (ctv.query.isDefined)
         getAggregateContextVectorForQuery(is, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermsFromQuery(query),ctvpa, gp.maxDocs) else null
-      val (we, normTerms) = if (srp.returnNorms)
-        (query.createWeight(is, true, 1.0f), extractContentTermsFromQuery(query))
-      else (null, null)
+      val we = if (srp.returnExplanations)
+        query.createWeight(is, true, 1.0f)
+      else null
       val processDocFields = (context: LeafReaderContext, doc: Int, getters: Map[String,(Int) => Option[JsValue]]) => {
         val fields = new mutable.HashMap[String, JsValue]
         for (field <- srp.fields;
              value <- getters(field)(doc)) fields += (field -> value)
-        val cv = if (termVectors || ctv.query.isDefined) getTermVectorForDocument(ir, doc, ctvpl, ctvpa) else null
+        val cv = if (termVectors || ctv.query.isDefined) getTermVectorForDocument(ir, doc, rtvpl, rtvpa) else null
         if (ctv.query.isDefined)
           fields += ("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._2)))
-        if (srp.returnNorms) {
+        if (srp.returnExplanations)
           fields += ("explanation" -> Json.toJson(we.explain(context, doc).toString))
-        fields += ("norms" -> Json.toJson(normTerms.map(t => Json.toJson(Map("term" -> t, "docFreq" -> ("" + ir.docFreq(new Term(indexMetadata.contentField, t))), "totalTermFreq" -> ("" + ir.totalTermFreq(new Term(indexMetadata.contentField, t))))))))
-        }
-        if (cv != null && ctvpa.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, limitTermVector(cv, ctvpa)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
-        (fields, if (ctvpa.dimensions >0) cv else null)
+        if (cv != null && rtvpa.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, limitTermVector(cv, rtvpa)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
+        (fields, if (rtvpa.dimensions >0) cv else null)
       }
       val docFields = HashIntObjMaps.getDefaultFactory[collection.Map[String,JsValue]]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[collection.Map[String,JsValue]]
-      val docVectorsForMDS = if (ctvpa.dimensions>0) HashIntObjMaps.getDefaultFactory[LongDoubleMap]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[LongDoubleMap] else null
+      val docVectorsForMDS = if (rtvpa.dimensions>0) HashIntObjMaps.getDefaultFactory[LongDoubleMap]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[LongDoubleMap] else null
       val collector = new SimpleCollector() {
 
         override def needsScores: Boolean = true
@@ -113,13 +113,13 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
             if (ctv.query.isDefined)
               cdocFields += "distance" -> Json.toJson(ctvpa.distance(cdocVectors, compareTermVector._2))
             docFields.put(p._1, cdocFields)
-            if (cdocVectors != null) docVectorsForMDS.put(p._1, limitTermVector(cdocVectors,ctvpa))
+            if (cdocVectors != null) docVectorsForMDS.put(p._1, limitTermVector(cdocVectors,rtvpa))
         })
       }
       val values = maxHeap.dequeueAll.reverse
-      val cvs = if (ctvpa.dimensions > 0) {
+      val cvs = if (rtvpa.dimensions > 0) {
         val nonEmptyVectorsAndTheirOriginalIndices = values.map(p => docVectorsForMDS.get(p._1)).zipWithIndex.filter(p => !p._1.isEmpty)
-        val mdsValues = ctvpa.dimensionalityReduction(nonEmptyVectorsAndTheirOriginalIndices.map(p => p._1), ctvpa).map(Json.toJson(_)).toSeq
+        val mdsValues = rtvpa.dimensionalityReduction(nonEmptyVectorsAndTheirOriginalIndices.map(p => p._1), rtvpa).map(Json.toJson(_)).toSeq
         val originalIndicesToMDSValueIndices = nonEmptyVectorsAndTheirOriginalIndices.map(_._2).zipWithIndex.toMap
         values.indices.map(i => originalIndicesToMDSValueIndices.get(i).map(vi => Json.toJson(mdsValues(vi))).getOrElse(JsNull))
       } else null
@@ -147,7 +147,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
 	          var df = docFields.get(doc)
             if (cvs!=null) df = df ++ Map("termVector"->cvs(i))
             if (srp.returnMatches) df = df ++ Map("matches" -> Json.toJson(matchesByDocs(i).filter(_.contains("<b>"))))
-            df ++ Map("score" -> (if (ctvpa.sumScaling != SumScaling.TTF) Json.toJson(score) else Json.toJson(score.toInt)))
+            df ++ Map("score" -> (if (srp.sumScaling != SumScaling.TTF) Json.toJson(score) else Json.toJson(score.toInt)))
       })
     })
   }
