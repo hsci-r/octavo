@@ -10,6 +10,6 @@ import services.IndexAccessProvider
 class IndexInfoController @Inject() (iap: IndexAccessProvider) extends InjectedController {
   
   def info(index: String) = Action {
-    Ok(Json.prettyPrint(iap(index).indexMetadata.toJson)).as(JSON)
+    Ok(Json.prettyPrint(iap(index).indexMetadata.toJson(iap(index)))).as(JSON)
   }  
 }

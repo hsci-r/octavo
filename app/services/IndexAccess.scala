@@ -197,7 +197,7 @@ class IndexAccessProvider @Inject() (config: Configuration) {
     c.keys.par.map(k => (k, new IndexAccess(c.get[String](k)))).seq.toMap
   }
   def apply(id: String): IndexAccess = indexAccesses(id)
-  def toJson: JsValue = Json.toJson(indexAccesses.mapValues(_.indexMetadata.toJson))
+  def toJson: JsValue = Json.toJson(indexAccesses.mapValues(ia => ia.indexMetadata.toJson(ia)))
 }
 
 sealed abstract class StoredFieldType extends EnumEntry {
@@ -541,12 +541,16 @@ case class FieldInfo(
 ) {
   def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[_] = storedAs.getMatchingValues(is, q, id)
   def jsGetter(lr: LeafReader): (Int) => Option[JsValue] = storedAs.jsGetter(lr, id, containsJson)
-  def toJson = Json.obj(
+  def toJson(lr: LeafReader) = {
+    val ret = Json.obj(
       "description"->description,
       "storedAs"->storedAs.toString,
       "indexedAs"->indexedAs.toString,
       "containsJson"->containsJson
-  )  
+    )
+    if ((indexedAs == IndexedFieldType.TEXT || indexedAs == IndexedFieldType.STRING)) ret ++ Json.obj("distinctValues"-> (if (lr.terms(id) != null) lr.terms(id).size() else 0))
+    else ret
+  }
 }
 
 case class LevelMetadata(
@@ -558,13 +562,13 @@ case class LevelMetadata(
   fields: Map[String,FieldInfo]) {
   val idFieldAsTerm = new Term(idField,"")
   val idFieldInfo: FieldInfo = fields(idField)
-  def toJson(commonFields: Set[FieldInfo]): JsValue = Json.obj(
+  def toJson(ia: IndexAccess, commonFields: Set[FieldInfo]): JsValue = Json.obj(
     "id"->id,
     "description"->description,
     "idField"->idField,
     "indices"->indices,
     "preload"->preload,
-    "fields"->fields.filter(p => !commonFields.contains(p._2)).mapValues(_.toJson)
+    "fields"->fields.filter(p => !commonFields.contains(p._2)).mapValues(_.toJson(ia.reader(id).leaves.get(0).reader))
   )
   def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[_] = fields(idField).getMatchingValues(is, q)
 }
@@ -601,16 +605,16 @@ case class IndexMetadata(
   val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
   val defaultLevel: LevelMetadata = defaultLevelS.map(levelMap(_)).getOrElse(levels.last)
   val commonFields: Map[String, FieldInfo] = levels.map(_.fields).reduce((l, r) => l.filter(lp => r.get(lp._1).contains(lp._2)))
-  def toJson = Json.obj(
+  def toJson(ia: IndexAccess) = Json.obj(
     "name"->indexName,
     "version"->indexVersion,
     "indexType"->indexType,
     "contentField"->contentField,
     "contentTokensField"->contentTokensField,
-    "levels"->levels.map(_.toJson(commonFields.values.toSet)),
+    "levels"->levels.map(_.toJson(ia,commonFields.values.toSet)),
     "defaultLevel"->defaultLevel.id,
     "indexingAnalyzers"->indexingAnalyzersAsText,
-    "commonFields"->commonFields.mapValues(_.toJson)
+    "commonFields"->commonFields.mapValues(_.toJson(ia.reader(defaultLevel.id).leaves.get(0).reader))
   )
 }
 
