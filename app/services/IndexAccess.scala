@@ -659,12 +659,20 @@ class IndexAccess(path: String) {
   {
     val readerFs = for (level <- indexMetadata.levels) yield Future {
       Logger.info("Initializing index at "+path+"/["+level.indices.mkString(", ")+"]")
+      val seenFields = new collection.mutable.HashSet[String]()
       val readers = level.indices.map(index => {
         val directory = indexMetadata.directoryCreator(FileSystems.getDefault.getPath(path+"/"+index))
         if (level.preload && directory.isInstanceOf[MMapDirectory]) directory.asInstanceOf[MMapDirectory].setPreload(true)
-        DirectoryReader.open(directory)
+        val ret = DirectoryReader.open(directory)
+        for (fi <- ret.leaves().get(0).reader().getFieldInfos.iterator.asScala) {
+          fi.getDocValuesType
+          if (!level.fields.contains(fi.name)) Logger.warn(s"Encountered undocumented field ${fi.name} in ${path + "/" + index}. Won't know how to handle/publicise it.")
+          else seenFields += fi.name
+        }
+        ret
       })
       val reader = if (readers.length == 1) readers.head else new ParallelCompositeReader(readers:_*)
+      for (field <- level.fields) if (!seenFields.contains(field._1)) Logger.warn("Documented field "+ field._1 + " not found in "+path+"/["+level.indices.mkString(", ")+"]")
       Logger.info("Initialized index at "+path+"/["+level.indices.mkString(", ")+"]")
       (level.id, reader)
     }(shortTaskExecutionContext)
