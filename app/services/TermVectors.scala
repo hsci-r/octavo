@@ -22,6 +22,7 @@ import play.api.libs.json.{JsString, JsValue, Json}
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.parallel.{ParIterable, ParSeq, TaskSupport}
+import scala.collection.JavaConverters._
 
 object TermVectors {
   
@@ -180,11 +181,14 @@ object TermVectors {
     }, (doc: Int) => {
       if (anyMatches) cv.docFreq += 1
       cv = cvm.getOrElseUpdate(grpp.grouper.map(ap => {
-        ap.invokeMethod("group", doc).asInstanceOf[Seq[JsValue]]
+        ap.invokeMethod("group", doc).asInstanceOf[java.util.List[Any]].asScala.map(v => if (v.isInstanceOf[JsValue]) v else JsString(v.asInstanceOf[String])).asInstanceOf[Seq[JsValue]]
       }).getOrElse(grpp.attrTransformer.map(ap => {
-        ap.getBinding.setProperty("attrs", attrGetters.map(_(doc)))
-        ap.run().asInstanceOf[Seq[JsValue]]
-      }).getOrElse(if (grpp.attrLengths.isEmpty) attrGetters.map(_(doc)) else attrGetters.zip(grpp.attrLengths).map(p => JsString(p._1(doc).as[String].substring(0,p._2))))), new UnscaledVectorInfo)
+        ap.getBinding.setProperty("attrs", attrGetters.map(_(doc)).asJava)
+        ap.run().asInstanceOf[java.util.List[Any]].asScala.map(v => if (v.isInstanceOf[JsValue]) v else JsString(v.asInstanceOf[String])).asInstanceOf[Seq[JsValue]]
+      }).getOrElse(if (grpp.attrLengths.isEmpty) attrGetters.map(_(doc)) else attrGetters.zip(grpp.attrLengths).map(p => {
+        val value = p._1(doc).toString
+        JsString(value.substring(0,Math.min(p._2,value.length)))
+      }))), new UnscaledVectorInfo)
       anyMatches = false
     }, (term: Long, freq: Int) => {
         anyMatches = true

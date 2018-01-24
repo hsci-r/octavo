@@ -38,7 +38,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
   
         override def collect(doc: Int) {
           val s = groupedStats.getOrElseUpdate(grpp.grouper.map(ap => {
-            ap.invokeMethod("group", doc).asInstanceOf[Seq[JsValue]]
+            ap.invokeMethod("group", doc).asInstanceOf[java.util.List[Any]].asScala.map(v => if (v.isInstanceOf[JsValue]) v else JsString(v.asInstanceOf[String])).asInstanceOf[Seq[JsValue]]
           }).getOrElse(grpp.attrTransformer.map(ap => {
             ap.getBinding.setProperty("attrs", attrGetters.map(_(doc)).asJava)
             ap.run().asInstanceOf[java.util.List[Any]].asScala.map(v => if (v.isInstanceOf[JsValue]) v else JsString(v.asInstanceOf[String])).asInstanceOf[Seq[JsValue]]
