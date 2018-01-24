@@ -1,27 +1,26 @@
 import com.typesafe.config._
 
+scalaVersion := "2.12.4"
+
+resolvers += Resolver.mavenLocal
+
 name := """octavo"""
 
 val conf = ConfigFactory.parseFile(new File("conf/application.conf")).resolve()
 
 version := conf.getString("app.version")
 
-enablePlugins(SystemdPlugin)
+lazy val root = (project in file(".")).enablePlugins(
+  PlayScala,
+  SystemdPlugin,
+  DockerPlugin,
+  AshScriptPlugin)
 
-maintainer := "Eetu Mäkelä <eetu.makela@aalto.fi>"
+maintainer := "Eetu Mäkelä <eetu.makela@helsinki.fi>"
 
 packageSummary := "octavo"
 
 packageDescription := "Octavo - Open API for Text and Metadata, built using the Play framework"
-
-lazy val root = (project in file(".")).enablePlugins(
-  PlayScala,
-  DockerPlugin,
-  AshScriptPlugin)
-
-scalaVersion := "2.12.4"
-
-resolvers += Resolver.mavenLocal
 
 sources in (Compile, doc) := Seq.empty
 
@@ -36,7 +35,7 @@ libraryDependencies ++= Seq(
   "org.apache.lucene" % "lucene-core" % "7.1.0",
   "org.apache.lucene" % "lucene-analyzers-common" % "7.1.0",
   "fi.seco" %% "lucene-morphologicalanalyzer" % "1.1.3",
-  "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.0",
+  "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.1",
   "org.apache.lucene" % "lucene-queryparser" % "7.1.0",
   "org.apache.lucene" % "lucene-highlighter" % "7.1.0",
   "com.koloboke" % "koloboke-api-jdk8" % "1.0.0",

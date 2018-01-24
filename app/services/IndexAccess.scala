@@ -654,13 +654,19 @@ class IndexAccess(path: String) {
     (c \ "indexingAnalyzers").asOpt[Map[String,String]].getOrElse(Map.empty)
   )
 
-  val indexMetadata: IndexMetadata = readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
-  
-  {
-    val readerFs = for (level <- indexMetadata.levels) yield Future {
+  val indexMetadata: IndexMetadata = try {
+    readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
+  } catch {
+    case e: Exception =>
+      Logger.error("Encountered an exception reading "+path+"/indexmeta.json",e)
+      throw e
+  }
+
+  try {
+    val futures = for (level <- indexMetadata.levels) yield Future {
       Logger.info("Initializing index at "+path+"/["+level.indices.mkString(", ")+"]")
       val seenFields = new collection.mutable.HashSet[String]()
-      val readers = level.indices.map(index => {
+      val mreaders = level.indices.map(index => {
         val directory = indexMetadata.directoryCreator(FileSystems.getDefault.getPath(path+"/"+index))
         if (level.preload && directory.isInstanceOf[MMapDirectory]) directory.asInstanceOf[MMapDirectory].setPreload(true)
         val ret = DirectoryReader.open(directory)
@@ -671,19 +677,21 @@ class IndexAccess(path: String) {
         }
         ret
       })
-      val reader = if (readers.length == 1) readers.head else new ParallelCompositeReader(readers:_*)
+      val reader = if (mreaders.length == 1) mreaders.head else new ParallelCompositeReader(mreaders:_*)
       for (field <- level.fields) if (!seenFields.contains(field._1)) Logger.warn("Documented field "+ field._1 + " not found in "+path+"/["+level.indices.mkString(", ")+"]")
+      readers.put(level.id, reader)
+      val tfSearcher = new IndexSearcher(reader)
+      tfSearcher.setSimilarity(termFrequencySimilarity)
+      tfSearchers.put(level.id, tfSearcher)
+      tfidfSearchers.put(level.id, new IndexSearcher(reader))
       Logger.info("Initialized index at "+path+"/["+level.indices.mkString(", ")+"]")
       (level.id, reader)
     }(shortTaskExecutionContext)
-    for (readerF <- readerFs) {
-      val (id, reader) = Await.result(readerF, Duration.Inf)
-      readers.put(id, reader)
-      val tfSearcher = new IndexSearcher(reader)
-      tfSearcher.setSimilarity(termFrequencySimilarity)
-      tfSearchers.put(id, tfSearcher)
-      tfidfSearchers.put(id, new IndexSearcher(reader))
-    }
+    futures.foreach(Await.result(_, Duration.Inf))
+  } catch {
+    case e: Exception =>
+      Logger.error("Encountered an exception initializing index at "+path,e)
+      throw e
   }
 
   def reader(level: String): IndexReader = readers(level)
@@ -702,41 +710,65 @@ class IndexAccess(path: String) {
   
   private def newQueryParser(level: LevelMetadata) = {
     val qp = new QueryParser(indexMetadata.contentField,queryAnalyzers(level.id)) {
-        override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
-          if (level.fields(field).indexedAs == IndexedFieldType.INTPOINT) {
-            val low = if (part1.equals("*")) Int.MinValue else if (startInclusive) part1.toInt else part1.toInt + 1
-            val high = if (part2.equals("*")) Int.MaxValue else if (endInclusive) part2.toInt else part2.toInt - 1
+      override def getFieldQuery(field: String, content: String, quoted: Boolean): Query = {
+        level.fields(field).indexedAs match {
+          case IndexedFieldType.INTPOINT =>
+            val value = content.toInt
+            IntPoint.newRangeQuery(field, value, value)
+          case IndexedFieldType.FLOATPOINT =>
+            val value = content.toFloat
+            FloatPoint.newRangeQuery(field, value, value)
+          case IndexedFieldType.DOUBLEPOINT =>
+            val value = content.toDouble
+            DoublePoint.newRangeQuery(field, value, value)
+          case IndexedFieldType.LONGPOINT =>
+            val value = if (content.contains("-"))
+              ISODateTimeFormat.dateOptionalTimeParser().parseMillis(content)
+            else content.toLong
+            LongPoint.newRangeQuery(field, value, value)
+          case _ =>
+            super.getFieldQuery(field, content, quoted)
+        }
+      }
+
+      override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
+        level.fields(field).indexedAs match {
+          case IndexedFieldType.INTPOINT =>
+            val low = if (part1 == null || part1.equals("*")) Int.MinValue else if (startInclusive) part1.toInt else part1.toInt + 1
+            val high = if (part2 == null || part2.equals("*")) Int.MaxValue else if (endInclusive) part2.toInt else part2.toInt - 1
             IntPoint.newRangeQuery(field, low, high)
-          } else if (level.fields(field).indexedAs == IndexedFieldType.FLOATPOINT) {
-            val low = if (part1.equals("*")) Float.MinValue else if (startInclusive) part1.toFloat else FloatPoint.nextUp(part1.toFloat)
-            val high = if (part2.equals("*")) Float.MaxValue else if (endInclusive) part2.toFloat else FloatPoint.nextDown(part2.toFloat)
+          case IndexedFieldType.FLOATPOINT =>
+            val low = if (part1 == null || part1.equals("*")) Float.MinValue else if (startInclusive) part1.toFloat else FloatPoint.nextUp(part1.toFloat)
+            val high = if (part2 == null || part2.equals("*")) Float.MaxValue else if (endInclusive) part2.toFloat else FloatPoint.nextDown(part2.toFloat)
             FloatPoint.newRangeQuery(field, low, high)
-          } else if (level.fields(field).indexedAs == IndexedFieldType.DOUBLEPOINT) {
-            val low = if (part1.equals("*")) Double.MinValue else if (startInclusive) part1.toDouble else DoublePoint.nextUp(part1.toDouble)
-            val high = if (part2.equals("*")) Double.MaxValue else if (endInclusive) part2.toDouble else DoublePoint.nextDown(part2.toDouble)
+          case IndexedFieldType.DOUBLEPOINT =>
+            val low = if (part1 == null || part1.equals("*")) Double.MinValue else if (startInclusive) part1.toDouble else DoublePoint.nextUp(part1.toDouble)
+            val high = if (part2 == null || part2.equals("*")) Double.MaxValue else if (endInclusive) part2.toDouble else DoublePoint.nextDown(part2.toDouble)
             DoublePoint.newRangeQuery(field, low, high)
-          } else if (level.fields(field).indexedAs == IndexedFieldType.LONGPOINT) {
-             val low = if (part1.equals("*")) Long.MinValue else {
-              val low = if (part1.contains("-")) {
+          case IndexedFieldType.LONGPOINT =>
+            val low = if (part1 == null || part1.equals("*")) Long.MinValue else {
+              val low = if (part1.contains("-"))
                 ISODateTimeFormat.dateOptionalTimeParser().parseMillis(part1)
-              } else part1.toLong
+              else part1.toLong
               if (startInclusive) low else low + 1
             }
-            val high = if (part2.equals("*")) Long.MaxValue else {
-              val high = if (part2.contains("-")) {
+            val high = if (part2 == null || part2.equals("*")) Long.MaxValue else {
+              val high = if (part2.contains("-"))
                 ISODateTimeFormat.dateOptionalTimeParser().parseMillis(part2)
-              } else part2.toLong
+              else part2.toLong
               if (endInclusive) high else high - 1
-            } 
+            }
             LongPoint.newRangeQuery(field, low, high)
-          } else super.getRangeQuery(field,part1,part2,startInclusive,endInclusive) 
-        } 
+          case _ =>
+            super.getRangeQuery(field, part1, part2, startInclusive, endInclusive)
+        }
       }
-      qp.setAllowLeadingWildcard(true)
-      qp.setSplitOnWhitespace(false)
-      qp.setDefaultOperator(Operator.AND)
-      qp.setMaxDeterminizedStates(Int.MaxValue)
-      qp
+    }
+    qp.setAllowLeadingWildcard(true)
+    qp.setSplitOnWhitespace(false)
+    qp.setDefaultOperator(Operator.AND)
+    qp.setMaxDeterminizedStates(Int.MaxValue)
+    qp
   }
   
   val termVectorQueryParsers: Map[String,ThreadLocal[QueryParser]] = indexMetadata.levels.map(level => (level.id, new ThreadLocal[QueryParser] {
