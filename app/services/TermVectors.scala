@@ -15,7 +15,7 @@ import org.apache.lucene.codecs.compressing.OrdTermVectorsReader.TVTermsEnum
 import org.apache.lucene.index.{IndexReader, LeafReaderContext}
 import org.apache.lucene.search.{IndexSearcher, Query, SimpleCollector, TimeLimitingCollector}
 import org.apache.lucene.util.BytesRef
-import parameters.{AggregateTermVectorProcessingParameters, GroupingParameters, LocalTermVectorProcessingParameters, LocalTermVectorScaling}
+import parameters._
 import play.api.Logger
 import play.api.libs.json.{JsString, JsValue, Json}
 
@@ -245,7 +245,7 @@ object TermVectors {
     lkp.findSpecial(classOf[BHTSne], "run",MethodType.methodType(classOf[Array[Array[Double]]],classOf[TSneConfiguration]),classOf[ParallelBHTsne])
   } */
   
-  def tsne(termVectors: Iterable[LongDoubleMap], rtp: AggregateTermVectorProcessingParameters)(implicit fjp: ForkJoinPool, ies: ExecutorService): Array[Array[Double]] = {
+  def tsne(termVectors: Iterable[LongDoubleMap], rtp: TermVectorDimensionalityReductionParameters)(implicit fjp: ForkJoinPool, ies: ExecutorService): Array[Array[Double]] = {
     val tvms = termVectors.toSeq
     val matrix = new Array[Array[Double]](tvms.size)
     for (i <- matrix.indices)
@@ -281,7 +281,7 @@ object TermVectors {
     f2.set(tsne, ies)
     sr.invoke(tsne, TSneUtils.buildConfig(matrix, rtp.dimensions, matrix.length, Math.min(matrix.length / 3 - 1, rtp.tsnePerplexity), rtp.tsneMaxIter, rtp.tsneUsePCA, rtp.tsneTheta, true))*/
   }
-  def mds(classical: Boolean, termVectors: Iterable[LongDoubleMap], rtp: AggregateTermVectorProcessingParameters): Array[Array[Double]] = {
+  def mds(classical: Boolean, termVectors: Iterable[LongDoubleMap], rtp: TermVectorDimensionalityReductionParameters): Array[Array[Double]] = {
     val tvms = termVectors.toSeq
     val matrix = new Array[Array[Double]](tvms.size)
     for (i <- matrix.indices)

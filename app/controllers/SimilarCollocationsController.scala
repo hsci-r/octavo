@@ -26,32 +26,35 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
   // get terms with similar collocations for a term - to find out what other words are talked about in a similar manner, for topic definition
   def similarCollocations(index: String) = Action { implicit request =>
     implicit val ia = iap(index)
+    implicit val qm = new QueryMetadata()
     import ia._
     val gp = new GeneralParameters
     implicit val iec = gp.executionContext
     implicit val its = gp.taskSupport
-    val termVectorQueryParameters = QueryParameters()
-    val termVectorLocalProcessingParameters = LocalTermVectorProcessingParameters()
-    val termVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters()
+    val termVectorQueryParameters = new QueryParameters()
+    val termVectorLocalProcessingParameters = new LocalTermVectorProcessingParameters()
+    val termVectorAggregateProcessingParameters = new AggregateTermVectorProcessingParameters()
+    val termVectorSamplingParameters = new SamplingParameters()
 /*    val comparisonTermVectorQueryParameters = QueryParameters("c_")
     val comparisonTermVectorLocalProcessingParameters = LocalTermVectorProcessingParameters("c_")
     val comparisonTermVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters("c_") */
-    val intermediaryTermVectorLimitQueryParameters = QueryParameters("i_")
-    val intermediaryTermVectorLocalProcessingParameters = LocalTermVectorProcessingParameters("i_")
-    val finalTermVectorLimitQueryParameters = QueryParameters("f_")
-    val finalTermVectorLocalProcessingParameters = LocalTermVectorProcessingParameters("f_")
-    val finalTermVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters("f_")
-    val qm = gp.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ intermediaryTermVectorLimitQueryParameters.toJson ++ intermediaryTermVectorLocalProcessingParameters.toJson ++ finalTermVectorLimitQueryParameters.toJson ++ finalTermVectorLocalProcessingParameters.toJson ++ finalTermVectorAggregateProcessingParameters.toJson  
+    val intermediaryTermVectorLimitQueryParameters = new QueryParameters("i_")
+    val intermediaryTermVectorLocalProcessingParameters = new LocalTermVectorProcessingParameters("i_")
+    val intermediaryTermVectorSamplingParameters = new SamplingParameters("i_")
+    val finalTermVectorLimitQueryParameters = new QueryParameters("f_")
+    val finalTermVectorLocalProcessingParameters = new LocalTermVectorProcessingParameters("f_")
+    val finalTermVectorAggregateProcessingParameters = new AggregateTermVectorProcessingParameters("f_")
+    val finalTermVectorDistanceCalculationParameters = new TermVectorDistanceCalculationParameters("f_")
+    val finalTermVectorSamplingParameters = new SamplingParameters("f_")
     getOrCreateResult("similarCollocations",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(exactCounts = false, termVectorQueryParameters.requiredQuery)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
-      val maxDocs2 = if (gp.maxDocs == -1) -1 else gp.maxDocs / 3
-      val (_,collocations) = getAggregateContextVectorForQuery(is, termVectorQuery, termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters, maxDocs2)
+      val (_,collocations) = getAggregateContextVectorForQuery(is, termVectorQuery, termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters, termVectorSamplingParameters.maxDocs)
       println("collocations: "+collocations.size)
       val futures = new ArrayBuffer[Future[LongSet]]
-      val maxDocs3 = if (gp.maxDocs == -1) -1 else maxDocs2/collocations.size
+      val maxDocs3 = if (intermediaryTermVectorSamplingParameters.maxDocs == -1) -1 else intermediaryTermVectorSamplingParameters.maxDocs/collocations.size
       val intermediaryLimitQuery = intermediaryTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false,_)._2)
       collocations.forEach(new LongDoubleConsumer {
         override def accept(term: Long, freq: Double) {
@@ -72,7 +75,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
           }
         })
       println("collocations of collocations: "+collocationCollocations.size)
-      val maxDocs4 = if (gp.maxDocs == -1) -1 else maxDocs2/collocationCollocations.size
+      val maxDocs4 = if (finalTermVectorSamplingParameters.maxDocs == -1) -1 else finalTermVectorSamplingParameters.maxDocs/collocationCollocations.size
       val finalLimitQuery = finalTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false,_)._2)
       val thirdOrderCollocations = for (term2 <- toParallel(termOrdsToTerms(ir, collocationCollocations))) yield {
         val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,term2)), Occur.FILTER)
@@ -87,7 +90,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
       val cmaxHeap = collection.mutable.PriorityQueue.empty[(String,Double)](ordering)
       val dmaxHeap = collection.mutable.PriorityQueue.empty[(String,Double)](ordering)
       var total = 0
-      val termsToScores = thirdOrderCollocations.filter(!_._2.isEmpty).map(p => (p._1,Distance.cosineSimilarity(collocations,p._2,finalTermVectorAggregateProcessingParameters.filtering),Distance.diceSimilarity(collocations,p._2)))
+      val termsToScores = thirdOrderCollocations.filter(!_._2.isEmpty).map(p => (p._1,Distance.cosineSimilarity(collocations,p._2,finalTermVectorDistanceCalculationParameters.filtering),Distance.diceSimilarity(collocations,p._2)))
       for ((term,cscore,dscore) <- termsToScores.seq) {
         if (cscore != 0.0 || dscore != 0.0) total+=1
         if (finalTermVectorAggregateProcessingParameters.limit == -1 || total<=finalTermVectorAggregateProcessingParameters.limit) { 

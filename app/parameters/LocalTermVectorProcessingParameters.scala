@@ -7,7 +7,7 @@ import play.api.libs.json.Json
 import play.api.mvc.{AnyContent, Request}
 import services.IndexAccess
 
-case class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent], ia: IndexAccess) {
+class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent], ia: IndexAccess, queryMetadata: QueryMetadata) {
   import ia.{docFreq, termOrdToTerm, totalTermFreq}
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   private val minFreqInDocOpt = p.get(prefix+"minFreqInDoc"+suffix).map(_.head.toLong)
@@ -76,6 +76,19 @@ case class LocalTermVectorProcessingParameters(prefix: String = "", suffix: Stri
       s.getBinding.setProperty("freq", freq)
       s.run().asInstanceOf[Boolean]
     })
-  def toJson = Json.obj(prefix+"termTransformer"+suffix->termTransformerAsStringOpt,prefix+"termFilter"+suffix->termFilterAsStringOpt,prefix+"localScaling"+suffix->localScaling, prefix+"minTotalTermFreq"+suffix->minTotalTermFreq, prefix+"maxTotalTermFreq"+suffix->maxTotalTermFreq, prefix+"minDocFreq"+suffix->minDocFreq, prefix+"maxDocFreq"+suffix->maxDocFreq, prefix+"minFreqInDoc"+suffix -> minFreqInDoc, prefix+"maxFreqInDoc"+suffix -> maxFreqInDoc, prefix + "minTermLength" + suffix -> minTermLength, prefix + "maxTermLength" + suffix -> maxTermLength)
+  def toJson = Json.obj(
+    prefix+"termTransformer"+suffix->termTransformerAsStringOpt,
+    prefix+"termFilter"+suffix->termFilterAsStringOpt,
+    prefix+"localScaling"+suffix->localScaling,
+    prefix+"minTotalTermFreq"+suffix->minTotalTermFreq,
+    prefix+"maxTotalTermFreq"+suffix->maxTotalTermFreq,
+    prefix+"minDocFreq"+suffix->minDocFreq,
+    prefix+"maxDocFreq"+suffix->maxDocFreq,
+    prefix+"minFreqInDoc"+suffix -> minFreqInDoc,
+    prefix+"maxFreqInDoc"+suffix -> maxFreqInDoc,
+    prefix+"minTermLength" + suffix -> minTermLength,
+    prefix+"maxTermLength" + suffix -> maxTermLength
+  )
+  queryMetadata.json = queryMetadata.json ++ toJson
 }
 

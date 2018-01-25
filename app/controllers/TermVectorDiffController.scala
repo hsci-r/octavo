@@ -23,27 +23,29 @@ class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, env
     implicit val ia = iap(index)
     import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    val gp = GeneralParameters()
-    val grpp = GroupingParameters()
-    val tvq1 = QueryParameters("t1_")
-    val tvq2 = QueryParameters("t2_")
-    val tvpl = LocalTermVectorProcessingParameters()
-    val tvpa = AggregateTermVectorProcessingParameters()
     val meaningfulTerms: Int = p.get("meaningfulTerms").map(_.head.toInt).getOrElse(0)
+    implicit val qm = new QueryMetadata(Json.obj("meaningfulTerms"->meaningfulTerms))
+    val gp = new GeneralParameters()
+    val grpp = new GroupingParameters()
+    val tvq1 = new QueryParameters("t1_")
+    val tvs = new SamplingParameters()
+    val tvq2 = new QueryParameters("t2_")
+    val tvpl = new LocalTermVectorProcessingParameters()
+    val tvpa = new AggregateTermVectorProcessingParameters()
+    val tvdd = new TermVectorDistanceCalculationParameters()
     implicit val tlc = gp.tlc
     implicit val ec = gp.executionContext
-    val qm = Json.obj("meaningfulTerms"->meaningfulTerms) ++ grpp.toJson ++ gp.toJson ++ tvq1.toJson ++ tvq2.toJson ++ tvpl.toJson ++ tvpa.toJson
     getOrCreateResult("termVectorDiff",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       val (qlevel1,termVector1Query) = buildFinalQueryRunningSubQueries(exactCounts = false, tvq1.requiredQuery)
       val (qlevel2,termVector2Query) = buildFinalQueryRunningSubQueries(exactCounts = false, tvq2.requiredQuery)
-      val tvm1f = Future { getGroupedAggregateContextVectorsForQuery(ia.indexMetadata.levelMap(qlevel1),searcher(qlevel1, SumScaling.ABSOLUTE), termVector1Query,tvpl,extractContentTermsFromQuery(termVector1Query),grpp,tvpa,gp.maxDocs/2) }
-      val tvm2f = Future { getGroupedAggregateContextVectorsForQuery(ia.indexMetadata.levelMap(qlevel2),searcher(qlevel2, SumScaling.ABSOLUTE), termVector2Query,tvpl,extractContentTermsFromQuery(termVector2Query),grpp,tvpa,gp.maxDocs/2) }
+      val tvm1f = Future { getGroupedAggregateContextVectorsForQuery(ia.indexMetadata.levelMap(qlevel1),searcher(qlevel1, SumScaling.ABSOLUTE), termVector1Query,tvpl,extractContentTermsFromQuery(termVector1Query),grpp,tvpa,if (tvs.maxDocs == -1) -1 else tvs.maxDocs/2) }
+      val tvm2f = Future { getGroupedAggregateContextVectorsForQuery(ia.indexMetadata.levelMap(qlevel2),searcher(qlevel2, SumScaling.ABSOLUTE), termVector2Query,tvpl,extractContentTermsFromQuery(termVector2Query),grpp,tvpa,if (tvs.maxDocs == -1) -1 else tvs.maxDocs/2) }
       val (_,tvm1) = Await.result(tvm1f, Duration.Inf)
       val (_,tvm2) = Await.result(tvm2f, Duration.Inf)
       val obj = (tvm1.keySet ++ tvm2.keySet).map(key => {
         var map = Json.obj("attrs"->Json.toJson(grpp.attrs.zip(key).toMap),
             "distance"->(if (!tvm1.contains(key) || !tvm2.contains(key)) JsNull else {
-              val distance = tvpa.distance(tvm1(key).cv,tvm2(key).cv)
+              val distance = tvdd.distance(tvm1(key).cv,tvm2(key).cv)
               if (distance.isNaN) JsNull else Json.toJson(distance)
             }), 
             "df1"->Json.toJson(tvm1.get(key).map(_.docFreq).getOrElse(0l)),"df2"->Json.toJson(tvm2.get(key).map(_.docFreq).getOrElse(0l)),"tf1"->Json.toJson(tvm1.get(key).map(_.totalTermFreq).getOrElse(0l)),"tf2"->Json.toJson(tvm2.get(key).map(_.totalTermFreq).getOrElse(0l)))

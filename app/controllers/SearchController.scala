@@ -26,17 +26,21 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
     implicit val ia = iap(index)
     import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    val qp = QueryParameters()
-    val gp = GeneralParameters()
-    val srp = QueryReturnParameters()
-    val ctv = QueryParameters("ctv_")
-    val ctvpl = LocalTermVectorProcessingParameters("ctv_")
-    val ctvpa = AggregateTermVectorProcessingParameters("ctv_")
-    val rtvpl = LocalTermVectorProcessingParameters()
-    val rtvpa = AggregateTermVectorProcessingParameters()
     val termVectors = p.get("termVectors").exists(v => v.head=="" || v.head.toBoolean)
+    implicit val qm = new QueryMetadata(Json.obj("termVectors"->termVectors))
+    val qp = new QueryParameters()
+    val gp = new GeneralParameters()
+    val sp = new SamplingParameters()
+    val srp = new QueryReturnParameters()
+    val ctv = new QueryParameters("ctv_")
+    val ctvs = new SamplingParameters("ctv_")
+    val ctvpl = new LocalTermVectorProcessingParameters("ctv_")
+    val ctvpa = new AggregateTermVectorProcessingParameters("ctv_")
+    val ctvdp = new TermVectorDistanceCalculationParameters("ctv_")
+    val rtvpl = new LocalTermVectorProcessingParameters("rtv_")
+    val rtvpa = new AggregateTermVectorProcessingParameters("rtv_")
+    val rtvdr = new TermVectorDimensionalityReductionParameters("rtv_")
     implicit val iec = gp.executionContext
-    val qm = Json.obj("termVectors"->termVectors) ++ qp.toJson ++ gp.toJson ++ srp.toJson ++ ctv.toJson ++ rtvpl.toJson ++ rtvpa.toJson ++ ctvpl.toJson ++ ctvpa.toJson
     getOrCreateResult("search",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
       implicit val ifjp = gp.forkJoinPool
@@ -48,7 +52,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
       var total = 0
       val maxHeap = mutable.PriorityQueue.empty[(Int,Float)]((x: (Int, Float), y: (Int, Float)) => y._2 compare x._2)
       val compareTermVector = if (ctv.query.isDefined)
-        getAggregateContextVectorForQuery(is, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermsFromQuery(query),ctvpa, gp.maxDocs) else null
+        getAggregateContextVectorForQuery(is, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermsFromQuery(query),ctvpa, ctvs.maxDocs) else null
       val we = if (srp.returnExplanations)
         query.createWeight(is, true, 1.0f)
       else null
@@ -58,14 +62,14 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
              value <- getters(field)(doc)) fields += (field -> value)
         val cv = if (termVectors || ctv.query.isDefined) getTermVectorForDocument(ir, doc, rtvpl, rtvpa) else null
         if (ctv.query.isDefined)
-          fields += ("distance" -> Json.toJson(ctvpa.distance(cv, compareTermVector._2)))
+          fields += ("distance" -> Json.toJson(ctvdp.distance(cv, compareTermVector._2)))
         if (srp.returnExplanations)
           fields += ("explanation" -> Json.toJson(we.explain(context, doc).toString))
-        if (cv != null && rtvpa.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, limitTermVector(cv, rtvpa)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
-        (fields, if (rtvpa.dimensions >0) cv else null)
+        if (cv != null && rtvdr.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, limitTermVector(cv, rtvpa)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
+        (fields, if (rtvdr.dimensions >0) cv else null)
       }
       val docFields = HashIntObjMaps.getDefaultFactory[collection.Map[String,JsValue]]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[collection.Map[String,JsValue]]
-      val docVectorsForMDS = if (rtvpa.dimensions>0) HashIntObjMaps.getDefaultFactory[LongDoubleMap]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[LongDoubleMap] else null
+      val docVectorsForMDS = if (rtvdr.dimensions>0) HashIntObjMaps.getDefaultFactory[LongDoubleMap]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[LongDoubleMap] else null
       val collector = new SimpleCollector() {
 
         override def needsScores: Boolean = true
@@ -111,15 +115,15 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
             val doc = p._1 - lr.docBase
             val (cdocFields, cdocVectors) = processDocFields(lr, doc, getters)
             if (ctv.query.isDefined)
-              cdocFields += "distance" -> Json.toJson(ctvpa.distance(cdocVectors, compareTermVector._2))
+              cdocFields += "distance" -> Json.toJson(ctvdp.distance(cdocVectors, compareTermVector._2))
             docFields.put(p._1, cdocFields)
             if (cdocVectors != null) docVectorsForMDS.put(p._1, limitTermVector(cdocVectors,rtvpa))
         })
       }
       val values = maxHeap.dequeueAll.reverse
-      val cvs = if (rtvpa.dimensions > 0) {
+      val cvs = if (rtvdr.dimensions > 0) {
         val nonEmptyVectorsAndTheirOriginalIndices = values.map(p => docVectorsForMDS.get(p._1)).zipWithIndex.filter(p => !p._1.isEmpty)
-        val mdsValues = rtvpa.dimensionalityReduction(nonEmptyVectorsAndTheirOriginalIndices.map(p => p._1), rtvpa).map(Json.toJson(_)).toSeq
+        val mdsValues = rtvdr.dimensionalityReduction(nonEmptyVectorsAndTheirOriginalIndices.map(p => p._1), rtvdr).map(Json.toJson(_)).toSeq
         val originalIndicesToMDSValueIndices = nonEmptyVectorsAndTheirOriginalIndices.map(_._2).zipWithIndex.toMap
         values.indices.map(i => originalIndicesToMDSValueIndices.get(i).map(vi => Json.toJson(mdsValues(vi))).getOrElse(JsNull))
       } else null
@@ -147,7 +151,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
 	          var df = docFields.get(doc)
             if (cvs!=null) df = df ++ Map("termVector"->cvs(i))
             if (srp.returnMatches) df = df ++ Map("matches" -> Json.toJson(matchesByDocs(i).filter(_.contains("<b>"))))
-            df ++ Map("score" -> (if (srp.sumScaling != SumScaling.TTF) Json.toJson(score) else Json.toJson(score.toInt)))
+            df ++ Map("score" -> (if (srp.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt)))
       })
     })
   }

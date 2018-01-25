@@ -6,7 +6,7 @@ import org.apache.lucene.analysis.tokenattributes.{CharTermAttribute, PositionIn
 import org.apache.lucene.index.Term
 import org.apache.lucene.search._
 import org.apache.lucene.util.{AttributeSource, BytesRef}
-import parameters.{GeneralParameters, SumScaling}
+import parameters.{GeneralParameters, QueryMetadata, SumScaling}
 import play.api.libs.json.Json
 import play.api.{Configuration, Environment}
 import services.{IndexAccess, IndexAccessProvider}
@@ -42,9 +42,13 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, env:
     implicit val ia = iap(index)
     import IndexAccess._
     import ia._
-    val gp = GeneralParameters()
     val transposeIsSingleEdit: Boolean = transposeIsSingleEditg.exists(v => v == "" || v.toBoolean)
-    val qm = Json.obj("term" -> term, "maxEditDistance" -> maxEditDistance, "minCommonPrefix" -> minCommonPrefix, "transposeIsSingleEdit" -> transposeIsSingleEdit) ++ gp.toJson
+    implicit val qm = new QueryMetadata(Json.obj(
+      "term" -> term,
+      "maxEditDistance" -> maxEditDistance,
+      "minCommonPrefix" -> minCommonPrefix,
+      "transposeIsSingleEdit" -> transposeIsSingleEdit))
+    val gp = new GeneralParameters()
     val ts = ia.queryAnalyzers(indexMetadata.defaultLevel.id).tokenStream(indexMetadata.contentField, term)
     val ta = ts.addAttribute(classOf[CharTermAttribute])
     val oa = ts.addAttribute(classOf[PositionIncrementAttribute])

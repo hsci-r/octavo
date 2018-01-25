@@ -24,21 +24,24 @@ class TermVectorsController @Inject()(implicit iap: IndexAccessProvider, env: En
     implicit val ia = iap(index)
     import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    val gp = GeneralParameters()
-    val grpp = GroupingParameters()
-    val termVectorQueryParameters = QueryParameters()
-    val termVectorLocalProcessingParameters = LocalTermVectorProcessingParameters()
-    val termVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters()
+    val termVectors = p.get("termVectors").exists(v => v.head=="" || v.head.toBoolean)
+    val distances = p.get("distances").exists(v => v.head=="" || v.head.toBoolean)
+    implicit val qm = new QueryMetadata(Json.obj("distances"->distances,"termVectors"->termVectors))
+    val gp = new GeneralParameters()
+    val grpp = new GroupingParameters()
+    val termVectorQueryParameters = new QueryParameters()
+    val termVectorLocalProcessingParameters = new LocalTermVectorProcessingParameters()
+    val termVectorAggregateProcessingParameters = new AggregateTermVectorProcessingParameters()
+    val termVectorSamplingParameters = new SamplingParameters()
 /*    val comparisonTermVectorQueryParameters = QueryParameters("c_")
     val comparisonTermVectorLocalProcessingParameters = LocalTermVectorProcessingParameters("c_")
     val comparisonTermVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters("c_") */
-    val resultTermVectorLimitQueryParameters = QueryParameters("r_")
-    val resultTermVectorLocalProcessingParameters = LocalTermVectorProcessingParameters("r_")
-    val resultTermVectorAggregateProcessingParameters = AggregateTermVectorProcessingParameters("r_")
-    val resultTermVectorGroupingParameters = GroupingParameters("r_")
-    val termVectors = p.get("termVectors").exists(v => v.head=="" || v.head.toBoolean)
-    val distances = p.get("distances").exists(v => v.head=="" || v.head.toBoolean)
-    val qm = Json.obj("distances"->distances,"termVectors"->termVectors) ++ gp.toJson ++ grpp.toJson ++ resultTermVectorGroupingParameters.toJson ++ termVectorQueryParameters.toJson ++ termVectorLocalProcessingParameters.toJson ++ termVectorAggregateProcessingParameters.toJson ++ resultTermVectorLimitQueryParameters.toJson ++ resultTermVectorLocalProcessingParameters.toJson ++ resultTermVectorAggregateProcessingParameters.toJson
+    val resultTermVectorLimitQueryParameters = new QueryParameters("r_")
+    val resultTermVectorLocalProcessingParameters = new LocalTermVectorProcessingParameters("r_")
+    val resultTermVectorAggregateProcessingParameters = new AggregateTermVectorProcessingParameters("r_")
+    val resultTermVectorDimensionalityReductionParameters = new TermVectorDimensionalityReductionParameters("r_")
+    val resultTermVectorGroupingParameters = new GroupingParameters("r_")
+    val termVectorDistanceCalculationParameters = new TermVectorDistanceCalculationParameters()
     implicit val iec = gp.executionContext
     getOrCreateResult("termVectors",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       implicit val tlc = gp.tlc
@@ -47,7 +50,7 @@ class TermVectorsController @Inject()(implicit iap: IndexAccessProvider, env: En
       val (qlevel, termVectorQuery) = buildFinalQueryRunningSubQueries(exactCounts = false, termVectorQueryParameters.requiredQuery)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
-      val maxDocs = if (gp.maxDocs == -1 || termVectorAggregateProcessingParameters.limit == -1) -1 else if (termVectors) gp.maxDocs / (termVectorAggregateProcessingParameters.limit + 1) else gp.maxDocs / 2
+      val maxDocs = if (termVectorSamplingParameters.maxDocs == -1 || termVectorAggregateProcessingParameters.limit == -1) -1 else if (termVectors) termVectorSamplingParameters.maxDocs / (termVectorAggregateProcessingParameters.limit + 1) else termVectorSamplingParameters.maxDocs / 2
       val processResults = (collocationsMap: LongDoubleMap) => {
         val collocations = new ArrayBuffer[(Long, Double)]
         limitTermVector(collocationsMap, termVectorAggregateProcessingParameters).forEach(new LongDoubleConsumer {
@@ -55,7 +58,7 @@ class TermVectorsController @Inject()(implicit iap: IndexAccessProvider, env: En
             collocations += ((k, v))
           }
         })
-        if (resultTermVectorAggregateProcessingParameters.dimensions > 0) {
+        if (resultTermVectorDimensionalityReductionParameters.dimensions > 0) {
           val resultLimitQuery = resultTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false, _)._2)
           val ctermVectors = toParallel(collocations).map { term =>
             val termS = termOrdToTerm(ir, term._1)
@@ -63,11 +66,11 @@ class TermVectorsController @Inject()(implicit iap: IndexAccessProvider, env: En
             for (q <- resultLimitQuery) bqb.add(q, Occur.FILTER)
             getAggregateContextVectorForQuery(is, bqb.build(), resultTermVectorLocalProcessingParameters, Seq(termS), resultTermVectorAggregateProcessingParameters, maxDocs)
           }.seq
-          val mdsMatrix = resultTermVectorAggregateProcessingParameters.dimensionalityReduction(ctermVectors.map(p => limitTermVector(p._2, resultTermVectorAggregateProcessingParameters)), resultTermVectorAggregateProcessingParameters)
+          val mdsMatrix = resultTermVectorDimensionalityReductionParameters.dimensionalityReduction(ctermVectors.map(p => limitTermVector(p._2, resultTermVectorAggregateProcessingParameters)), resultTermVectorDimensionalityReductionParameters)
           collocations.zipWithIndex.sortBy(-_._1._2).map { case ((term, weight), i) =>
             val r = Json.obj("term" -> termOrdToTerm(ir, term), "termVector" -> Json.obj("metadata" -> ctermVectors(i)._1.toJson, "terms" -> mdsMatrix(i)), "weight" -> weight)
             if (distances)
-              r ++ Json.obj("distance" -> termVectorAggregateProcessingParameters.distance(collocationsMap, ctermVectors(i)._2))
+              r ++ Json.obj("distance" -> termVectorDistanceCalculationParameters.distance(collocationsMap, ctermVectors(i)._2))
             else r
           }
         } else if (termVectors) {
@@ -79,7 +82,7 @@ class TermVectorsController @Inject()(implicit iap: IndexAccessProvider, env: En
             val (md, ctermVector) = getAggregateContextVectorForQuery(is, bqb.build(), resultTermVectorLocalProcessingParameters, Seq(termS), resultTermVectorAggregateProcessingParameters, maxDocs)
             val r = Json.obj("term" -> termS, "termVector" -> Json.obj("metadata" -> md.toJson, "terms" -> termOrdMapToOrderedTermSeq(ir, limitTermVector(ctermVector, resultTermVectorAggregateProcessingParameters)).map(p => Json.obj("term" -> p._1, "weight" -> p._2)), "weight" -> weight))
             if (distances)
-              r ++ Json.obj("distance" -> termVectorAggregateProcessingParameters.distance(collocationsMap, ctermVector))
+              r ++ Json.obj("distance" -> termVectorDistanceCalculationParameters.distance(collocationsMap, ctermVector))
             else r
           }.seq
         } else if (distances) {
@@ -89,7 +92,7 @@ class TermVectorsController @Inject()(implicit iap: IndexAccessProvider, env: En
             val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField, termS)), Occur.FILTER)
             for (q <- resultLimitQuery) bqb.add(q, Occur.FILTER)
             val (_, ctermVector) = getAggregateContextVectorForQuery(is, bqb.build(), resultTermVectorLocalProcessingParameters, Seq(termS), resultTermVectorAggregateProcessingParameters, maxDocs)
-            Json.obj("term" -> termS, "weight" -> weight, "distance" -> termVectorAggregateProcessingParameters.distance(collocationsMap, ctermVector))
+            Json.obj("term" -> termS, "weight" -> weight, "distance" -> termVectorDistanceCalculationParameters.distance(collocationsMap, ctermVector))
           }.seq
         } else collocations.sortBy(-_._2).map(p => Json.obj("term" -> termOrdToTerm(ir, p._1), "weight" -> p._2))
       }

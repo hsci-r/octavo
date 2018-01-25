@@ -5,13 +5,14 @@ import java.util.concurrent.ConcurrentHashMap
 
 import org.apache.commons.codec.digest.DigestUtils
 import org.apache.lucene.search.TimeLimitingCollector
-import play.api.{Configuration, Environment, Logger}
-import play.api.libs.json.{JsObject, JsValue, Json}
+import parameters.QueryMetadata
+import play.api.libs.json.{JsValue, Json}
 import play.api.mvc.{InjectedController, Result}
+import play.api.{Configuration, Environment, Logger}
 import services.IndexMetadata
 
-import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, ExecutionContext, Future}
 
 abstract class AQueuingController(env: Environment, configuration: Configuration) extends InjectedController {
   
@@ -45,7 +46,7 @@ abstract class AQueuingController(env: Environment, configuration: Configuration
     pw.close()
   }
 
-  protected def getOrCreateResult(method: String, index: IndexMetadata, parameters: JsObject, force: Boolean, pretty: Boolean, call: () => JsValue)(implicit ec: ExecutionContext): Result = {
+  protected def getOrCreateResult(method: String, index: IndexMetadata, parameters: QueryMetadata, force: Boolean, pretty: Boolean, call: () => JsValue)(implicit ec: ExecutionContext): Result = {
     val callId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.toString
     Logger.info(callId)
     val name = DigestUtils.sha256Hex(callId)
@@ -58,7 +59,7 @@ abstract class AQueuingController(env: Environment, configuration: Configuration
       val future = Future {
         val startTime = System.currentTimeMillis
         val resultsJson = call() 
-        val json = Json.obj("queryMetadata"->Json.obj("method"->method,"parameters"->parameters,"index"->Json.obj("name"->index.indexName,"version"->index.indexVersion),"octavoVersion"->version,"timeTakenMS"->(System.currentTimeMillis()-startTime)),"results"->resultsJson)
+        val json = Json.obj("queryMetadata"->Json.obj("method"->method,"parameters"->parameters.json,"index"->Json.obj("name"->index.indexName,"version"->index.indexVersion),"octavoVersion"->version,"timeTakenMS"->(System.currentTimeMillis()-startTime)),"results"->resultsJson)
         if (pretty)
           Json.prettyPrint(json)
         else

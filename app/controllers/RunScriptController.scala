@@ -11,22 +11,24 @@ import services.IndexAccessProvider
 
 @Singleton
 class RunScriptController @Inject() (iap: IndexAccessProvider) extends InjectedController {
-  
-  private val compilerConfiguration = {
+
+  def runScript(index: String) = Action { request =>
+    implicit val ia = iap(index)
+    val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    val script = p.get("script").map(_.head).map(script => new GroovyShell(RunScriptController.compilerConfiguration).parse(script)).get
+    script.getBinding.setProperty("ia",ia)
+    Ok(script.run().asInstanceOf[JsValue]).as(JSON)
+  } 
+}
+
+object RunScriptController {
+  val compilerConfiguration = {
     val ic = new ImportCustomizer()
     ic.addStarImports("org.apache.lucene.search")
     ic.addStarImports("play.api.libs.json")
-    ic.addStaticStars("services.TermVectors")
+    ic.addStarImports("services")
     val c = new CompilerConfiguration()
     c.addCompilationCustomizers(ic)
     c
   }
-  
-  def runScript(index: String) = Action { request =>
-    implicit val ia = iap(index)
-    val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    val script = p.get("script").map(_.head).map(script => new GroovyShell(compilerConfiguration).parse(script)).get
-    script.getBinding.setProperty("ia",ia)
-    Ok(script.run().asInstanceOf[JsValue]).as(JSON)
-  } 
 }

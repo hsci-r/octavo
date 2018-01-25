@@ -3,7 +3,7 @@ package controllers
 import javax.inject.{Inject, Singleton}
 
 import com.tdunning.math.stats.TDigest
-import parameters.GeneralParameters
+import parameters.{GeneralParameters, QueryMetadata}
 import play.api.{Configuration, Environment}
 import play.api.libs.json.Json
 import services.{IndexAccess, IndexAccessProvider}
@@ -46,11 +46,18 @@ class IndexStatsController @Inject()(iap: IndexAccessProvider, env: Environment,
     import IndexAccess._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val field: String = fieldO.getOrElse(ia.indexMetadata.contentField)
-    val gp = GeneralParameters()
     val level = levelO.getOrElse(ia.indexMetadata.defaultLevel.id)
     val gatherFreqsPerTerm = p.get("termFreqs").exists(v => v.head=="" || v.head.toBoolean)
-    val qm = Json.obj("from"->from,"to"->to,"by"->byS,"level"->level,"field"->field,"termFreqs"->gatherFreqsPerTerm) ++ gp.toJson
     val by = byS.toDouble
+    implicit val qm = new QueryMetadata(Json.obj(
+      "from"->from,
+      "to"->to,
+      "by"->byS,
+      "level"->level,
+      "field"->field,
+      "termFreqs"->gatherFreqsPerTerm
+    ))
+    val gp = new GeneralParameters()
     getOrCreateResult("indexStats", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       if (!dft.contains((level,field))) calc(level,field)
       val formatString = "%."+(byS.length-2)+"f"

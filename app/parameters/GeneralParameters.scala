@@ -10,13 +10,11 @@ import services.IndexAccess
 import scala.collection.parallel.TaskSupport
 import scala.concurrent.ExecutionContext
 
-case class GeneralParameters()(implicit request: Request[AnyContent]) {
+class GeneralParameters()(implicit request: Request[AnyContent], queryMetadata: QueryMetadata) {
   import IndexAccess.{longTaskExecutionContext, longTaskForkJoinPool, longTaskTaskSupport, shortTaskExecutionContext, shortTaskForkJoinPool, shortTaskTaskSupport}
   
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   val pretty: Boolean = p.get("pretty").exists(v => v.head=="" || v.head.toBoolean)
-  /** maximum number of documents to process */
-  val maxDocs: Int = p.get("maxDocs").map(_.head.toInt).getOrElse(50000)
   private val timeout = p.get("timeout").map(_.head.toLong).map(t => if (t == -1l) Long.MaxValue else t*1000l).getOrElse(30000l)
   val forkJoinPool: ForkJoinPool = if (timeout>60000l) longTaskForkJoinPool else shortTaskForkJoinPool
   val taskSupport: TaskSupport = if (timeout>60000l) longTaskTaskSupport else shortTaskTaskSupport
@@ -30,5 +28,6 @@ case class GeneralParameters()(implicit request: Request[AnyContent]) {
     }
   }
   val force: Boolean  = p.get("force").exists(v => v.head=="" || v.head.toBoolean)
-  def toJson: JsObject = Json.obj("maxDocs"->maxDocs,"pretty"->pretty)
+  def toJson: JsObject = Json.obj("pretty"->pretty)
+  queryMetadata.json = queryMetadata.json ++ toJson
 }
