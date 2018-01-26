@@ -77,8 +77,6 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
       s.run().asInstanceOf[Boolean]
     })
   def toJson = Json.obj(
-    prefix+"termTransformer"+suffix->termTransformerAsStringOpt,
-    prefix+"termFilter"+suffix->termFilterAsStringOpt,
     prefix+"localScaling"+suffix->localScaling,
     prefix+"minTotalTermFreq"+suffix->minTotalTermFreq,
     prefix+"maxTotalTermFreq"+suffix->maxTotalTermFreq,
@@ -87,7 +85,9 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
     prefix+"minFreqInDoc"+suffix -> minFreqInDoc,
     prefix+"maxFreqInDoc"+suffix -> maxFreqInDoc,
     prefix+"minTermLength" + suffix -> minTermLength,
-    prefix+"maxTermLength" + suffix -> maxTermLength
+    prefix+"maxTermLength" + suffix -> maxTermLength,
+    prefix+"termTransformer"+suffix->termTransformerAsStringOpt,
+    prefix+"termFilter"+suffix->termFilterAsStringOpt
   )
   queryMetadata.json = queryMetadata.json ++ toJson
 }

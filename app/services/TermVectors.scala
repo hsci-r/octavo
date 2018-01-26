@@ -247,15 +247,22 @@ object TermVectors {
   
   def tsne(termVectors: Iterable[LongDoubleMap], rtp: TermVectorDimensionalityReductionParameters)(implicit fjp: ForkJoinPool, ies: ExecutorService): Array[Array[Double]] = {
     val tvms = termVectors.toSeq
+    val keys = HashLongSets.newUpdatableSet()
+    for (tvm <- tvms) keys.addAll(tvm.keySet())
     val matrix = new Array[Array[Double]](tvms.size)
     for (i <- matrix.indices)
-      matrix(i) = new Array[Double](matrix.length)
-    for (i <- matrix.indices)
-      for (j <- i + 1 until matrix.length) {
-        val dis = rtp.distance(tvms(i), tvms(j))
-        matrix(i)(j) = dis
-        matrix(j)(i) = dis
-      }
+      matrix(i) = new Array[Double](keys.size)
+    for (i <- matrix.indices) {
+      var j = 0
+      val itvm = tvms(i)
+      val row = matrix(i)
+      keys.forEach(new LongConsumer {
+        override def accept(term: Long) {
+          row(j) = itvm.getOrDefault(term, 0.0)
+          j += 1
+        }
+      })
+    }
 /*    AllocUtil.setAllocationModeForContext(DataBuffer.AllocationMode.HEAP)
     DataTypeUtil.setDTypeForContext(DataBuffer.Type.DOUBLE)
     val tsne = new BarnesHutTsne.Builder()

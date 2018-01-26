@@ -27,7 +27,12 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
     import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val termVectors = p.get("termVectors").exists(v => v.head=="" || v.head.toBoolean)
-    implicit val qm = new QueryMetadata(Json.obj("termVectors"->termVectors))
+    /** minimum query score (by default term match frequency) for doc to be included in query results */
+    val minScore: Float = p.get("minScore").map(_.head.toFloat).getOrElse(0.0f)
+    implicit val qm = new QueryMetadata(Json.obj(
+      "minScore"->minScore,
+      "termVectors"->termVectors
+    ))
     val qp = new QueryParameters()
     val gp = new GeneralParameters()
     val sp = new SamplingParameters()
@@ -65,7 +70,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
           fields += ("distance" -> Json.toJson(ctvdp.distance(cv, compareTermVector._2)))
         if (srp.returnExplanations)
           fields += ("explanation" -> Json.toJson(we.explain(context, doc).toString))
-        if (cv != null && rtvdr.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, limitTermVector(cv, rtvpa)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
+        if (termVectors && rtvdr.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, limitTermVector(cv, rtvpa)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
         (fields, if (rtvdr.dimensions >0) cv else null)
       }
       val docFields = HashIntObjMaps.getDefaultFactory[collection.Map[String,JsValue]]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[collection.Map[String,JsValue]]
@@ -82,7 +87,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
 
         override def collect(ldoc: Int) {
           val doc = context.docBase + ldoc
-          if (scorer.score >= qp.minScore) {
+          if (scorer.score >= minScore) {
             total+=1
             if (srp.limit == -1) {
               val (cdocFields, cdocVectors) = processDocFields(context, doc, getters)
@@ -114,8 +119,8 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
             val getters = gettersByReader(lr.docBase)
             val doc = p._1 - lr.docBase
             val (cdocFields, cdocVectors) = processDocFields(lr, doc, getters)
-            if (ctv.query.isDefined)
-              cdocFields += "distance" -> Json.toJson(ctvdp.distance(cdocVectors, compareTermVector._2))
+/*            if (ctv.query.isDefined)
+              cdocFields += "distance" -> Json.toJson(ctvdp.distance(cdocVectors, compareTermVector._2)) */
             docFields.put(p._1, cdocFields)
             if (cdocVectors != null) docVectorsForMDS.put(p._1, limitTermVector(cdocVectors,rtvpa))
         })

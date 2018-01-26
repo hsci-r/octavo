@@ -22,9 +22,9 @@ class TermVectorDistanceCalculationParameters(prefix: String = "", suffix: Strin
   val filtering: Filtering = filteringOpt.getOrElse(Filtering.EITHER)
   
   def toJson: JsObject = Json.obj(
-    prefix+"normalization"+suffix->normalization.entryName,
+    prefix+"distance"+suffix->distanceMetric.entryName,
     prefix+"filtering"+suffix->filtering.entryName,
-    prefix+"distance"+suffix->distanceMetric.entryName
+    prefix+"normalization"+suffix->normalization.entryName
   )
   queryMetadata.json = queryMetadata.json ++ toJson
 }
