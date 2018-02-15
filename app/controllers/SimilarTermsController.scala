@@ -5,13 +5,13 @@ import javax.inject.{Inject, Singleton}
 import org.apache.lucene.analysis.tokenattributes.{CharTermAttribute, PositionIncrementAttribute}
 import org.apache.lucene.index.Term
 import org.apache.lucene.search._
-import org.apache.lucene.util.{AttributeSource, BytesRef}
+import org.apache.lucene.util.AttributeSource
+import org.apache.lucene.util.automaton.CompiledAutomaton
 import parameters.{GeneralParameters, QueryMetadata, SumScaling}
 import play.api.libs.json.Json
 import play.api.{Configuration, Environment}
-import services.{IndexAccess, IndexAccessProvider}
+import services.IndexAccessProvider
 
-import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
@@ -21,64 +21,77 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, env:
   private def permutations[A](a: Seq[Seq[A]]): Seq[Seq[A]] = a.foldLeft(Seq(Seq.empty[A])) {
     (acc, next) => acc.flatMap { combo => next.map { num => combo :+ num } } 
   }
-  
-  private def hasPrefix(br: BytesRef, prefix: BytesRef): Boolean = {
-    if (br.length<prefix.length) return false
-    val aBytes = prefix.bytes
-    var aUpto = prefix.offset
-    val bBytes = br.bytes
-    var bUpto = br.offset
-    val aStop = aUpto + prefix.length
-    while(aUpto < aStop) {
-      if (aBytes(aUpto) != bBytes(bUpto)) return false
-      aUpto += 1
-      bUpto += 1
+
+  class Stats(val df: Long, val ttf: Long) {}
+
+  class StatsCollector extends SimpleCollector {
+    var df: Long = 0l
+    var ttf: Long = 0l
+    var scorer: Scorer = _
+
+    override def setScorer(scorer: Scorer) = this.scorer = scorer
+
+    override def needsScores() = true
+
+    override def collect(doc: Int) = {
+      this.df += 1
+      this.ttf += scorer.score().toLong
     }
-    true
   }
   
   // get terms lexically similar to a query term - used in topic definition to get past OCR errors
-  def similarTerms(index: String, term: String, maxEditDistance:Int, minCommonPrefix:Int,transposeIsSingleEditg : Option[String]) = Action { implicit request =>
+  def similarTerms(index: String, levelO: Option[String], term: String, maxEditDistance:Int, minCommonPrefix:Int,transposeIsSingleEditg : Option[String], limit:Int = 20) = Action { implicit request =>
     implicit val ia = iap(index)
-    import IndexAccess._
     import ia._
+    import services.IndexAccess._
     val transposeIsSingleEdit: Boolean = transposeIsSingleEditg.exists(v => v == "" || v.toBoolean)
+    val level = levelO.getOrElse(indexMetadata.defaultLevel.id)
     implicit val qm = new QueryMetadata(Json.obj(
       "term" -> term,
+      "level" -> level,
       "maxEditDistance" -> maxEditDistance,
       "minCommonPrefix" -> minCommonPrefix,
-      "transposeIsSingleEdit" -> transposeIsSingleEdit))
+      "transposeIsSingleEdit" -> transposeIsSingleEdit,
+      "limit"->limit))
     val gp = new GeneralParameters()
-    val ts = ia.queryAnalyzers(indexMetadata.defaultLevel.id).tokenStream(indexMetadata.contentField, term)
-    val ta = ts.addAttribute(classOf[CharTermAttribute])
-    val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
-    ts.reset()
-    val parts = new ArrayBuffer[(Int, String)]
-    while (ts.incrementToken())
-      parts += ((oa.getPositionIncrement, ta.toString))
-    ts.end()
-    ts.close()
-    val termMaps = parts.map(_ => new mutable.HashMap[String, Long]().withDefaultValue(0l))
-    for (((_, qt), termMap) <- parts.zip(termMaps)) {
-      for (
-        lrc <- reader(ia.indexMetadata.defaultLevel.id).leaves.asScala;
-        terms = lrc.reader.terms(indexMetadata.contentField) if terms != null;
-        (br, docFreq) <- if (qt.endsWith("*")) {
-          val prefix = new BytesRef(qt.substring(0, qt.length - 1))
-          val ti = terms.iterator
-          ti.seekCeil(prefix)
-          ti.asBytesRefAndDocFreqIterator.takeWhile(p => hasPrefix(p._1, prefix))
-        } else new FuzzyTermsEnum(terms, new AttributeSource(), new Term(indexMetadata.contentField, qt), maxEditDistance, minCommonPrefix, transposeIsSingleEdit).asBytesRefAndDocFreqIterator
-      ) termMap(br.utf8ToString) += docFreq
-    }
     implicit val ec = gp.executionContext
     getOrCreateResult("similarTerms", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
-      if (parts.length == 1)
-        Json.toJson(termMaps.head.toSeq.sortBy(-_._2).map(p => Json.obj("term" -> p._1, "count" -> p._2)))
-      else {
-        val termMap = new mutable.HashMap[String, Long]
-        for (terms <- permutations(termMaps.map(_.keys.toSeq))) {
-          val hc = new TotalHitCountCollector()
+      val ts = ia.queryAnalyzers(level).tokenStream(indexMetadata.contentField, term)
+      val ta = ts.addAttribute(classOf[CharTermAttribute])
+      val oa = ts.addAttribute(classOf[PositionIncrementAttribute])
+      ts.reset()
+      val parts = new ArrayBuffer[(Int, String)]
+      while (ts.incrementToken())
+        parts += ((oa.getPositionIncrement, ta.toString))
+      ts.end()
+      ts.close()
+      val qp = ia.termVectorQueryParsers(level).get
+      val terms = reader(level).leaves.get(0).reader.terms(indexMetadata.contentField)
+      var tterms = 0
+      var tdf = 0l
+      var tttf = 0l
+      val termMap = new mutable.HashMap[String, Stats]()
+      if (parts.length == 1) {
+        val qt = parts(0)._2
+        for ((br, docFreq, termFreq) <- (qp.parse(qt) match {
+               case query: AutomatonQuery => new CompiledAutomaton(query.getAutomaton, null, true, Int.MaxValue, query.isAutomatonBinary).getTermsEnum(terms)
+               case _ => new FuzzyTermsEnum(terms, new AttributeSource(), new Term(indexMetadata.contentField, qt), maxEditDistance, minCommonPrefix, transposeIsSingleEdit)
+             }).asBytesRefAndDocFreqAndTotalTermFreqIterator
+        ) {
+          tterms += 1
+          tdf += docFreq
+          tttf += termFreq
+          termMap.put(br.utf8ToString, new Stats(docFreq, termFreq))
+        }
+      } else {
+        val fterms = parts.map(_ => new mutable.HashSet[String]())
+        for (((_, qt), cfterms) <- parts.zip(fterms);
+             br <- (qp.parse(qt) match {
+               case query: AutomatonQuery => new CompiledAutomaton(query.getAutomaton, null, true, Int.MaxValue, query.isAutomatonBinary).getTermsEnum(terms)
+               case _ => new FuzzyTermsEnum(terms, new AttributeSource(), new Term(indexMetadata.contentField, qt), maxEditDistance, minCommonPrefix, transposeIsSingleEdit)
+             }).asBytesRefIterator) cfterms += br.utf8ToString
+        for (terms <- permutations(fterms.map(_.toSeq))) {
+          val hc = new StatsCollector()
           val bqb = new BooleanQuery.Builder()
           var position = -1
           val pqb = new PhraseQuery.Builder()
@@ -88,11 +101,17 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, env:
           }
           bqb.add(pqb.build, BooleanClause.Occur.SHOULD)
           searcher(ia.indexMetadata.defaultLevel.id, SumScaling.ABSOLUTE).search(bqb.build, hc)
-          if (hc.getTotalHits > 0)
-            termMap.put(terms.zip(parts.map(_._1)).map(t => "? " * (t._2 - 1) + t._1).mkString(" "), hc.getTotalHits) // ? = tokens removed by the analyzer
+          if (hc.df> 0l) {
+            tterms += 1
+            tdf += hc.df
+            tttf += hc.ttf
+            termMap.put(terms.zip(parts.map(_._1)).map(t => "? " * (t._2 - 1) + t._1).mkString(" "), new Stats(hc.df, hc.ttf)) // ? = tokens removed by the analyzer
+          }
         }
-        Json.toJson(termMap.toSeq.sortBy(-_._2).map(p => Json.obj("term" -> p._1, "count" -> p._2)))
       }
+      var orderedTerms = termMap.toSeq.sortBy(-_._2.ttf)
+      if (limit != -1) orderedTerms = orderedTerms.take(limit)
+      Json.toJson("general"->Json.obj("terms"->tterms,"totalDocFreq"->tdf,"totalTermFreq"->tttf),"results"->orderedTerms.map(p => Json.obj("term" -> p._1, "docFreq" -> p._2.df, "totalTermFreq" -> p._2.ttf)))
     })
   }
 

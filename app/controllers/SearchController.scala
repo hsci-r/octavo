@@ -14,7 +14,6 @@ import play.api.libs.json.{JsNull, JsValue, Json}
 import play.api.mvc.{Action, AnyContent}
 import services.{ExtendedUnifiedHighlighter, IndexAccessProvider, TermVectors}
 
-import scala.collection.JavaConverters._
 import scala.collection.mutable
 
 @Singleton
@@ -112,18 +111,14 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
       tlc.get.setCollector(collector)
       is.search(query, gp.tlc.get)
       if (srp.limit!= -1) {
-        val gettersByReader = new mutable.HashMap[Int,Map[String,(Int) => Option[JsValue]]]
-        for (lr <- ir.leaves.asScala) gettersByReader += lr.docBase -> srp.fields.map(f => f -> ql.fields(f).jsGetter(lr.reader)).toMap
-        maxHeap.foreach(p =>
-          for (lr <- ir.leaves.asScala; if lr.docBase<=p._1 && lr.docBase + lr.reader.maxDoc > p._1) {
-            val getters = gettersByReader(lr.docBase)
+        val lr = ir.leaves.get(0)
+        val jsGetters = srp.fields.map(f => f -> ql.fields(f).jsGetter(lr.reader)).toMap
+        maxHeap.toSeq.sortBy(_._1).foreach{p => // sort by id so that advanceExact works
             val doc = p._1 - lr.docBase
-            val (cdocFields, cdocVectors) = processDocFields(lr, doc, getters)
-/*            if (ctv.query.isDefined)
-              cdocFields += "distance" -> Json.toJson(ctvdp.distance(cdocVectors, compareTermVector._2)) */
+            val (cdocFields, cdocVectors) = processDocFields(lr, doc, jsGetters)
             docFields.put(p._1, cdocFields)
             if (cdocVectors != null) docVectorsForMDS.put(p._1, limitTermVector(cdocVectors,rtvpa))
-        })
+        }
       }
       val values = maxHeap.dequeueAll.reverse
       val cvs = if (rtvdr.dimensions > 0) {

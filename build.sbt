@@ -30,6 +30,8 @@ dockerBaseImage := "openjdk:alpine"
 
 dockerExposedPorts in Docker := Seq(9000, 9443)
 
+resolvers ++= Seq("ImageJ" at "http://maven.imagej.net/content/repositories/releases/", "betadriven" at "https://nexus.bedatadriven.com/content/groups/public/")
+
 libraryDependencies ++= Seq(
   guice,
   "org.apache.lucene" % "lucene-core" % "7.1.0",
@@ -43,7 +45,11 @@ libraryDependencies ++= Seq(
   "com.beachape" %% "enumeratum" % "1.5.12",
   "com.bizo" %% "mighty-csv" % "0.2",
   "com.tdunning" % "t-digest" % "3.1",
-  "org.codehaus.groovy" % "groovy" % "2.4.11",
+  "org.codehaus.groovy" % "groovy-jsr223" % "2.4.11",
+//  "org.scijava" % "scripting-scala" % "0.2.1",
+//  "org.scijava" % "scripting-renjin" % "0.2.2",
+  "org.scijava" % "scripting-jython" % "0.4.1",
+//  "org.scijava" % "scripting-kotlin" % "0.1.0",
   "mdsj" % "mdsj" % "0.2",
   "org.nd4j" % "nd4j-native-platform" % "0.8.0", 
   "org.deeplearning4j" % "deeplearning4j-core" % "0.7.2",

@@ -8,7 +8,7 @@ GET		/:index/indexInfo				controllers.IndexInfoController.info(index)
 GET     /:index/search           		controllers.SearchController.search(index)
 POST    /:index/search           		controllers.SearchController.search(index)
 
-GET		/:index/similarTerms			controllers.SimilarTermsController.similarTerms(index, term: String, maxEditDistance: Int ?= 2, minCommonPrefix: Int ?= 0, transposeIsSingleEdit: Option[String])
+GET		/:index/similarTerms			controllers.SimilarTermsController.similarTerms(index, level: Option[String], term: String, maxEditDistance: Int ?= 2, minCommonPrefix: Int ?= 0, transposeIsSingleEdit: Option[String], limit: Int ?= 20)
 
 GET		/:index/indexStats				controllers.IndexStatsController.indexStats(index, field: Option[String], from: Double ?= 0.0, to: Double ?= 1.0, by: String ?= "0.1", levelO: Option[String])
 
@@ -30,5 +30,5 @@ POST	/:index/termVectorDiff			controllers.TermVectorDiffController.termVectorDif
 GET		/:index/similarCollocations		controllers.SimilarCollocationsController.similarCollocations(index)
 POST	/:index/similarCollocations		controllers.SimilarCollocationsController.similarCollocations(index)
 
-GET		/:index/runScript				controllers.RunScriptController.runScript(index)
-POST	/:index/runScript				controllers.RunScriptController.runScript(index)
+GET		/runScript				        controllers.RunScriptController.runScript()
+POST	/runScript				        controllers.RunScriptController.runScript()
