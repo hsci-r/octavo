@@ -3,15 +3,18 @@ package services
 import java.io.{File, FileInputStream}
 import java.nio.file.{FileSystems, Path}
 import java.util.concurrent.ForkJoinPool
+import java.util.regex.Pattern
 import java.util.{Collections, Locale}
 import javax.inject.{Inject, Singleton}
 
 import enumeratum.{Enum, EnumEntry}
 import fi.seco.lucene.MorphologicalAnalyzer
-import org.apache.lucene.analysis.core.{KeywordAnalyzer, WhitespaceAnalyzer}
-import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper
+import org.apache.lucene.analysis.Analyzer.TokenStreamComponents
+import org.apache.lucene.analysis.core.{KeywordAnalyzer, WhitespaceAnalyzer, WhitespaceTokenizer}
+import org.apache.lucene.analysis.miscellaneous.{HyphenatedWordsFilter, LengthFilter, PerFieldAnalyzerWrapper}
+import org.apache.lucene.analysis.pattern.PatternReplaceFilter
 import org.apache.lucene.analysis.standard.StandardAnalyzer
-import org.apache.lucene.analysis.{Analyzer, CharArraySet}
+import org.apache.lucene.analysis.{Analyzer, CharArraySet, LowerCaseFilter, TokenFilter}
 import org.apache.lucene.document.{DoublePoint, FloatPoint, IntPoint, LongPoint}
 import org.apache.lucene.index._
 import org.apache.lucene.queryparser.classic.QueryParser
@@ -597,6 +600,16 @@ case class IndexMetadata(
     case any => throw new IllegalArgumentException("Unknown directory type "+any)
   }
   val indexingAnalyzers: Map[String,Analyzer] = indexingAnalyzersAsText.mapValues{
+    case "OctavoAnalyzer" => new Analyzer() {
+      override def createComponents(fieldName: String) = {
+        val src = new WhitespaceTokenizer()
+        var tok: TokenFilter = new HyphenatedWordsFilter(src)
+        tok = new PatternReplaceFilter(tok,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false)
+        tok = new LowerCaseFilter(tok)
+        tok = new LengthFilter(tok, 1, Int.MaxValue)
+        new TokenStreamComponents(src,tok)
+      }
+    }
     case "StandardAnalyzer" => new StandardAnalyzer(CharArraySet.EMPTY_SET)
     case a if a.startsWith("MorphologicalAnalyzer_") => new MorphologicalAnalyzer(new Locale(a.substring(23)))
     case any => throw new IllegalArgumentException("Unknown analyzer type " + any)
