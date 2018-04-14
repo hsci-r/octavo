@@ -12,7 +12,7 @@ import play.api.{Configuration, Environment, Logger}
 import services.IndexMetadata
 
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.{Await, Future, Promise}
 
 abstract class AQueuingController(env: Environment, configuration: Configuration) extends InjectedController {
   
@@ -46,7 +46,7 @@ abstract class AQueuingController(env: Environment, configuration: Configuration
     pw.close()
   }
 
-  protected def getOrCreateResult(method: String, index: IndexMetadata, parameters: QueryMetadata, force: Boolean, pretty: Boolean, call: () => JsValue)(implicit ec: ExecutionContext): Result = {
+  protected def getOrCreateResult(method: String, index: IndexMetadata, parameters: QueryMetadata, force: Boolean, pretty: Boolean, call: () => JsValue): Result = {
     val callId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.toString
     Logger.info(callId)
     val name = DigestUtils.sha256Hex(callId)
@@ -56,36 +56,42 @@ abstract class AQueuingController(env: Environment, configuration: Configuration
     if (tf.createNewFile()) {
       val tf2 = new File(tmpDir+"/result-"+name+".parameters")
       writeFile(tf2, callId)
-      val future = Future {
-        val startTime = System.currentTimeMillis
-        val resultsJson = call() 
-        val json = Json.obj("queryMetadata"->Json.obj("method"->method,"parameters"->parameters.json,"index"->Json.obj("name"->index.indexName,"version"->index.indexVersion),"octavoVersion"->version,"timeTakenMS"->(System.currentTimeMillis()-startTime)),"results"->resultsJson)
-        if (pretty)
+      val promise = Promise[Result]
+      processing.put(name, promise.future)
+      val startTime = System.currentTimeMillis
+      try {
+        val resultsJson = call()
+        val json = Json.obj("queryMetadata" -> Json.obj("method" -> method, "parameters" -> parameters.json, "index" -> Json.obj("name" -> index.indexName, "version" -> index.indexVersion), "octavoVersion" -> version, "timeTakenMS" -> (System.currentTimeMillis() - startTime)), "results" -> resultsJson)
+        val jsString = if (pretty)
           Json.prettyPrint(json)
         else
           json.toString
-      }.map(content => {
-        writeFile(tf, content)
+        writeFile(tf, jsString)
+        promise success Ok(jsString).as(JSON)
         processing.remove(name)
-        Ok(content).as(JSON)
-      }).recover{ case cause =>
-        Logger.error("Error processing "+callId+": "+getStackTraceAsString(cause))
-        tf.delete()
-        processing.remove(name)
-        cause match {
-          case tlcause: TimeLimitingCollector.TimeExceededException =>
-            BadRequest(s"Query timeout ${tlcause.getTimeAllowed / 1000}s exceeded. If you want this to succeed, increase the timeout parameter.")
-          case _ => throw cause
-        }
+      } catch {
+        case cause: Throwable =>
+          Logger.error("Error processing " + callId + ": " + getStackTraceAsString(cause))
+          tf.delete()
+          processing.remove(name)
+          cause match {
+            case tlcause: TimeLimitingCollector.TimeExceededException =>
+              promise success BadRequest(s"Query timeout ${tlcause.getTimeAllowed / 1000}s exceeded. If you want this to succeed, increase the timeout parameter.")
+            case _ =>
+              promise failure cause
+              throw cause
+          }
       }
-      processing.put(name, future)
     } else {
       if (processing.containsKey(name)) Logger.info("Waiting for result from prior call for "+callId) 
       else Logger.info("Reusing ready result for "+callId)
     }
     val f = new File(tmpDir+"/result-"+name+".json")
     if (!f.exists()) InternalServerError("\"An error has occurred, please try again.\"")
-    else Option(processing.get(name)).map(Await.result(_, Duration.Inf)).getOrElse(Ok.sendFile(f).as(JSON))
+    else Option(processing.get(name)).map(Await.result(_, Duration.Inf)).getOrElse({
+      import scala.concurrent.ExecutionContext.Implicits.global
+      Ok.sendFile(f).as(JSON)
+    })
   }
 
 }

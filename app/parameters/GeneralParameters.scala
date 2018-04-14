@@ -1,6 +1,6 @@
 package parameters
 
-import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.{ArrayBlockingQueue, ForkJoinPool}
 
 import org.apache.lucene.search.TimeLimitingCollector
 import play.api.libs.json.{JsObject, Json}
@@ -8,14 +8,15 @@ import play.api.mvc.{AnyContent, Request}
 import services.IndexAccess
 
 import scala.collection.parallel.TaskSupport
-import scala.concurrent.ExecutionContext
+import scala.concurrent.{ExecutionContext, Future}
 
 class GeneralParameters()(implicit request: Request[AnyContent], queryMetadata: QueryMetadata) {
-  import IndexAccess.{longTaskExecutionContext, longTaskForkJoinPool, longTaskTaskSupport, shortTaskExecutionContext, shortTaskForkJoinPool, shortTaskTaskSupport}
+  import IndexAccess.{numLongWorkers,numShortWorkers,longTaskExecutionContext, longTaskForkJoinPool, longTaskTaskSupport, shortTaskExecutionContext, shortTaskForkJoinPool, shortTaskTaskSupport}
   
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   val pretty: Boolean = p.get("pretty").exists(v => v.head=="" || v.head.toBoolean)
   private val timeout = p.get("timeout").map(_.head.toLong).map(t => if (t == -1l) Long.MaxValue else t*1000l).getOrElse(30000l)
+  val numWorkers: Int = if (timeout>60000l) numLongWorkers else numShortWorkers
   val forkJoinPool: ForkJoinPool = if (timeout>60000l) longTaskForkJoinPool else shortTaskForkJoinPool
   val taskSupport: TaskSupport = if (timeout>60000l) longTaskTaskSupport else shortTaskTaskSupport
   val executionContext: ExecutionContext = if (timeout>60000l) longTaskExecutionContext else shortTaskExecutionContext

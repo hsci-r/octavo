@@ -41,8 +41,8 @@ import scala.language.implicitConversions
 
 object IndexAccess {
     
-  private val numShortWorkers = sys.runtime.availableProcessors
-  private val numLongWorkers = Math.max(sys.runtime.availableProcessors - 2, 1)
+  val numShortWorkers = sys.runtime.availableProcessors
+  val numLongWorkers = Math.max(sys.runtime.availableProcessors - 2, 1)
 
   val longTaskForkJoinPool = new ForkJoinPool(numLongWorkers, (pool: ForkJoinPool) => {
     val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
@@ -197,7 +197,7 @@ object IndexAccess {
 class IndexAccessProvider @Inject() (config: Configuration) {
   val indexAccesses = {
     val c = config.get[Configuration]("indices")
-    c.keys.par.map(k => (k, new IndexAccess(c.get[String](k)))).seq.toMap
+    c.keys.map(k => Future {(k, new IndexAccess(c.get[String](k)))}(IndexAccess.shortTaskExecutionContext)).map(Await.result(_,Duration.Inf)).toMap
   }
   def apply(id: String): IndexAccess = indexAccesses(id)
   def toJson: JsValue = Json.toJson(indexAccesses.mapValues(ia => ia.indexMetadata.toJson(ia)))
