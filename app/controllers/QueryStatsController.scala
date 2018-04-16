@@ -18,24 +18,24 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
   
   class Stats {
     val termFreqs = new ArrayBuffer[Int]
-    val attrSums = new scala.collection.mutable.HashMap[String, Long]
-    val attrGather = new scala.collection.mutable.HashMap[String, JsValue]
+    val fieldSums = new scala.collection.mutable.HashMap[String, Long]
+    val fieldGather = new scala.collection.mutable.HashMap[String, JsValue]
     var totalTermFreq = 0l
     var docFreq = 0l
 
     def toJson = {
-      val js = Json.obj("totalTermFreq" -> totalTermFreq, "docFreq" -> docFreq) ++ Json.toJsObject(attrGather) ++ Json.toJsObject(attrSums)
+      val js = Json.obj("totalTermFreq" -> totalTermFreq, "docFreq" -> docFreq) ++ Json.toJsObject(fieldGather) ++ Json.toJsObject(fieldSums)
       if (termFreqs.nonEmpty) js ++ Json.obj("termFreqs" -> termFreqs.sorted)
       else js
     }
   }
   
-  private def getStats(level: LevelMetadata, is: IndexSearcher, q: Query, grpp: GroupingParameters, attrSums: Seq[String], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
+  private def getStats(level: LevelMetadata, is: IndexSearcher, q: Query, grpp: GroupingParameters, fieldSums: Seq[String], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
     if (grpp.isDefined) {
       val gs = new Stats
       grpp.grouper.foreach(_.invokeMethod("setParameters", Seq(level, is, q, grpp, gatherTermFreqsPerDoc, gs).toArray))
-      var attrGetters: Seq[(Int) => JsValue] = null
-      var attrVGetters: Seq[(Int) => JsValue] = null
+      var fieldGetters: Seq[(Int) => JsValue] = null
+      var fieldVGetters: Seq[(Int) => JsValue] = null
       val groupedStats = new mutable.HashMap[JsObject,Stats]
       tlc.get.setCollector(new SimpleCollector() {
         override def needsScores: Boolean = true
@@ -52,11 +52,11 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
               JsObject(gm.map(p => { if (p._2.isInstanceOf[JsValue]) p else (p._1, JsString(p._2.toString))}).asInstanceOf[collection.Map[String,JsValue]])
             }
           }).getOrElse(
-            JsObject(grpp.attrs.zip(
-              grpp.attrTransformer.map(ap => {
-                ap.getBinding.setProperty("attrs", attrGetters.map(_(doc)).asJava)
+            JsObject(grpp.fields.zip(
+              grpp.fieldTransformer.map(ap => {
+                ap.getBinding.setProperty("fields", fieldGetters.map(_(doc)).asJava)
                 ap.run().asInstanceOf[java.util.List[Any]].asScala.map(v => if (v.isInstanceOf[JsValue]) v else JsString(v.asInstanceOf[String])).asInstanceOf[Seq[JsValue]]
-              }).getOrElse(if (grpp.attrLengths.isEmpty) attrGetters.map(_(doc)) else attrGetters.zip(grpp.attrLengths).map(p => {
+              }).getOrElse(if (grpp.fieldLengths.isEmpty) fieldGetters.map(_(doc)) else fieldGetters.zip(grpp.fieldLengths).map(p => {
                 val value = p._1(doc).toString
                 JsString(value.substring(0,Math.min(p._2,value.length)))
               }))))), new Stats)
@@ -69,21 +69,21 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
           }
           s.totalTermFreq += score
           gs.totalTermFreq += score
-          for ((key,getter) <- attrSums.zip(attrVGetters)) {
+          for ((key,getter) <- fieldSums.zip(fieldVGetters)) {
             val v = getter(doc).asInstanceOf[JsNumber].value.toLong
-            s.attrSums(key) = s.attrSums.getOrElse(key, 0l) + v
-            gs.attrSums(key) = gs.attrSums.getOrElse(key, 0l) + v
+            s.fieldSums(key) = s.fieldSums.getOrElse(key, 0l) + v
+            gs.fieldSums(key) = gs.fieldSums.getOrElse(key, 0l) + v
           }
         }
         
         override def doSetNextReader(context: LeafReaderContext) {
           grpp.grouper.foreach(_.invokeMethod("setContext",context))
-          attrGetters = grpp.attrs.map(level.fields(_).jsGetter(context.reader).andThen(_.iterator.next))
-          attrVGetters = attrSums.map(level.fields(_).jsGetter(context.reader).andThen(_.iterator.next))
+          fieldGetters = grpp.fields.map(level.fields(_).jsGetter(context.reader).andThen(_.iterator.next))
+          fieldVGetters = fieldSums.map(level.fields(_).jsGetter(context.reader).andThen(_.iterator.next))
         }
       })
       is.search(q, tlc.get)
-      Json.obj("general"->gs.toJson,"grouped"->groupedStats.map(p => Json.obj("attrs"->p._1,"stats" -> p._2.toJson)))
+      Json.obj("general"->gs.toJson,"grouped"->groupedStats.map(p => Json.obj("fields"->p._1,"stats" -> p._2.toJson)))
     } else {
       val s = new Stats
       is.search(q, new SimpleCollector() {
@@ -109,9 +109,9 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
     implicit val ia = iap(index)
     import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    var attrSums = p.get("sumAttrs").getOrElse(Seq.empty)
+    var fieldSums = p.get("sumFields").getOrElse(Seq.empty)
     val gatherTermFreqsPerDoc = p.get("termFreqs").exists(v => v.head=="" || v.head.toBoolean)
-    implicit val qm = new QueryMetadata(Json.obj("termFreqs"->gatherTermFreqsPerDoc,"sumAttrs"->attrSums))
+    implicit val qm = new QueryMetadata(Json.obj("termFreqs"->gatherTermFreqsPerDoc,"sumFields"->fieldSums))
     val gp = new GeneralParameters()
     val q = new QueryParameters()
     val grpp = new GroupingParameters()
@@ -120,7 +120,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
       implicit val tlc = gp.tlc
       implicit val qps = documentQueryParsers
       val (qlevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, q.requiredQuery)
-      getStats(ia.indexMetadata.levelMap(qlevel),searcher(qlevel, SumScaling.ABSOLUTE), query, grpp, attrSums, gatherTermFreqsPerDoc)
+      getStats(ia.indexMetadata.levelMap(qlevel),searcher(qlevel, SumScaling.ABSOLUTE), query, grpp, fieldSums, gatherTermFreqsPerDoc)
     })
   }  
 }

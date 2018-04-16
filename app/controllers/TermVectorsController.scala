@@ -99,7 +99,7 @@ class TermVectorsController @Inject()(implicit iap: IndexAccessProvider, env: En
       if (grpp.isDefined) {
         val (md, groupedCollocations) = getGroupedAggregateContextVectorsForQuery(ia.indexMetadata.levelMap(qlevel), is, termVectorQuery, termVectorLocalProcessingParameters, extractContentTermsFromQuery(termVectorQuery), grpp, termVectorAggregateProcessingParameters, maxDocs)
         Json.obj("metadata" -> md.toJson, "groups"-> groupedCollocations.map(p => {
-          Json.obj("attrs"->p._1,"stats"->Json.obj("totalTermFreq"->p._2.totalTermFreq,"docFreq"->p._2.docFreq,"terms"->processResults(p._2.cv)))
+          Json.obj("fields"->p._1,"stats"->Json.obj("totalTermFreq"->p._2.totalTermFreq,"docFreq"->p._2.docFreq,"terms"->processResults(p._2.cv)))
         }))
       } else {
         val (md, collocationsMap) = getAggregateContextVectorForQuery(is, termVectorQuery, termVectorLocalProcessingParameters, extractContentTermsFromQuery(termVectorQuery), termVectorAggregateProcessingParameters, maxDocs)

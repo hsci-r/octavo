@@ -174,18 +174,18 @@ object TermVectors {
   private def getGroupedUnscaledAggregateContextVectorsForQuery(level: LevelMetadata, is: IndexSearcher, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[String], grpp: GroupingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess): (TermVectorQueryMetadata,collection.Map[Seq[JsValue], UnscaledVectorInfo]) = {
     val cvm = new mutable.HashMap[Seq[JsValue],UnscaledVectorInfo]
     var cv: UnscaledVectorInfo = null
-    var attrGetters: Seq[(Int) => JsValue] = null
+    var fieldGetters: Seq[(Int) => JsValue] = null
     var anyMatches = false
     val tvm = runTermVectorQuery(is, q, ctvp, minScalingTerms, maxDocs, (nlrc: LeafReaderContext) => {
-      attrGetters = grpp.attrs.map(level.fields(_).jsGetter(nlrc.reader).andThen(_.iterator.next))
+      fieldGetters = grpp.fields.map(level.fields(_).jsGetter(nlrc.reader).andThen(_.iterator.next))
     }, (doc: Int) => {
       if (anyMatches) cv.docFreq += 1
       cv = cvm.getOrElseUpdate(grpp.grouper.map(ap => {
         ap.invokeMethod("group", doc).asInstanceOf[java.util.List[Any]].asScala.map(v => if (v.isInstanceOf[JsValue]) v else JsString(v.asInstanceOf[String])).asInstanceOf[Seq[JsValue]]
-      }).getOrElse(grpp.attrTransformer.map(ap => {
-        ap.getBinding.setProperty("attrs", attrGetters.map(_(doc)).asJava)
+      }).getOrElse(grpp.fieldTransformer.map(ap => {
+        ap.getBinding.setProperty("fields", fieldGetters.map(_(doc)).asJava)
         ap.run().asInstanceOf[java.util.List[Any]].asScala.map(v => if (v.isInstanceOf[JsValue]) v else JsString(v.asInstanceOf[String])).asInstanceOf[Seq[JsValue]]
-      }).getOrElse(if (grpp.attrLengths.isEmpty) attrGetters.map(_(doc)) else attrGetters.zip(grpp.attrLengths).map(p => {
+      }).getOrElse(if (grpp.fieldLengths.isEmpty) fieldGetters.map(_(doc)) else fieldGetters.zip(grpp.fieldLengths).map(p => {
         val value = p._1(doc).toString
         JsString(value.substring(0,Math.min(p._2,value.length)))
       }))), new UnscaledVectorInfo)

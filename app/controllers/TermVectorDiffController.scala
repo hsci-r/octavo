@@ -43,7 +43,7 @@ class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, env
       val (_,tvm1) = Await.result(tvm1f, Duration.Inf)
       val (_,tvm2) = Await.result(tvm2f, Duration.Inf)
       val obj = (tvm1.keySet ++ tvm2.keySet).map(key => {
-        var map = Json.obj("attrs"->Json.toJson(grpp.attrs.zip(key).toMap),
+        var map = Json.obj("fields"->Json.toJson(grpp.fields.zip(key).toMap),
             "distance"->(if (!tvm1.contains(key) || !tvm2.contains(key)) JsNull else {
               val distance = tvdd.distance(tvm1(key).cv,tvm2(key).cv)
               if (distance.isNaN) JsNull else Json.toJson(distance)
