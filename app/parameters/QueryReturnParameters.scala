@@ -20,11 +20,13 @@ class QueryReturnParameters()(implicit request: Request[AnyContent], ia: IndexAc
   /** context level when returning matches */
   val contextLevel = p.get("contextLevel").map(v => ContextLevel.withName(v.head.toUpperCase)).getOrElse(ContextLevel.SENTENCE)
   /** how much to expand returned match context */
-  val contextExpand = p.get("contextExpand").map(v => v.head.toInt).getOrElse(0)
+  val contextExpandLeft = p.get("contextExpandLeft").map(v => v.head.toInt).getOrElse(0)
+  val contextExpandRight = p.get("contextExpandRight").map(v => v.head.toInt).getOrElse(0)
   def toJson = Json.obj(
     "limit"->limit,
     "contextLevel"->contextLevel.entryName,
-    "contextExpand"->contextExpand,
+    "contextExpandLeft"->contextExpandLeft,
+    "contextExpandRight"->contextExpandRight,
     "sumScaling"->sumScalingString,
     "fields"->fields,
     "returnMatches"->returnMatches,

@@ -109,7 +109,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
     implicit val ia = iap(index)
     import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    var fieldSums = p.get("sumFields").getOrElse(Seq.empty)
+    var fieldSums = p.getOrElse("sumFields", Seq.empty)
     val gatherTermFreqsPerDoc = p.get("termFreqs").exists(v => v.head=="" || v.head.toBoolean)
     implicit val qm = new QueryMetadata(Json.obj("termFreqs"->gatherTermFreqsPerDoc,"sumFields"->fieldSums))
     val gp = new GeneralParameters()

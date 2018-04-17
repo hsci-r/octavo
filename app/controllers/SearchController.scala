@@ -130,7 +130,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
       val matchesByDocs = if (srp.returnMatches) {
         val highlighter = new ExtendedUnifiedHighlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField)) {
 
-          override def getBreakIterator(field: String): BreakIterator = srp.contextLevel(srp.contextExpand)
+          override def getBreakIterator(field: String): BreakIterator = srp.contextLevel(srp.contextExpandLeft,srp.contextExpandRight)
 
           override def getOffsetSource(field: String): OffsetSource = {
             val fieldInfo = getFieldInfo(field)
