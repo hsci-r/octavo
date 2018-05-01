@@ -4,7 +4,7 @@ import play.api.libs.json.Json
 import play.api.mvc.{AnyContent, Request}
 import services.IndexAccess
 
-class QueryReturnParameters()(implicit request: Request[AnyContent], ia: IndexAccess, queryMetadata: QueryMetadata) {
+class QueryReturnParameters()(implicit request: Request[AnyContent], ia: IndexAccess, queryMetadata: QueryMetadata) extends ContextParameters {
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   val fields: Seq[String] = p.getOrElse("field", Seq.empty)
   /** return explanations for matches in search */
@@ -12,25 +12,20 @@ class QueryReturnParameters()(implicit request: Request[AnyContent], ia: IndexAc
   val returnMatches: Boolean = p.get("returnMatches").exists(v => v.head=="" || v.head.toBoolean)
   private val sumScalingStringOpt = p.get("sumScaling").map(v => v.head.toUpperCase)
   private val sumScalingString = sumScalingStringOpt.getOrElse("TTF")
-  private val smoothingOpt = p.get("smoothing").map(_.head.toDouble)
   /** sum scaling to use */
   val sumScaling = SumScaling.get(sumScalingString, 0.0)
   /** how many results to return at maximum */
   val limit: Int = p.get("limit").map(_.head.toInt).getOrElse(20)
-  /** context level when returning matches */
-  val contextLevel = p.get("contextLevel").map(v => ContextLevel.withName(v.head.toUpperCase)).getOrElse(ContextLevel.SENTENCE)
-  /** how much to expand returned match context */
-  val contextExpandLeft = p.get("contextExpandLeft").map(v => v.head.toInt).getOrElse(0)
-  val contextExpandRight = p.get("contextExpandRight").map(v => v.head.toInt).getOrElse(0)
-  def toJson = Json.obj(
+  /** how many results to skip */
+  val offset: Int = p.get("offset").map(_.head.toInt).getOrElse(0)
+  private val myJson = Json.obj(
     "limit"->limit,
-    "contextLevel"->contextLevel.entryName,
-    "contextExpandLeft"->contextExpandLeft,
-    "contextExpandRight"->contextExpandRight,
+    "offset" -> offset,
     "sumScaling"->sumScalingString,
     "fields"->fields,
     "returnMatches"->returnMatches,
     "returnExplanations"->returnExplanations
   )
-  queryMetadata.json = queryMetadata.json ++ toJson
+  override def toJson = super.toJson ++ myJson
+  queryMetadata.json = queryMetadata.json ++ myJson
 }

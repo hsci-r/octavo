@@ -1,18 +1,15 @@
 package controllers
 
-import java.text.BreakIterator
-import javax.inject._
-
 import com.koloboke.collect.map.LongDoubleMap
 import com.koloboke.collect.map.hash.HashIntObjMaps
-import org.apache.lucene.index.{IndexOptions, LeafReaderContext}
-import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource
+import javax.inject._
+import org.apache.lucene.index.LeafReaderContext
 import org.apache.lucene.search.{Scorer, SimpleCollector}
 import parameters._
 import play.api._
 import play.api.libs.json.{JsNull, JsValue, Json}
 import play.api.mvc.{Action, AnyContent}
-import services.{ExtendedUnifiedHighlighter, IndexAccessProvider, TermVectors}
+import services.{IndexAccessProvider, TermVectors}
 
 import scala.collection.mutable
 
@@ -93,7 +90,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
               docFields.put(doc, cdocFields)
               if (cdocVectors != null) docVectorsForMDS.put(doc, cdocVectors)
               maxHeap += ((doc, scorer.score))
-            } else if (total<=srp.limit)
+            } else if (total<=srp.offset + srp.limit)
               maxHeap += ((doc, scorer.score))
             else if (maxHeap.head._2<scorer.score) {
               maxHeap.dequeue()
@@ -110,17 +107,17 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
       }
       tlc.get.setCollector(collector)
       is.search(query, gp.tlc.get)
+      val values = maxHeap.dequeueAll.reverse.drop(srp.offset)
       if (srp.limit!= -1) {
         val lr = ir.leaves.get(0)
         val jsGetters = srp.fields.map(f => f -> ql.fields(f).jsGetter(lr.reader)).toMap
-        maxHeap.toSeq.sortBy(_._1).foreach{p => // sort by id so that advanceExact works
+        values.sortBy(_._1).foreach{p => // sort by id so that advanceExact works
             val doc = p._1 - lr.docBase
             val (cdocFields, cdocVectors) = processDocFields(lr, doc, jsGetters)
             docFields.put(p._1, cdocFields)
             if (cdocVectors != null) docVectorsForMDS.put(p._1, limitTermVector(cdocVectors,rtvpa))
         }
       }
-      val values = maxHeap.dequeueAll.reverse
       val cvs = if (rtvdr.dimensions > 0) {
         val nonEmptyVectorsAndTheirOriginalIndices = values.map(p => docVectorsForMDS.get(p._1)).zipWithIndex.filter(p => !p._1.isEmpty)
         val mdsValues = rtvdr.dimensionalityReduction(nonEmptyVectorsAndTheirOriginalIndices.map(p => p._1), rtvdr).map(Json.toJson(_)).toSeq
@@ -128,20 +125,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
         values.indices.map(i => originalIndicesToMDSValueIndices.get(i).map(vi => Json.toJson(mdsValues(vi))).getOrElse(JsNull))
       } else null
       val matchesByDocs = if (srp.returnMatches) {
-        val highlighter = new ExtendedUnifiedHighlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField)) {
-
-          override def getBreakIterator(field: String): BreakIterator = srp.contextLevel(srp.contextExpandLeft,srp.contextExpandRight)
-
-          override def getOffsetSource(field: String): OffsetSource = {
-            val fieldInfo = getFieldInfo(field)
-            if (fieldInfo != null)
-              if (fieldInfo.getIndexOptions == IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS)
-                if (fieldInfo.hasVectors) return OffsetSource.POSTINGS_WITH_TERM_VECTORS else return OffsetSource.POSTINGS
-              /*if (fieldInfo.hasVectors()) // unfortunately we can't also check if the TV has offsets
-                return OffsetSource.TERM_VECTORS */
-            OffsetSource.ANALYSIS
-          }
-        }
+        val highlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField))
         highlighter.highlight(indexMetadata.contentField, query, values.map(_._1).toArray, Int.MaxValue - 1)
       } else null
       Json.obj(
