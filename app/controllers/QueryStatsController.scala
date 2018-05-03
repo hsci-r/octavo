@@ -7,7 +7,6 @@ import org.apache.lucene.index.LeafReaderContext
 import org.apache.lucene.search._
 import parameters._
 import play.api.libs.json.{Json, _}
-import play.api.{Configuration, Environment}
 import services.{IndexAccess, IndexAccessProvider, LevelMetadata}
 
 import scala.collection.JavaConverters._
@@ -15,7 +14,7 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 @Singleton
-class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
+class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
   
   class Stats {
     val termFreqs = new ArrayBuffer[Int]
@@ -31,7 +30,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
     }
   }
   
-  private def getStats(level: LevelMetadata, is: IndexSearcher, q: Query, grpp: GroupingParameters, fieldSums: Seq[String], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
+  private def getStats(level: LevelMetadata, is: IndexSearcher, q: Query, grpp: GroupingParameters, sp: SamplingParameters, fieldSums: Seq[String], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
     if (grpp.isDefined) {
       val highlighter = if (grpp.groupByMatch) grpp.highlighter(is, ia.indexMetadata.indexingAnalyzers(ia.indexMetadata.contentField)) else null
       val globalStats = new Stats
@@ -46,50 +45,55 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
 
         var scorer: Scorer = _
 
-        override def collect(doc: Int) {
-          val baseGroupDefinition = grpp.grouper.map(ap => {
-            ap.invokeMethod("group", doc) match {
-              case jsObject: JsObject => jsObject
-              case gm: util.Map[String, Any] =>
-                JsObject(gm.asScala.map(p => {
-                  if (p._2.isInstanceOf[JsValue]) p else (p._1, JsString(p._2.toString))
-                }).asInstanceOf[collection.Map[String, JsValue]])
-            }
-          }).getOrElse(
-            JsObject(grpp.fields.zip(
-              grpp.fieldTransformer.map(ap => {
-                ap.getBinding.setProperty("fields", fieldGetters.map(_(doc)).asJava)
-                ap.run().asInstanceOf[java.util.List[Any]].asScala.map(v => if (v.isInstanceOf[JsValue]) v else JsString(v.asInstanceOf[String])).asInstanceOf[Seq[JsValue]]
-              }).getOrElse(if (grpp.fieldLengths.isEmpty) fieldGetters.map(_(doc)) else fieldGetters.zip(grpp.fieldLengths).map(p => {
-                val value = p._1(doc).toString
-                JsString(value.substring(0,Math.min(p._2,value.length)))
-              })))))
-          val score = scorer.score().toInt
-          val fieldSumValues = for ((key, getter) <- fieldSums.zip(fieldVGetters)) yield (key, getter(doc).asInstanceOf[JsNumber].value.toLong)
-          val groupDefinitions: Iterable[JsObject] = if (grpp.groupByMatch)
-            highlighter.highlight(ia.indexMetadata.contentField, q, Array(doc), Int.MaxValue - 1).head.map(amatch => baseGroupDefinition ++ JsObject(Seq("match" -> grpp.matchTransformer.map(ap => {
-              ap.getBinding.setProperty("match", amatch)
-              ap.run() match {
-                case v: JsValue => v
-                case v: String => JsString(v)
+        var count = 0
+
+        override def collect(doc: Int): Unit = {
+          count = count + 1
+          if (sp.maxDocs == -1 || count <= sp.maxDocs) {
+            val baseGroupDefinition = grpp.grouper.map(ap => {
+              ap.invokeMethod("group", doc) match {
+                case jsObject: JsObject => jsObject
+                case gm: util.Map[_,_] =>
+                  JsObject(gm.asScala.map(p => {
+                    if (p._2.isInstanceOf[JsValue]) p else (p._1, JsString(p._2.toString))
+                  }).asInstanceOf[collection.Map[String, JsValue]])
               }
-            }).getOrElse(JsString(if (grpp.matchLength.isDefined) amatch.substring(0,grpp.matchLength.get) else amatch)))))
-          else Iterable(baseGroupDefinition)
-          for (group <- groupDefinitions) {
-            val s = groupedStats.getOrElseUpdate(group, new Stats)
-            s.docFreq += 1
+            }).getOrElse(
+              JsObject(grpp.fields.zip(
+                grpp.fieldTransformer.map(ap => {
+                  ap.getBinding.setProperty("fields", fieldGetters.map(_ (doc)).asJava)
+                  ap.run().asInstanceOf[java.util.List[Any]].asScala.map(v => if (v.isInstanceOf[JsValue]) v else JsString(v.asInstanceOf[String])).asInstanceOf[Seq[JsValue]]
+                }).getOrElse(if (grpp.fieldLengths.isEmpty) fieldGetters.map(_ (doc)) else fieldGetters.zip(grpp.fieldLengths).map(p => {
+                  val value = p._1(doc).toString
+                  JsString(value.substring(0, Math.min(p._2, value.length)))
+                })))))
+            val score = scorer.score().toInt
+            val fieldSumValues = for ((key, getter) <- fieldSums.zip(fieldVGetters)) yield (key, getter(doc).asInstanceOf[JsNumber].value.toLong)
+            val groupDefinitions: Iterable[JsObject] = if (grpp.groupByMatch)
+              highlighter.highlight(ia.indexMetadata.contentField, q, Array(doc), Int.MaxValue - 1).head.map(amatch => baseGroupDefinition ++ JsObject(Seq("match" -> grpp.matchTransformer.map(ap => {
+                ap.getBinding.setProperty("match", amatch)
+                ap.run() match {
+                  case v: JsValue => v
+                  case v: String => JsString(v)
+                }
+              }).getOrElse(JsString(if (grpp.matchLength.isDefined) amatch.substring(0, grpp.matchLength.get) else amatch)))))
+            else Iterable(baseGroupDefinition)
+            for (group <- groupDefinitions) {
+              val s = groupedStats.getOrElseUpdate(group, new Stats)
+              s.docFreq += 1
+              if (gatherTermFreqsPerDoc)
+                s.termFreqs += score
+              s.totalTermFreq += score
+              for ((key, v) <- fieldSumValues)
+                s.fieldSums(key) = s.fieldSums.getOrElse(key, 0l) + v
+            }
             if (gatherTermFreqsPerDoc)
-              s.termFreqs += score
-            s.totalTermFreq += score
+              globalStats.termFreqs += score
+            globalStats.docFreq += 1
+            globalStats.totalTermFreq += score
             for ((key, v) <- fieldSumValues)
-              s.fieldSums(key) = s.fieldSums.getOrElse(key, 0l) + v
+              globalStats.fieldSums(key) = globalStats.fieldSums.getOrElse(key, 0l) + v
           }
-          if (gatherTermFreqsPerDoc)
-            globalStats.termFreqs += score
-          globalStats.docFreq += 1
-          globalStats.totalTermFreq += score
-          for ((key, v) <- fieldSumValues)
-            globalStats.fieldSums(key) = globalStats.fieldSums.getOrElse(key, 0l) + v
         }
 
         override def doSetNextReader(context: LeafReaderContext) {
@@ -145,18 +149,25 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, env: En
     implicit val ia = iap(index)
     import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    var fieldSums = p.getOrElse("sumFields", Seq.empty)
+    val fieldSums = p.getOrElse("sumFields", Seq.empty)
     val gatherTermFreqsPerDoc = p.get("termFreqs").exists(v => v.head=="" || v.head.toBoolean)
     implicit val qm = new QueryMetadata(Json.obj("termFreqs"->gatherTermFreqsPerDoc,"sumFields"->fieldSums))
     val gp = new GeneralParameters()
     val q = new QueryParameters()
     val grpp = new GroupingParameters()
+    val sp = new SamplingParameters()
     implicit val ec = gp.executionContext
+    implicit val tlc = gp.tlc
+    implicit val qps = documentQueryParsers
     getOrCreateResult("queryStats", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
-      implicit val tlc = gp.tlc
-      implicit val qps = documentQueryParsers
+      val hc = new TotalHitCountCollector()
+      val (qlevel, query) = buildFinalQueryRunningSubQueries(exactCounts = false, q.requiredQuery)
+      searcher(qlevel, SumScaling.ABSOLUTE).search(query, hc)
+      qm.estimatedDocumentsToProcess = if (sp.maxDocs == -1) hc.getTotalHits else Math.min(hc.getTotalHits, sp.maxDocs)
+      qm.estimatedNumberOfResults = if (grpp.limit != -1) grpp.limit else Math.min(hc.getTotalHits, grpp.limit)
+    }, () => {
       val (qlevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, q.requiredQuery)
-      getStats(ia.indexMetadata.levelMap(qlevel),searcher(qlevel, SumScaling.ABSOLUTE), query, grpp, fieldSums, gatherTermFreqsPerDoc)
+      getStats(ia.indexMetadata.levelMap(qlevel),searcher(qlevel, SumScaling.ABSOLUTE), query, grpp, sp, fieldSums, gatherTermFreqsPerDoc)
     })
-  }  
+  }
 }

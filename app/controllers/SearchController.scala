@@ -4,7 +4,7 @@ import com.koloboke.collect.map.LongDoubleMap
 import com.koloboke.collect.map.hash.HashIntObjMaps
 import javax.inject._
 import org.apache.lucene.index.LeafReaderContext
-import org.apache.lucene.search.{Scorer, SimpleCollector}
+import org.apache.lucene.search.{Scorer, SimpleCollector, TotalHitCountCollector}
 import parameters._
 import play.api._
 import play.api.libs.json.{JsNull, JsValue, Json}
@@ -14,7 +14,7 @@ import services.{IndexAccessProvider, TermVectors}
 import scala.collection.mutable
 
 @Singleton
-class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
+class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
   
   import TermVectors._
   
@@ -31,7 +31,6 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
     ))
     val qp = new QueryParameters()
     val gp = new GeneralParameters()
-    val sp = new SamplingParameters()
     val srp = new QueryReturnParameters()
     val ctv = new QueryParameters("ctv_")
     val ctvs = new SamplingParameters("ctv_")
@@ -42,9 +41,24 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
     val rtvpa = new AggregateTermVectorProcessingParameters("rtv_")
     val rtvdr = new TermVectorDimensionalityReductionParameters("rtv_")
     implicit val iec = gp.executionContext
+    implicit val tlc = gp.tlc
+    implicit val ifjp = gp.forkJoinPool
     getOrCreateResult("search",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
-      implicit val tlc = gp.tlc
-      implicit val ifjp = gp.forkJoinPool
+      val qhits = {
+        val hc = new TotalHitCountCollector()
+        val (qlevel,query) = buildFinalQueryRunningSubQueries(exactCounts = false, qp.requiredQuery)
+        searcher(qlevel, SumScaling.ABSOLUTE).search(query, hc)
+        hc.getTotalHits
+      }
+      val chits = if (ctv.query.isDefined) {
+        val hc = new TotalHitCountCollector()
+        val (qlevel, query) = buildFinalQueryRunningSubQueries(exactCounts = false, ctv.requiredQuery)
+        searcher(qlevel, SumScaling.ABSOLUTE).search(query, hc)
+        hc.getTotalHits
+      } else 0
+      qm.estimatedDocumentsToProcess = qhits + chits
+      qm.estimatedNumberOfResults = Math.min(qhits, srp.limit)
+    }, () => {
       val (queryLevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, qp.requiredQuery)
       Logger.debug(f"Final query: $query%s, level: $queryLevel%s")
       val ql = ia.indexMetadata.levelMap(queryLevel)
@@ -82,6 +96,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
         override def setScorer(scorer: Scorer) {this.scorer=scorer}
 
         override def collect(ldoc: Int) {
+          qm.documentsProcessed += 1
           val doc = context.docBase + ldoc
           if (scorer.score >= minScore) {
             total+=1
@@ -112,10 +127,10 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
         val lr = ir.leaves.get(0)
         val jsGetters = srp.fields.map(f => f -> ql.fields(f).jsGetter(lr.reader)).toMap
         values.sortBy(_._1).foreach{p => // sort by id so that advanceExact works
-            val doc = p._1 - lr.docBase
-            val (cdocFields, cdocVectors) = processDocFields(lr, doc, jsGetters)
-            docFields.put(p._1, cdocFields)
-            if (cdocVectors != null) docVectorsForMDS.put(p._1, limitTermVector(cdocVectors,rtvpa))
+          val doc = p._1 - lr.docBase
+          val (cdocFields, cdocVectors) = processDocFields(lr, doc, jsGetters)
+          docFields.put(p._1, cdocFields)
+          if (cdocVectors != null) docVectorsForMDS.put(p._1, limitTermVector(cdocVectors,rtvpa))
         }
       }
       val cvs = if (rtvdr.dimensions > 0) {
@@ -129,14 +144,14 @@ class SearchController @Inject() (iap: IndexAccessProvider, env: Environment, co
         highlighter.highlight(indexMetadata.contentField, query, values.map(_._1).toArray, Int.MaxValue - 1)
       } else null
       Json.obj(
-	      "total"->total,
-	      "docs"->values.zipWithIndex.map{
-	        case ((doc,score),i) =>
-	          var df = docFields.get(doc)
+        "total"->total,
+        "docs"->values.zipWithIndex.map{
+          case ((doc,score),i) =>
+            var df = docFields.get(doc)
             if (cvs!=null) df = df ++ Map("termVector"->cvs(i))
             if (srp.returnMatches) df = df ++ Map("matches" -> Json.toJson(matchesByDocs(i).filter(_.contains("<b>"))))
             df ++ Map("score" -> (if (srp.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt)))
-      })
+        })
     })
   }
  

@@ -18,7 +18,9 @@ class GroupingParameters(prefix: String = "", suffix: String = "")(implicit requ
   private val matchTransformerS = p.get("matchTransformer").map(_.head)
   val matchTransformer = matchTransformerS.map(apScript => new GroovyShell(RunScriptController.compilerConfiguration).parse(apScript))
   val matchLength = p.get("matchLength").map(_.head.toInt)
-  private val myJson = Json.obj(prefix+"fields"+suffix->fields,prefix+"fieldLengths"+suffix->fieldLengths,prefix+"fieldTransformer"+suffix->fieldTransformerS,prefix+"grouper"+suffix->grouperS,prefix+"groupByMatch"+suffix->groupByMatch,prefix+"matchTransformer"+suffix->matchTransformerS,prefix+"matchLength"+suffix->matchLength)
+  /** how many results to return at maximum */
+  val limit: Int = p.get("limit").map(_.head.toInt).getOrElse(20)
+  private val myJson = Json.obj(prefix+"limit"+suffix->limit,prefix+"fields"+suffix->fields,prefix+"fieldLengths"+suffix->fieldLengths,prefix+"fieldTransformer"+suffix->fieldTransformerS,prefix+"grouper"+suffix->grouperS,prefix+"groupByMatch"+suffix->groupByMatch,prefix+"matchTransformer"+suffix->matchTransformerS,prefix+"matchLength"+suffix->matchLength)
   override def toJson = super.toJson ++ myJson
   def isDefined = fields.nonEmpty || grouper.isDefined || groupByMatch
   queryMetadata.json = queryMetadata.json ++ myJson

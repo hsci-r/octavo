@@ -14,7 +14,7 @@ import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future}
 
 @Singleton
-class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
+class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
   
   import TermVectors._
   
@@ -36,6 +36,8 @@ class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, env
     implicit val tlc = gp.tlc
     implicit val ec = gp.executionContext
     getOrCreateResult("termVectorDiff",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
+      // FIXME
+    }, () => {
       val (qlevel1,termVector1Query) = buildFinalQueryRunningSubQueries(exactCounts = false, tvq1.requiredQuery)
       val (qlevel2,termVector2Query) = buildFinalQueryRunningSubQueries(exactCounts = false, tvq2.requiredQuery)
       val tvm1f = Future { getGroupedAggregateContextVectorsForQuery(ia.indexMetadata.levelMap(qlevel1),searcher(qlevel1, SumScaling.ABSOLUTE), termVector1Query,tvpl,extractContentTermsFromQuery(termVector1Query),grpp,tvpa,if (tvs.maxDocs == -1) -1 else tvs.maxDocs/2) }

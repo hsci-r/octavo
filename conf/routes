@@ -7,6 +7,9 @@ GET		/:index			controllers.IndexInfoController.info(index)
 GET		/:index/			controllers.IndexInfoController.info(index)
 GET             /:index/indexInfo                               controllers.IndexInfoController.info(index)
 
+GET     /result/:key                    controllers.QueryStatusController.result(key)
+GET     /status/:key                    controllers.QueryStatusController.status(key)
+
 GET     /:index/search           		controllers.SearchController.search(index)
 POST    /:index/search           		controllers.SearchController.search(index)
 

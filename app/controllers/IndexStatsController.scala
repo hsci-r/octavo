@@ -1,21 +1,19 @@
 package controllers
 
-import javax.inject.{Inject, Singleton}
-
 import com.tdunning.math.stats.TDigest
+import javax.inject.{Inject, Singleton}
 import parameters.{GeneralParameters, QueryMetadata}
-import play.api.{Configuration, Environment}
 import play.api.libs.json.Json
 import services.{IndexAccess, IndexAccessProvider}
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, Future}
 
 @Singleton
-class IndexStatsController @Inject()(iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
+class IndexStatsController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
   
   var dft = new mutable.HashMap[(String,String),TDigest]
   var ttft = new mutable.HashMap[(String,String),TDigest]
@@ -58,7 +56,10 @@ class IndexStatsController @Inject()(iap: IndexAccessProvider, env: Environment,
       "termFreqs"->gatherFreqsPerTerm
     ))
     val gp = new GeneralParameters()
+    qm.longRunning = false
     getOrCreateResult("indexStats", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
+      // FIXME
+    }, () => {
       if (!dft.contains((level,field))) calc(level,field)
       val formatString = "%."+(byS.length-2)+"f"
       val ret = Json.obj(

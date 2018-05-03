@@ -16,7 +16,7 @@ import scala.collection.{Searching, mutable}
 import scala.collection.mutable.ArrayBuffer
 
 @Singleton
-class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
+class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
   
   private def permutations[A](a: Iterable[A]*): Iterator[Seq[A]] = a.foldLeft(Iterator(Seq.empty[A])) {
     (acc: Iterator[Seq[A]], next: Iterable[A]) => acc.flatMap { combo: Seq[A] => next.map { num => combo :+ num } }
@@ -95,6 +95,8 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, env:
     val gp = new GeneralParameters()
     implicit val ec = gp.executionContext
     getOrCreateResult("similarTerms", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
+      // FIXME
+    }, () => {
       val ts = ia.queryAnalyzers(level).tokenStream(indexMetadata.contentField, query)
       val ta = ts.addAttribute(classOf[CharTermAttribute])
       val oa = ts.addAttribute(classOf[PositionIncrementAttribute])

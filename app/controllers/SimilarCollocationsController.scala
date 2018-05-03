@@ -1,25 +1,24 @@
 package controllers
 
 import java.util.function.LongConsumer
-import javax.inject.{Inject, Singleton}
 
 import com.koloboke.collect.set.LongSet
 import com.koloboke.collect.set.hash.HashLongSets
 import com.koloboke.function.LongDoubleConsumer
+import javax.inject.{Inject, Singleton}
 import org.apache.lucene.index.Term
 import org.apache.lucene.search.BooleanClause.Occur
 import org.apache.lucene.search.{BooleanQuery, TermQuery}
 import parameters._
-import play.api.{Configuration, Environment}
 import play.api.libs.json.Json
 import services.{Distance, IndexAccessProvider, TermVectors}
 
 import scala.collection.mutable.ArrayBuffer
-import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, Future}
 
 @Singleton
-class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
+class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
   
   import TermVectors._
   
@@ -46,8 +45,10 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
     val finalTermVectorAggregateProcessingParameters = new AggregateTermVectorProcessingParameters("f_")
     val finalTermVectorDistanceCalculationParameters = new TermVectorDistanceCalculationParameters("f_")
     val finalTermVectorSamplingParameters = new SamplingParameters("f_")
+    implicit val tlc = gp.tlc
     getOrCreateResult("similarCollocations",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
-      implicit val tlc = gp.tlc
+      // FIXME
+    }, () => {
       val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(exactCounts = false, termVectorQueryParameters.requiredQuery)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader

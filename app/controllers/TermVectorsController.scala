@@ -1,21 +1,19 @@
 package controllers
 
-import javax.inject.{Inject, Singleton}
-
 import com.koloboke.collect.map.LongDoubleMap
 import com.koloboke.function.LongDoubleConsumer
+import javax.inject.{Inject, Singleton}
 import org.apache.lucene.index.Term
 import org.apache.lucene.search.BooleanClause.Occur
 import org.apache.lucene.search.{BooleanQuery, TermQuery}
 import parameters._
 import play.api.libs.json.Json
-import play.api.{Configuration, Environment}
 import services.{IndexAccessProvider, TermVectors}
 
 import scala.collection.mutable.ArrayBuffer
 
 @Singleton
-class TermVectorsController @Inject()(implicit iap: IndexAccessProvider, env: Environment, conf: Configuration) extends AQueuingController(env, conf) {
+class TermVectorsController @Inject()(implicit iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
   
   import TermVectors._
 
@@ -44,6 +42,8 @@ class TermVectorsController @Inject()(implicit iap: IndexAccessProvider, env: En
     val termVectorDistanceCalculationParameters = new TermVectorDistanceCalculationParameters()
     implicit val iec = gp.executionContext
     getOrCreateResult("termVectors",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
+      // FIXME
+    }, () => {
       implicit val tlc = gp.tlc
       implicit val its = gp.taskSupport
       implicit val ifjp = gp.forkJoinPool
