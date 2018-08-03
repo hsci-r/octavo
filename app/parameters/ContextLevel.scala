@@ -1,11 +1,10 @@
 package parameters
 
-import java.text.BreakIterator
-import enumeratum.EnumEntry
-import enumeratum.Enum
+import java.text.{BreakIterator, CharacterIterator, StringCharacterIterator}
+
+import enumeratum.{Enum, EnumEntry}
+
 import scala.collection.Searching
-import java.text.CharacterIterator
-import java.text.StringCharacterIterator
 
 class ExpandingBreakIterator(protected val sub: BreakIterator, protected val expandLeft: Int = 0, protected val expandRight: Int = 0) extends BreakIterator {
 
@@ -160,16 +159,14 @@ class ExpandingWordBreakIterator(expandLeft: Int = 0, expandRight: Int = 0) exte
   }
 }
 
+class PatternBreakIterator(pattern: String) extends BreakIterator {
 
+  val pbr = pattern.r
 
-class ParagraphBreakIterator extends BreakIterator {
-  
   var breakIndices: Array[Int] = _
   var currentB: Int = 0
   
   var text: String = _
-  
-  val pbr = "\n\n".r
   
   override def setText(text: String): Unit = {
     this.text = text
@@ -224,6 +221,9 @@ class ParagraphBreakIterator extends BreakIterator {
   }
 }
 
+class ParagraphBreakIterator extends PatternBreakIterator("\n\n")
+class LineBreakIterator extends PatternBreakIterator("\n")
+
 sealed abstract class ContextLevel extends EnumEntry {
   def apply(expandLeft: Int, expandRight: Int): BreakIterator
 }
@@ -237,6 +237,9 @@ object ContextLevel extends Enum[ContextLevel] {
   }
   case object SENTENCE extends ContextLevel {
     def apply(expandLeft: Int, expandRight: Int): BreakIterator =  if (expandLeft>0 || expandRight>0) new ExpandingBreakIterator(BreakIterator.getSentenceInstance,expandLeft,expandRight) else BreakIterator.getSentenceInstance
+  }
+  case object LINE extends ContextLevel {
+    def apply(expandLeft: Int, expandRight: Int): BreakIterator = if (expandLeft>0 || expandRight>0) new ExpandingBreakIterator(new LineBreakIterator(),expandLeft,expandRight) else new LineBreakIterator()
   }
   case object PARAGRAPH extends ContextLevel {
     def apply(expandLeft: Int, expandRight: Int): BreakIterator =  if (expandLeft>0 || expandRight>0) new ExpandingBreakIterator(new ParagraphBreakIterator(),expandLeft,expandRight) else new ParagraphBreakIterator()

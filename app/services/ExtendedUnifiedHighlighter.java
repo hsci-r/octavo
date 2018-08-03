@@ -4,14 +4,16 @@ import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.Term;
+import org.apache.lucene.queryparser.complexPhrase.ComplexPhraseQueryParser;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
+import org.apache.lucene.search.highlight.WeightedSpanTerm;
 import org.apache.lucene.search.uhighlight.*;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.automaton.CharacterRunAutomaton;
 
 import java.io.IOException;
-import java.util.Set;
+import java.util.*;
 
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource;
 
@@ -45,6 +47,11 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
 
     @Override
     protected FieldHighlighter getFieldHighlighter(String field, Query query, Set<Term> allTerms, int maxPassages) {
+        try {
+            searcher.createNormalizedWeight(query, false).extractTerms(allTerms); // needs to be redone here because superclass uses an empty indexsearcher, which doesn't work with complex phrase queries.
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
         BytesRef[] terms = filterExtractedTerms(getFieldMatcher(field), allTerms);
         Set<HighlightFlag> highlightFlags = getFlags(field);
         PhraseHelper phraseHelper = getPhraseHelper(field, query, highlightFlags);
@@ -71,4 +78,15 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
         }
         return OffsetSource.ANALYSIS;
     }
+
+    protected Collection<Query> preSpanQueryRewrite(Query query) {
+        if (query == null) return null;
+        else if (query.getClass().getCanonicalName().equals("org.apache.lucene.queryparser.complexPhrase.ComplexPhraseQueryParser.ComplexPhraseQuery")) try {
+            return Collections.singleton(query.rewrite(getIndexSearcher().getIndexReader()));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        return null;
+    }
+
 }

@@ -15,10 +15,6 @@ class NumericDocValuesWeightedMatchAllDocsQuery(field: String) extends Query {
         val ndv = context.reader.getNumericDocValues(field)
         val disi = DocIdSetIterator.all(context.reader.maxDoc)
         def docID: Int = disi.docID
-        def freq: Int = {
-          ndv.advanceExact(disi.docID)
-          ndv.longValue.toInt
-        }
         def iterator: org.apache.lucene.search.DocIdSetIterator = disi
         def score: Float = {
           ndv.advanceExact(disi.docID)
@@ -35,7 +31,6 @@ class NumericDocValuesWeightedMatchAllDocsQuery(field: String) extends Query {
         var mfreq: Int = 1
         val scorer = new Scorer(null) {
           override def docID: Int = mdoc
-          override def freq: Int = mfreq
           override def score: Float = mscore
           override def iterator: DocIdSetIterator = throw new UnsupportedOperationException()
           override def getWeight: Weight = throw new UnsupportedOperationException()
@@ -59,6 +54,8 @@ class NumericDocValuesWeightedMatchAllDocsQuery(field: String) extends Query {
 
       override def cost(): Long = maxDoc
     }
+
+    override def isCacheable(ctx: LeafReaderContext) = true
   }
       
   override def toString(field: String): String = "*:*"

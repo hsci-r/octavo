@@ -6,7 +6,6 @@ import javax.inject._
 import org.apache.lucene.index.LeafReaderContext
 import org.apache.lucene.search.{Scorer, SimpleCollector, TotalHitCountCollector}
 import parameters._
-import play.api._
 import play.api.libs.json.{JsNull, JsValue, Json}
 import play.api.mvc.{Action, AnyContent}
 import services.{IndexAccessProvider, TermVectors}
@@ -60,7 +59,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       qm.estimatedNumberOfResults = Math.min(qhits, srp.limit)
     }, () => {
       val (queryLevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, qp.requiredQuery)
-      Logger.debug(f"Final query: $query%s, level: $queryLevel%s")
+      // Logger.debug(f"Final query: $query%s, level: $queryLevel%s")
       val ql = ia.indexMetadata.levelMap(queryLevel)
       val is = searcher(queryLevel,srp.sumScaling)
       val ir = is.getIndexReader
@@ -144,6 +143,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         highlighter.highlight(indexMetadata.contentField, query, values.map(_._1).toArray, Int.MaxValue - 1)
       } else null
       Json.obj(
+        "final_query"->query.toString,
         "total"->total,
         "docs"->values.zipWithIndex.map{
           case ((doc,score),i) =>

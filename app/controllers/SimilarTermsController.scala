@@ -2,18 +2,18 @@ package controllers
 
 import javax.inject.{Inject, Singleton}
 import org.apache.lucene.analysis.tokenattributes.{CharTermAttribute, PositionIncrementAttribute}
-import org.apache.lucene.index.{PostingsEnum, Term}
+import org.apache.lucene.index.{PostingsEnum, Term, Terms}
 import org.apache.lucene.search._
 import org.apache.lucene.util.automaton.CompiledAutomaton
 import org.apache.lucene.util.{AttributeSource, BytesRef}
 import parameters.{GeneralParameters, QueryMetadata, SumScaling}
 import play.api.libs.json.Json
-import play.api.{Configuration, Environment}
 import services.IndexAccessProvider
 
+import scala.collection.JavaConverters._
 import scala.collection.Searching.Found
-import scala.collection.{Searching, mutable}
 import scala.collection.mutable.ArrayBuffer
+import scala.collection.{Searching, mutable}
 
 @Singleton
 class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
@@ -80,13 +80,34 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
     }
   }
 
-  val ExtendedFuzzyQuery = "(.*)~([12]):([0-9]*):?(.*)".r
+  val ExtendedFuzzyQuery = "([^\\|]*)~([12]):([0-9]*):?(.*)".r
+
+  import services.IndexAccess._
+
+  private def toIterator(terms: Terms, q: Query): Iterator[(BytesRef,Int,Long)] = q match {
+    case query: TermInSetQuery =>
+      val te = terms.iterator
+      query.getTermData.iterator.asBytesRefIterator.map(b => {
+        te.seekExact(b)
+        (b,te.docFreq,te.totalTermFreq)
+      })
+    case query: AutomatonQuery => new CompiledAutomaton(query.getAutomaton, null, true, Int.MaxValue, query.isAutomatonBinary).getTermsEnum(terms).asBytesRefAndDocFreqAndTotalTermFreqIterator
+    case query: TermQuery => val te = terms.iterator
+      te.seekExact(query.getTerm.bytes)
+      Iterator((query.getTerm.bytes,te.docFreq,te.totalTermFreq))
+    case query: BooleanQuery =>
+      val col = new mutable.HashSet[(BytesRef,Int,Long)]
+      for (c <- query.clauses.asScala; i <- toIterator(terms, c.getQuery)) col += ((BytesRef.deepCopyOf(i._1),i._2,i._3))
+      col.iterator
+    case query: FuzzyQuery =>
+      new FuzzyTermsEnum(terms, new AttributeSource(), query.getTerm, query.getMaxEdits, query.getPrefixLength,query.getTranspositions).asBytesRefAndDocFreqAndTotalTermFreqIterator
+      new FuzzyTermsEnum(terms, new AttributeSource(), query.getTerm, query.getMaxEdits, query.getPrefixLength,query.getTranspositions).asBytesRefAndDocFreqAndTotalTermFreqIterator
+  }
   
   // get terms lexically similar to a query term - used in topic definition to get past OCR errors
   def similarTerms(index: String, levelO: Option[String], query: String, limit:Int = 20) = Action { implicit request =>
     implicit val ia = iap(index)
     import ia._
-    import services.IndexAccess._
     val level = levelO.getOrElse(indexMetadata.defaultLevel.id)
     implicit val qm = new QueryMetadata(Json.obj(
       "query" -> query,
@@ -115,12 +136,7 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
         val qt = parts(0)._2
         for ((br, docFreq, termFreq) <- qt match {
           case ExtendedFuzzyQuery(rqt,maxEdits,prefixLength,transpositions) => new FuzzyTermsEnum(terms, new AttributeSource(), new Term(indexMetadata.contentField, rqt), maxEdits.toInt, if (prefixLength=="") 0 else prefixLength.toInt, transpositions != "" && transpositions.toBoolean ).asBytesRefAndDocFreqAndTotalTermFreqIterator
-          case _ => qp.parse(qt) match {
-           case query: AutomatonQuery => new CompiledAutomaton(query.getAutomaton, null, true, Int.MaxValue, query.isAutomatonBinary).getTermsEnum(terms).asBytesRefAndDocFreqAndTotalTermFreqIterator
-           case query: FuzzyQuery =>
-             new FuzzyTermsEnum(terms, new AttributeSource(), query.getTerm, query.getMaxEdits, query.getPrefixLength,query.getTranspositions).asBytesRefAndDocFreqAndTotalTermFreqIterator
-             new FuzzyTermsEnum(terms, new AttributeSource(), query.getTerm, query.getMaxEdits, query.getPrefixLength,query.getTranspositions).asBytesRefAndDocFreqAndTotalTermFreqIterator
-        }}
+          case _ => toIterator(terms, qp.parse(qt)) }
         ) {
           tdf += docFreq
           tttf += termFreq

@@ -5,26 +5,27 @@ import java.nio.file.{FileSystems, Path}
 import java.util.concurrent.ForkJoinPool
 import java.util.regex.Pattern
 import java.util.{Collections, Locale}
-import javax.inject.{Inject, Singleton}
 
 import enumeratum.{Enum, EnumEntry}
 import fi.seco.lucene.MorphologicalAnalyzer
+import javax.inject.{Inject, Singleton}
 import org.apache.lucene.analysis.Analyzer.TokenStreamComponents
+import org.apache.lucene.analysis._
 import org.apache.lucene.analysis.core.{KeywordAnalyzer, WhitespaceAnalyzer, WhitespaceTokenizer}
 import org.apache.lucene.analysis.miscellaneous.{HyphenatedWordsFilter, LengthFilter, PerFieldAnalyzerWrapper}
 import org.apache.lucene.analysis.pattern.PatternReplaceFilter
 import org.apache.lucene.analysis.standard.StandardAnalyzer
-import org.apache.lucene.analysis.{Analyzer, CharArraySet, LowerCaseFilter, TokenFilter}
 import org.apache.lucene.document.{DoublePoint, FloatPoint, IntPoint, LongPoint}
 import org.apache.lucene.index._
 import org.apache.lucene.queryparser.classic.QueryParser
 import org.apache.lucene.queryparser.classic.QueryParser.Operator
+import org.apache.lucene.queryparser.complexPhrase.ComplexPhraseQueryParser
 import org.apache.lucene.search.BooleanClause.Occur
 import org.apache.lucene.search._
 import org.apache.lucene.search.highlight.QueryTermExtractor
 import org.apache.lucene.search.similarities.{BasicStats, SimilarityBase}
 import org.apache.lucene.store._
-import org.apache.lucene.util.BytesRef
+import org.apache.lucene.util.{BytesRef, BytesRefIterator}
 import org.joda.time.format.ISODateTimeFormat
 import parameters.SumScaling
 import play.api.libs.json.Reads._
@@ -71,7 +72,7 @@ object IndexAccess {
     override def toString: String = ""
   }
   
-  private case class TermsEnumToBytesRefIterator(te: TermsEnum) extends Iterator[BytesRef] {
+  private case class TermsEnumToBytesRefIterator(te: BytesRefIterator) extends Iterator[BytesRef] {
     var br: BytesRef = te.next()
     var nextFetched: Boolean = true
     override def next(): BytesRef = {
@@ -92,7 +93,7 @@ object IndexAccess {
     def iterator(): Iterator[BytesRef] = te.iterator
   }
   
-  private implicit def termsEnumToBytesRefIterator(te: TermsEnum): Iterator[BytesRef] = TermsEnumToBytesRefIterator(te)
+  private implicit def termsEnumToBytesRefIterator(te: BytesRefIterator): Iterator[BytesRef] = TermsEnumToBytesRefIterator(te)
 
   private case class TermsEnumToBytesRefAndDocFreqIterator(te: TermsEnum) extends Iterator[(BytesRef,Int)] {
     var br: BytesRef = te.next()
@@ -165,6 +166,12 @@ object IndexAccess {
   }
 
   private implicit def termsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te: TermsEnum): Iterator[(BytesRef,Int,Long)] = TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te)
+
+  case class RichBytesRefIterator(te: BytesRefIterator) {
+    def asBytesRefIterator: Iterator[BytesRef] = TermsEnumToBytesRefIterator(te)
+  }
+
+  implicit def bytesRefIteratorToRichBytesRefIterator(te: BytesRefIterator): RichBytesRefIterator = RichBytesRefIterator(te)
 
   case class RichTermsEnum(te: TermsEnum) {
     def asBytesRefIterator: Iterator[BytesRef] = TermsEnumToBytesRefIterator(te)
@@ -607,7 +614,11 @@ case class IndexMetadata(
         tok = new PatternReplaceFilter(tok,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false)
         tok = new LowerCaseFilter(tok)
         tok = new LengthFilter(tok, 1, Int.MaxValue)
-        new TokenStreamComponents(src,tok)
+        new TokenStreamComponents(src,normalize(fieldName,tok))
+      }
+
+      override protected def normalize(fieldName: String, in: TokenStream): TokenStream = {
+        new LowerCaseFilter(in)
       }
     }
     case "StandardAnalyzer" => new StandardAnalyzer(CharArraySet.EMPTY_SET)
@@ -717,31 +728,52 @@ class IndexAccess(path: String) {
         tfSearchers(level)
     }
   }
-  
+
   val queryAnalyzers = indexMetadata.levels.map(level => (level.id, new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),
       level.fields.values.filter(_.indexedAs == IndexedFieldType.TEXT).map(_.id).map((_,whitespaceAnalyzer)).toMap[String,Analyzer].asJava))).toMap
-  
+
   private def newQueryParser(level: LevelMetadata) = {
-    val qp = new QueryParser(indexMetadata.contentField,queryAnalyzers(level.id)) {
+    val qp = new ComplexPhraseQueryParser(indexMetadata.contentField,queryAnalyzers(level.id)) {
       override def getFieldQuery(field: String, content: String, quoted: Boolean): Query = {
-        level.fields(field).indexedAs match {
-          case IndexedFieldType.INTPOINT =>
-            val value = content.toInt
-            IntPoint.newRangeQuery(field, value, value)
-          case IndexedFieldType.FLOATPOINT =>
-            val value = content.toFloat
-            FloatPoint.newRangeQuery(field, value, value)
-          case IndexedFieldType.DOUBLEPOINT =>
-            val value = content.toDouble
-            DoublePoint.newRangeQuery(field, value, value)
-          case IndexedFieldType.LONGPOINT =>
-            val value = if (content.contains("-"))
-              ISODateTimeFormat.dateOptionalTimeParser().parseMillis(content)
-            else content.toLong
-            LongPoint.newRangeQuery(field, value, value)
-          case _ =>
-            super.getFieldQuery(field, content, quoted)
-        }
+        val ext = field.indexOf("|")
+        if (ext == -1)
+          level.fields(field).indexedAs match {
+            case IndexedFieldType.INTPOINT =>
+              val value = content.toInt
+              IntPoint.newRangeQuery(field, value, value)
+            case IndexedFieldType.FLOATPOINT =>
+              val value = content.toFloat
+              FloatPoint.newRangeQuery(field, value, value)
+            case IndexedFieldType.DOUBLEPOINT =>
+              val value = content.toDouble
+              DoublePoint.newRangeQuery(field, value, value)
+            case IndexedFieldType.LONGPOINT =>
+              val value = if (content.contains("-"))
+                ISODateTimeFormat.dateOptionalTimeParser().parseMillis(content)
+              else content.toLong
+              LongPoint.newRangeQuery(field, value, value)
+            case _ =>
+              super.getFieldQuery(field, content, quoted)
+          } else {
+              val rfield = if (ext == 0) indexMetadata.contentField else field.substring(0,ext)
+              val exts = field.substring(ext+1).split("_")
+              exts(0) match {
+                case "infl" =>
+                  val infls = MorphologicalAnalyzer.analyzer.allInflections(content,new Locale(exts(1))).asScala.toSeq
+                  exts.length match {
+                    case 2 =>
+                      new ExtractingTermInSetQuery(rfield,infls.map(indexMetadata.indexingAnalyzers(rfield).normalize(rfield,_)).asJava)
+                    case 3 =>
+                      val bqb = new BooleanQuery.Builder()
+                      for (infl <- infls) bqb.add(parse(indexMetadata.indexingAnalyzers(rfield).normalize(rfield,infl).utf8ToString+exts(2)),Occur.SHOULD)
+                      bqb.build()
+                    case 4 =>
+                      val bqb = new BooleanQuery.Builder()
+                      for (infl <- infls) bqb.add(parse(exts(2)+indexMetadata.indexingAnalyzers(rfield).normalize(rfield,infl).utf8ToString+exts(3)),Occur.SHOULD)
+                      bqb.build()
+                  }
+              }
+          }
       }
 
       override def getRangeQuery(field: String, part1: String, part2: String, startInclusive: Boolean, endInclusive: Boolean): Query = {
@@ -783,9 +815,9 @@ class IndexAccess(path: String) {
     qp.setMaxDeterminizedStates(Int.MaxValue)
     qp
   }
-  
+
   val termVectorQueryParsers: Map[String,ThreadLocal[QueryParser]] = indexMetadata.levels.map(level => (level.id, new ThreadLocal[QueryParser] {
-    
+
     override def initialValue(): QueryParser = {
       val qp = newQueryParser(level)
       qp.setMultiTermRewriteMethod(MultiTermQuery.CONSTANT_SCORE_REWRITE)
@@ -793,9 +825,9 @@ class IndexAccess(path: String) {
     }
 
   })).toMap
-  
+
   val documentQueryParsers: Map[String,ThreadLocal[QueryParser]] = indexMetadata.levels.map(level => (level.id, new ThreadLocal[QueryParser] {
-    
+
     override def initialValue(): QueryParser = {
       val qp = newQueryParser(level)
       qp.setMultiTermRewriteMethod(MultiTermQuery.SCORING_BOOLEAN_REWRITE)
@@ -803,10 +835,10 @@ class IndexAccess(path: String) {
     }
 
   })).toMap
-   
+
   private val queryPartStart = "(?<!\\\\)<".r
   private val queryPartEnd = "(?<!\\\\)>".r
-  
+
   def docFreq(ir: IndexReader, term: Long): Int = {
     val it = ir.leaves.get(0).reader.terms(indexMetadata.contentField).iterator
     it.seekExact(term)
@@ -824,21 +856,36 @@ class IndexAccess(path: String) {
     it.seekExact(term)
     it.term.utf8ToString
   }
-  
+
   def extractContentTermsFromQuery(q: Query): Seq[String] = QueryTermExtractor.getTerms(q, false, indexMetadata.contentField).map(_.getTerm).toSeq
+
+  class ExtractingTermInSetQuery(field: String, terms: java.util.Collection[BytesRef]) extends TermInSetQuery(field, terms) {
+
+    override def createWeight(searcher: IndexSearcher, needsScores: Boolean, boost: Float): Weight = {
+      val weight = super.createWeight(searcher, needsScores, boost)
+      new ConstantScoreWeight(this, boost) {
+        override def extractTerms(aterms: java.util.Set[Term]): Unit = for (term <- terms.asScala) aterms.add(new Term(field,term))
+
+        override def scorer(context: LeafReaderContext) = weight.scorer(context)
+
+        override def isCacheable(ctx: LeafReaderContext) = weight.isCacheable(ctx)
+      }
+
+    }
+  }
 
   def matchingValuesToQuery(outField: FieldInfo, inField: FieldInfo, is: IndexSearcher, query: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Query = {
     outField.indexedAs match {
       case IndexedFieldType.STRING =>
         inField.storedAs match {
           case StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.SORTEDSETDOCVALUES | StoredFieldType.TERMVECTOR =>
-            new TermInSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[BytesRef]].asJava)
+            new ExtractingTermInSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[BytesRef]].asJava)
           case StoredFieldType.NUMERICDOCVALUES | StoredFieldType.SORTEDNUMERICDOCVALUES =>
-            new TermInSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Long]].map(v => new BytesRef(v.toString)).asJava)
+            new ExtractingTermInSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Long]].map(v => new BytesRef(v.toString)).asJava)
           case StoredFieldType.FLOATDOCVALUES =>
-            new TermInSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Float]].map(v => new BytesRef(v.toString)).asJava)
+            new ExtractingTermInSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Float]].map(v => new BytesRef(v.toString)).asJava)
           case StoredFieldType.DOUBLEDOCVALUES =>
-            new TermInSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Double]].map(v => new BytesRef(v.toString)).asJava)
+            new ExtractingTermInSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Double]].map(v => new BytesRef(v.toString)).asJava)
           case any => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
         }
       case IndexedFieldType.INTPOINT =>
