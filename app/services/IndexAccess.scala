@@ -9,6 +9,11 @@ import java.util.{Collections, Locale}
 import enumeratum.{Enum, EnumEntry}
 import fi.seco.lucene.MorphologicalAnalyzer
 import javax.inject.{Inject, Singleton}
+import javax.script._
+import jetbrains.exodus.ByteIterable
+import jetbrains.exodus.bindings.IntegerBinding
+import jetbrains.exodus.env._
+import jetbrains.exodus.util.LightOutputStream
 import org.apache.lucene.analysis.Analyzer.TokenStreamComponents
 import org.apache.lucene.analysis._
 import org.apache.lucene.analysis.core.{KeywordAnalyzer, WhitespaceAnalyzer, WhitespaceTokenizer}
@@ -28,9 +33,11 @@ import org.apache.lucene.store._
 import org.apache.lucene.util.{BytesRef, BytesRefIterator}
 import org.joda.time.format.ISODateTimeFormat
 import parameters.SumScaling
+import play.api.inject.ApplicationLifecycle
 import play.api.libs.json.Reads._
 import play.api.libs.json._
 import play.api.{Configuration, Logger}
+import services.IndexAccess.scriptEngineManager
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
@@ -41,7 +48,9 @@ import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.language.implicitConversions
 
 object IndexAccess {
-    
+
+  val scriptEngineManager = new ScriptEngineManager()
+
   val numShortWorkers = sys.runtime.availableProcessors
   val numLongWorkers = Math.max(sys.runtime.availableProcessors - 2, 1)
 
@@ -201,25 +210,27 @@ object IndexAccess {
 }
 
 @Singleton
-class IndexAccessProvider @Inject() (config: Configuration) {
+class IndexAccessProvider @Inject() (config: Configuration,lifecycle: ApplicationLifecycle) {
   val indexAccesses = {
     val c = config.get[Configuration]("indices")
-    c.keys.map(k => Future {(k, new IndexAccess(c.get[String](k)))}(IndexAccess.shortTaskExecutionContext)).map(Await.result(_,Duration.Inf)).toMap
+    c.keys.map(k => Future {
+      (k, new IndexAccess(c.get[String](k),lifecycle))
+    }(IndexAccess.shortTaskExecutionContext)).map(Await.result(_,Duration.Inf)).toMap
   }
   def apply(id: String): IndexAccess = indexAccesses(id)
   def toJson: JsValue = Json.toJson(indexAccesses.mapValues(ia => ia.indexMetadata.toJson(ia)))
 }
 
 sealed abstract class StoredFieldType extends EnumEntry {
-  def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue]
+  def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue]
   def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[_]
 }
 
 object StoredFieldType extends Enum[StoredFieldType] {
   case object NUMERICDOCVALUES extends StoredFieldType {
-    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] = {
       val dvs = DocValues.getNumeric(lr, field)
-      (doc: Int) => if (dvs.advanceExact(doc)) Some(JsNumber(dvs.longValue)) else None
+      doc: Int => if (dvs.advanceExact(doc)) Some(JsNumber(dvs.longValue)) else None
     }
     def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[Long] = {
       val ret = new mutable.HashSet[Long]
@@ -246,7 +257,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
   case object FLOATDOCVALUES extends StoredFieldType {
     def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
       val dvs = DocValues.getNumeric(lr, field)
-      (doc: Int) => if (dvs.advanceExact(doc)) {
+      doc: Int => if (dvs.advanceExact(doc)) {
         Some(JsNumber(BigDecimal(java.lang.Float.intBitsToFloat(dvs.longValue.toInt).toDouble))) } else None
     }
     def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[Float] = {
@@ -274,7 +285,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
   case object DOUBLEDOCVALUES extends StoredFieldType {
     def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
       val dvs = DocValues.getNumeric(lr, field)
-      (doc: Int) => if (dvs.advanceExact(doc)) Some(JsNumber(BigDecimal(java.lang.Double.longBitsToDouble(dvs.longValue)))) else None
+      doc: Int => if (dvs.advanceExact(doc)) Some(JsNumber(BigDecimal(java.lang.Double.longBitsToDouble(dvs.longValue)))) else None
     }
     def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[Double] = {
       val ret = new mutable.HashSet[Double]
@@ -331,7 +342,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
   case object SORTEDNUMERICDOCVALUES extends StoredFieldType {
     def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
       val dvs = DocValues.getSortedNumeric(lr, field)
-      (doc: Int) => if (dvs.advanceExact(doc)) Some({
+      doc: Int => if (dvs.advanceExact(doc)) Some({
         val values = new Array[JsValue](dvs.docValueCount)
         var i = 0
         while (i<values.length) {
@@ -591,10 +602,12 @@ case class IndexMetadata(
   contentTokensField: String,
   levels: Seq[LevelMetadata],
   defaultLevelS: Option[String],
-  indexingAnalyzersAsText: Map[String,String]
+  indexingAnalyzersAsText: Map[String,String],
+  offsetDataConverterLang: Option[String],
+  offsetDataConverterAsText: Option[String]
 ) {
   
-  val directoryCreator: (Path) => Directory = (path: Path) => indexType match {
+  val directoryCreator: Path => Directory = (path: Path) => indexType match {
     case "MMapDirectory" =>
       new MMapDirectory(path)        
     case "RAMDirectory" =>
@@ -628,6 +641,14 @@ case class IndexMetadata(
   val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap
   val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
   val defaultLevel: LevelMetadata = defaultLevelS.map(levelMap(_)).getOrElse(levels.last)
+  private val offsetDataConverterEngine: ScriptEngine with Invocable = scriptEngineManager.getEngineByName(offsetDataConverterLang.getOrElse("Groovy")).asInstanceOf[ScriptEngine with Invocable]
+  val offsetDataConverter: ByteIterable => JsValue = if (offsetDataConverterAsText.isDefined) {
+    offsetDataConverterEngine.eval(offsetDataConverterAsText.get)
+    data: ByteIterable => {
+      if (data == null) JsNull else
+        Json.toJson(offsetDataConverterEngine.invokeFunction("convert",data).asInstanceOf[java.util.Map[String,JsValue]].asScala)
+    }
+  } else (data: ByteIterable) => if (data == null) JsNull else JsString(data.toString)
   val commonFields: Map[String, FieldInfo] = levels.map(_.fields).reduce((l, r) => l.filter(lp => r.get(lp._1).contains(lp._2)))
   def toJson(ia: IndexAccess) = Json.obj(
     "name"->indexName,
@@ -642,7 +663,7 @@ case class IndexMetadata(
   )
 }
 
-class IndexAccess(path: String) {
+class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
   
   import IndexAccess._
  
@@ -675,8 +696,18 @@ class IndexAccess(path: String) {
       (c \ "commonFields").asOpt[Map[String,JsValue]].map(readFieldInfos).getOrElse(Map.empty)
     )),
     (c \ "defaultLevel").asOpt[String],
-    (c \ "indexingAnalyzers").asOpt[Map[String,String]].getOrElse(Map.empty)
+    (c \ "indexingAnalyzers").asOpt[Map[String,String]].getOrElse(Map.empty),
+    (c \ "offsetDataConverterLang").asOpt[String],
+    (c \ "offsetDataConverter").asOpt[String]
   )
+
+  private val offsetDataEnv = Environments.newContextualInstance(path+"/offsetdata", new EnvironmentConfig().setLogFileSize(Int.MaxValue+1l).setEnvCloseForcedly(true))
+  lifecycle.addStopHook{() => Future.successful(offsetDataEnv.close())}
+  private val offsetDataCursor: ThreadLocal[Cursor] = ThreadLocal.withInitial(() => {
+    offsetDataEnv.beginReadonlyTransaction()
+    val s = offsetDataEnv.openStore("offsetdata", StoreConfig.WITHOUT_DUPLICATES_WITH_PREFIXING)
+    s.openCursor()
+  })
 
   val indexMetadata: IndexMetadata = try {
     readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
@@ -716,6 +747,22 @@ class IndexAccess(path: String) {
     case e: Exception =>
       Logger.error("Encountered an exception initializing index at "+path,e)
       throw e
+  }
+
+  def offsetDataGetter: (Int,Int,Boolean) => JsValue = {
+    val cursor = offsetDataCursor.get
+    val klos = new LightOutputStream()
+    (doc: Int, offset: Int, endOffset: Boolean) => {
+      klos.clear()
+      IntegerBinding.writeCompressed(klos, doc)
+      IntegerBinding.writeCompressed(klos, offset)
+      val r = if (!endOffset) cursor.getSearchKey(klos.asArrayByteIterable()) else {
+        cursor.getSearchKeyRange(klos.asArrayByteIterable())
+        cursor.getPrev()
+        cursor.getValue()
+      }
+      indexMetadata.offsetDataConverter(r)
+    }
   }
 
   def reader(level: String): IndexReader = readers(level)

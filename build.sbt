@@ -47,13 +47,15 @@ libraryDependencies ++= Seq(
   "com.bizo" %% "mighty-csv" % "0.2",
   "com.tdunning" % "t-digest" % "3.1",
   "org.codehaus.groovy" % "groovy-jsr223" % "2.4.11",
-//  "org.scijava" % "scripting-scala" % "0.2.1",
-//  "org.scijava" % "scripting-renjin" % "0.2.2",
-  "org.scijava" % "scripting-jython" % "0.4.1",
-//  "org.scijava" % "scripting-kotlin" % "0.1.0",
+  "org.scijava" % "scripting-jython" % "0.4.1" % "runtime",
+  "org.jetbrains.kotlin" % "kotlin-compiler-embeddable" % "1.2.60" % "runtime",
+  "org.jetbrains.kotlin" % "kotlin-script-runtime" % "1.2.60" % "runtime",
+  "org.jetbrains.kotlin" % "kotlin-script-util" % "1.2.60" % "runtime",
+  "org.jetbrains.kotlin" % "kotlin-stdlib" % "1.2.60" % "runtime",
   "mdsj" % "mdsj" % "0.2",
   "org.nd4j" % "nd4j-native-platform" % "0.8.0", 
   "org.deeplearning4j" % "deeplearning4j-core" % "0.7.2",
-  "com.jujutsu.tsne" % "tsne" % "2.3.0"
+  "com.jujutsu.tsne" % "tsne" % "2.3.0",
+  "org.jetbrains.xodus" % "xodus-environment" % "1.2.3"
 )
 

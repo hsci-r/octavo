@@ -8,9 +8,12 @@ import org.apache.lucene.search.{Scorer, SimpleCollector, TotalHitCountCollector
 import parameters._
 import play.api.libs.json.{JsNull, JsValue, Json}
 import play.api.mvc.{Action, AnyContent}
-import services.{IndexAccessProvider, TermVectors}
+import services.ExtendedUnifiedHighlighter.Passages
+import services.{ExtendedUnifiedHighlighter, IndexAccessProvider, TermVectors}
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
+
 
 @Singleton
 class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
@@ -138,7 +141,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         val originalIndicesToMDSValueIndices = nonEmptyVectorsAndTheirOriginalIndices.map(_._2).zipWithIndex.toMap
         values.indices.map(i => originalIndicesToMDSValueIndices.get(i).map(vi => Json.toJson(mdsValues(vi))).getOrElse(JsNull))
       } else null
-      val matchesByDocs = if (srp.returnMatches) {
+      val matchesByDocs: Array[Passages] = if (srp.returnMatches) {
         val highlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField))
         highlighter.highlight(indexMetadata.contentField, query, values.map(_._1).toArray, Int.MaxValue - 1)
       } else null
@@ -149,7 +152,27 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
           case ((doc,score),i) =>
             var df = docFields.get(doc)
             if (cvs!=null) df = df ++ Map("termVector"->cvs(i))
-            if (srp.returnMatches) df = df ++ Map("matches" -> Json.toJson(matchesByDocs(i).filter(_.contains("<b>"))))
+            if (srp.returnMatches) {
+              val g = ia.offsetDataGetter
+              df = df ++ Map("snippets" -> Json.toJson(Option(matchesByDocs(i)).map(hl =>
+                hl.passages.map(p => {
+                  val matches = new mutable.HashMap[(Int, Int), ArrayBuffer[String]]
+                  var i = 0
+                  while (i < p.getNumMatches) {
+                    matches.getOrElseUpdate((p.getMatchStarts()(i), p.getMatchEnds()(i)), new ArrayBuffer[String]()) += p.getMatchTerms()(i).utf8ToString
+                    i += 1
+                  }
+                  Json.obj(
+                    "startData" -> g(doc, p.getStartOffset,false),
+                    "endData" -> g(doc, p.getEndOffset, true),
+                    "start" -> p.getStartOffset,
+                    "end" -> p.getEndOffset,
+                    "matches" -> matches.keys.map(k => Json.obj("data"-> g(doc,k._1,false), "start" -> k._1, "end" -> k._2, "terms" -> matches(k))),
+                    "snippet" -> ExtendedUnifiedHighlighter.highlightToString(p, hl.content)
+                  )
+                })
+              ).getOrElse(Array.empty)))
+            }
             df ++ Map("score" -> (if (srp.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt)))
         })
     })

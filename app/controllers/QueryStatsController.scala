@@ -7,7 +7,7 @@ import org.apache.lucene.index.LeafReaderContext
 import org.apache.lucene.search._
 import parameters._
 import play.api.libs.json.{Json, _}
-import services.{IndexAccess, IndexAccessProvider, LevelMetadata}
+import services.{ExtendedUnifiedHighlighter, IndexAccess, IndexAccessProvider, LevelMetadata}
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
@@ -70,7 +70,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
             val score = scorer.score().toInt
             val fieldSumValues = for ((key, getter) <- fieldSums.zip(fieldVGetters)) yield (key, getter(doc).asInstanceOf[JsNumber].value.toLong)
             val groupDefinitions: Iterable[JsObject] = if (grpp.groupByMatch)
-              highlighter.highlight(ia.indexMetadata.contentField, q, Array(doc), Int.MaxValue - 1).head.map(amatch => baseGroupDefinition ++ JsObject(Seq("match" -> grpp.matchTransformer.map(ap => {
+              ExtendedUnifiedHighlighter.highlightsToStrings(highlighter.highlight(ia.indexMetadata.contentField, q, Array(doc), Int.MaxValue - 1).head, true).asScala.map(amatch => baseGroupDefinition ++ JsObject(Seq("match" -> grpp.matchTransformer.map(ap => {
                 ap.getBinding.setProperty("match", amatch)
                 ap.run() match {
                   case v: JsValue => v

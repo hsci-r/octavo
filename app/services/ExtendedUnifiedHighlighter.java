@@ -19,30 +19,47 @@ import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource;
 
 public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
 
-    private final PassageFormatter defaultPassageFormatter = new DefaultPassageFormatter();
+    public static class Passages {
+        public final Passage[] passages;
+        public final String content;
+
+        Passages(Passage[] passages, String content) {
+            this.passages=passages;
+            this.content=content;
+        }
+
+    }
 
     public ExtendedUnifiedHighlighter(IndexSearcher indexSearcher, Analyzer indexAnalyzer) {
         super(indexSearcher, indexAnalyzer);
         this.setFormatter(new PassageFormatter() {
             @Override
             public Object format(Passage[] passages, String content) {
-                String[] ret = new String[passages.length];
-                Passage[] single = new Passage[1];
-                for (int i =0;i < passages.length;i++) {
-                    single[0] = passages[i];
-                    ret[i]=(String)defaultPassageFormatter.format(single,content);
-                }
-                return ret;
+                return new Passages(passages,content);
             }
         });
         setMaxLength(Integer.MAX_VALUE - 1);
     }
 
-    public String[][] highlight(String field, Query query, int[] docIds, int maxPassages) throws IOException  {
-        Object[] ret =  highlightFieldsAsObjects(new String[]{field}, query, docIds, new int[]{maxPassages}).get(field);
-        String[][] ret2 = new String[ret.length][];
-        for (int i=0;i<ret.length;i++) ret2[i]=(String[])ret[i];
-        return ret2;
+    public static final DefaultPassageFormatter defaultPassageFormatter = new DefaultPassageFormatter();
+
+    public Passages[] highlight(String field, Query query, int[] docIds, int maxPassages) throws IOException  {
+        Object[] ret = highlightFieldsAsObjects(new String[]{field}, query, docIds, new int[]{maxPassages}).get(field);
+        return Arrays.copyOf(ret, ret.length, Passages[].class);
+    }
+
+    public static List<String> highlightsToStrings(Passages p, boolean removeNonMatches) {
+        Passage[] single = new Passage[1];
+        List<String> ret = new ArrayList<String>(p.passages.length);
+        for (Passage pas: p.passages) if (!removeNonMatches || pas.getNumMatches()>0) {
+            single[0] = pas;
+            ret.add(defaultPassageFormatter.format(single, p.content));
+        }
+        return ret;
+    }
+
+    public static String highlightToString(Passage pas, String content) {
+        return defaultPassageFormatter.format(new Passage[] { pas }, content);
     }
 
     @Override

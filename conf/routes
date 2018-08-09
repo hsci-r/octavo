@@ -2,13 +2,6 @@
 # This file defines all application routes (Higher priority routes first)
 # ~~~~
 
-GET     /                               controllers.RootController.indices()
-
-GET     /favicon.ico                    controllers.Default.notFound
-GET		/:index			                controllers.IndexInfoController.info(index)
-GET		/:index/			            controllers.IndexInfoController.info(index)
-GET     /:index/indexInfo               controllers.IndexInfoController.info(index)
-
 GET     /result/:key                    controllers.QueryStatusController.result(key)
 GET     /status/:key                    controllers.QueryStatusController.status(key)
 
@@ -39,3 +32,11 @@ POST	/:index/similarCollocations		controllers.SimilarCollocationsController.simi
 
 GET		/runScript				        controllers.RunScriptController.runScript()
 POST	/runScript				        controllers.RunScriptController.runScript()
+
+GET     /                               controllers.RootController.indices()
+
+GET     /favicon.ico                    controllers.Default.notFound
+
+GET		/:index/			            controllers.IndexInfoController.info(index)
+GET     /:index/indexInfo               controllers.IndexInfoController.info(index)
+GET		/:index			                controllers.IndexInfoController.info(index)

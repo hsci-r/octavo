@@ -1,8 +1,7 @@
 package controllers
 
 import javax.inject.{Inject, Singleton}
-import javax.script.{Bindings, ScriptEngineManager}
-
+import javax.script.Bindings
 import org.codehaus.groovy.control.CompilerConfiguration
 import org.codehaus.groovy.control.customizers.ImportCustomizer
 import play.api.http.MimeTypes
@@ -15,8 +14,6 @@ import scala.collection.mutable
 
 @Singleton
 class RunScriptController @Inject() (iap: IndexAccessProvider) extends InjectedController {
-
-  val sem = new ScriptEngineManager()
 
   class BindingsInfo(var timeout: Long, val bindings: Bindings)
 
@@ -34,10 +31,11 @@ class RunScriptController @Inject() (iap: IndexAccessProvider) extends InjectedC
   def runScript() = Action { request =>
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val script = p.get("script").map(_.head)
-    if (!script.isDefined) {
-      Ok(JsArray(sem.getEngineFactories.asScala.map(ef => JsArray(ef.getNames.asScala.map(en => JsString(en)))))).as(JSON)
+    import services.IndexAccess.scriptEngineManager
+    if (script.isEmpty) {
+      Ok(JsArray(scriptEngineManager.getEngineFactories.asScala.map(ef => JsArray(ef.getNames.asScala.map(en => JsString(en)))))).as(JSON)
     } else {
-      val engine = sem.getEngineByName(p.get("language").map(_.head).getOrElse("Groovy"))
+      val engine = scriptEngineManager.getEngineByName(p.get("language").map(_.head).getOrElse("Groovy"))
       val bindings = p.get("bindings").map(bid => {
         val timeout = p.get("timeout").map(t => System.currentTimeMillis+(t.head.toLong*1000)).getOrElse(60000l)
         val bi = bindingInfos.get(bid.head)
