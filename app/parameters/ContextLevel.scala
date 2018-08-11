@@ -3,6 +3,7 @@ package parameters
 import java.text.{BreakIterator, CharacterIterator, StringCharacterIterator}
 
 import enumeratum.{Enum, EnumEntry}
+import services.OffsetSearchType
 
 import scala.collection.Searching
 
@@ -226,23 +227,35 @@ class LineBreakIterator extends PatternBreakIterator("\n")
 
 sealed abstract class ContextLevel extends EnumEntry {
   def apply(expandLeft: Int, expandRight: Int): BreakIterator
+  val defaultStartSearchType: OffsetSearchType.Value
+  val defaultEndSearchType: OffsetSearchType.Value
 }
 
 object ContextLevel extends Enum[ContextLevel] {
   case object CHARACTER extends ContextLevel {
     def apply(expandLeft: Int, expandRight: Int): BreakIterator = if (expandLeft>0 || expandRight>0) new ExpandingBreakIterator(BreakIterator.getCharacterInstance,expandLeft,expandRight) else BreakIterator.getCharacterInstance
+    val defaultStartSearchType = OffsetSearchType.PREV
+    val defaultEndSearchType = OffsetSearchType.PREV
   }
   case object WORD extends ContextLevel {
     def apply(expandLeft: Int, expandRight: Int): BreakIterator =  if (expandLeft>0 || expandRight>0) new ExpandingWordBreakIterator(expandLeft,expandRight) else BreakIterator.getWordInstance
+    val defaultStartSearchType = OffsetSearchType.EXACT
+    val defaultEndSearchType = OffsetSearchType.PREV
   }
   case object SENTENCE extends ContextLevel {
     def apply(expandLeft: Int, expandRight: Int): BreakIterator =  if (expandLeft>0 || expandRight>0) new ExpandingBreakIterator(BreakIterator.getSentenceInstance,expandLeft,expandRight) else BreakIterator.getSentenceInstance
+    val defaultStartSearchType = OffsetSearchType.EXACT
+    val defaultEndSearchType = OffsetSearchType.PREV
   }
   case object LINE extends ContextLevel {
     def apply(expandLeft: Int, expandRight: Int): BreakIterator = if (expandLeft>0 || expandRight>0) new ExpandingBreakIterator(new LineBreakIterator(),expandLeft,expandRight) else new LineBreakIterator()
+    val defaultStartSearchType = OffsetSearchType.EXACT
+    val defaultEndSearchType = OffsetSearchType.PREV
   }
   case object PARAGRAPH extends ContextLevel {
     def apply(expandLeft: Int, expandRight: Int): BreakIterator =  if (expandLeft>0 || expandRight>0) new ExpandingBreakIterator(new ParagraphBreakIterator(),expandLeft,expandRight) else new ParagraphBreakIterator()
+    val defaultStartSearchType = OffsetSearchType.EXACT
+    val defaultEndSearchType = OffsetSearchType.PREV
   }
   val values = findValues
 }

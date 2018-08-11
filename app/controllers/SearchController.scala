@@ -162,14 +162,23 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
                     matches.getOrElseUpdate((p.getMatchStarts()(i), p.getMatchEnds()(i)), new ArrayBuffer[String]()) += p.getMatchTerms()(i).utf8ToString
                     i += 1
                   }
-                  Json.obj(
-                    "startData" -> g(doc, p.getStartOffset,false),
-                    "endData" -> g(doc, p.getEndOffset, true),
-                    "start" -> p.getStartOffset,
-                    "end" -> p.getEndOffset,
-                    "matches" -> matches.keys.map(k => Json.obj("data"-> g(doc,k._1,false), "start" -> k._1, "end" -> k._2, "terms" -> matches(k))),
-                    "snippet" -> ExtendedUnifiedHighlighter.highlightToString(p, hl.content)
+                  var md =
+                    Json.obj(
+
+                      "start" -> p.getStartOffset,
+                      "end" -> p.getEndOffset,
+                      "matches" -> matches.keys.map(k => {
+                        var m = Json.obj("start" -> k._1, "end" -> k._2, "terms" -> matches(k))
+                        if (srp.offsetData) m = m ++ Json.obj("data"-> g(doc,k._1,srp.matchOffsetSearchType))
+                        m
+                      }),
+                      "snippet" -> ExtendedUnifiedHighlighter.highlightToString(p, hl.content)
+                    )
+                  if (srp.offsetData) md = md ++ Json.obj(
+                    "startData" -> g(doc, p.getStartOffset,srp.startOffsetSearchType),
+                    "endData" -> g(doc, p.getEndOffset, srp.endOffsetSearchType)
                   )
+                  md
                 })
               ).getOrElse(Array.empty)))
             }

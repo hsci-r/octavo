@@ -594,6 +594,10 @@ case class LevelMetadata(
   def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[_] = fields(idField).getMatchingValues(is, q)
 }
 
+object OffsetSearchType extends Enumeration {
+  val EXACT, PREV, NEXT = Value
+}
+
 case class IndexMetadata(
   indexName: String,
   indexVersion: String,
@@ -642,13 +646,20 @@ case class IndexMetadata(
   val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
   val defaultLevel: LevelMetadata = defaultLevelS.map(levelMap(_)).getOrElse(levels.last)
   private val offsetDataConverterEngine: ScriptEngine with Invocable = scriptEngineManager.getEngineByName(offsetDataConverterLang.getOrElse("Groovy")).asInstanceOf[ScriptEngine with Invocable]
-  val offsetDataConverter: ByteIterable => JsValue = if (offsetDataConverterAsText.isDefined) {
+  val offsetDataConverter: (Cursor,ByteIterable,OffsetSearchType.Value) => JsValue = if (offsetDataConverterAsText.isDefined) {
     offsetDataConverterEngine.eval(offsetDataConverterAsText.get)
-    data: ByteIterable => {
-      if (data == null) JsNull else
-        Json.toJson(offsetDataConverterEngine.invokeFunction("convert",data).asInstanceOf[java.util.Map[String,JsValue]].asScala)
+    (cursor: Cursor, key: ByteIterable, offsetSearchType: OffsetSearchType.Value) =>
+      offsetDataConverterEngine.invokeFunction("convert",cursor,key,Int.box(offsetSearchType.id)) match {
+        case null => JsNull
+        case value: JsValue => value
+        case value: java.util.Map[String @unchecked, JsValue @unchecked] => Json.toJson(value.asScala)
+      }
+  } else (cursor: Cursor, key: ByteIterable, searchType: OffsetSearchType.Value) =>
+    if (searchType == OffsetSearchType.EXACT && !cursor.getKey.equals(key)) JsNull
+    else {
+      if (searchType == OffsetSearchType.PREV && !cursor.getKey.equals(key)) cursor.getPrev
+      if (cursor.getValue == null) JsNull else JsString(cursor.getValue.toString)
     }
-  } else (data: ByteIterable) => if (data == null) JsNull else JsString(data.toString)
   val commonFields: Map[String, FieldInfo] = levels.map(_.fields).reduce((l, r) => l.filter(lp => r.get(lp._1).contains(lp._2)))
   def toJson(ia: IndexAccess) = Json.obj(
     "name"->indexName,
@@ -701,7 +712,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
     (c \ "offsetDataConverter").asOpt[String]
   )
 
-  private val offsetDataEnv = Environments.newContextualInstance(path+"/offsetdata", new EnvironmentConfig().setLogFileSize(Int.MaxValue+1l).setEnvCloseForcedly(true))
+  private val offsetDataEnv = Environments.newContextualInstance(path+"/offsetdata", new EnvironmentConfig().setEnvIsReadonly(true).setLogFileSize(Int.MaxValue+1l).setEnvCloseForcedly(true))
   lifecycle.addStopHook{() => Future.successful(offsetDataEnv.close())}
   private val offsetDataCursor: ThreadLocal[Cursor] = ThreadLocal.withInitial(() => {
     offsetDataEnv.beginReadonlyTransaction()
@@ -749,19 +760,16 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
       throw e
   }
 
-  def offsetDataGetter: (Int,Int,Boolean) => JsValue = {
+  def offsetDataGetter: (Int,Int,OffsetSearchType.Value) => JsValue = {
     val cursor = offsetDataCursor.get
     val klos = new LightOutputStream()
-    (doc: Int, offset: Int, endOffset: Boolean) => {
+    (doc: Int, offset: Int, searchType: OffsetSearchType.Value) => {
       klos.clear()
       IntegerBinding.writeCompressed(klos, doc)
       IntegerBinding.writeCompressed(klos, offset)
-      val r = if (!endOffset) cursor.getSearchKey(klos.asArrayByteIterable()) else {
-        cursor.getSearchKeyRange(klos.asArrayByteIterable())
-        cursor.getPrev()
-        cursor.getValue()
-      }
-      indexMetadata.offsetDataConverter(r)
+      val key = klos.asArrayByteIterable()
+      cursor.getSearchKeyRange(key)
+      indexMetadata.offsetDataConverter(cursor,key,searchType)
     }
   }
 
