@@ -106,16 +106,20 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
       Json.obj("general"->globalStats.toJson,"grouped"->groupedStats.toSeq.sortWith((x,y) => {
         val lt = x._1.fields.filter(_._1 != "match").exists(p => {
           val other = y._1.value(p._1)
-          p._2 match {
+          if (other == null) false
+          else p._2 match {
             case me: JsNumber => me.value < other.as[JsNumber].value
             case me: JsString => me.value < other.as[JsString].value
+            case null => other != null
             case _ => false
           }
         })
         if (lt) true else {
           val gt = x._1.fields.filter(_._1 != "match").exists(p => {
             val other = y._1.value(p._1)
-            p._2 match {
+            if (other == null) p._2 != null
+            else p._2 match {
+              case null => false
               case me: JsNumber => me.value > other.as[JsNumber].value
               case me: JsString => me.value > other.as[JsString].value
               case _ => false

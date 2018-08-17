@@ -98,7 +98,7 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
 
     protected Collection<Query> preSpanQueryRewrite(Query query) {
         if (query == null) return null;
-        else if (query.getClass().getCanonicalName().equals("org.apache.lucene.queryparser.complexPhrase.ComplexPhraseQueryParser.ComplexPhraseQuery")) try {
+        else if ("org.apache.lucene.queryparser.complexPhrase.ComplexPhraseQueryParser.ComplexPhraseQuery".equals(query.getClass().getCanonicalName())) try {
             return Collections.singleton(query.rewrite(getIndexSearcher().getIndexReader()));
         } catch (IOException e) {
             throw new RuntimeException(e);

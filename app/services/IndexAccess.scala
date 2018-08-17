@@ -654,12 +654,7 @@ case class IndexMetadata(
         case value: JsValue => value
         case value: java.util.Map[String @unchecked, JsValue @unchecked] => Json.toJson(value.asScala)
       }
-  } else (cursor: Cursor, key: ByteIterable, searchType: OffsetSearchType.Value) =>
-    if (searchType == OffsetSearchType.EXACT && !cursor.getKey.equals(key)) JsNull
-    else {
-      if (searchType == OffsetSearchType.PREV && !cursor.getKey.equals(key)) cursor.getPrev
-      if (cursor.getValue == null) JsNull else JsString(cursor.getValue.toString)
-    }
+  } else null
   val commonFields: Map[String, FieldInfo] = levels.map(_.fields).reduce((l, r) => l.filter(lp => r.get(lp._1).contains(lp._2)))
   def toJson(ia: IndexAccess) = Json.obj(
     "name"->indexName,
@@ -712,14 +707,6 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
     (c \ "offsetDataConverter").asOpt[String]
   )
 
-  private val offsetDataEnv = Environments.newContextualInstance(path+"/offsetdata", new EnvironmentConfig().setEnvIsReadonly(true).setLogFileSize(Int.MaxValue+1l).setEnvCloseForcedly(true))
-  lifecycle.addStopHook{() => Future.successful(offsetDataEnv.close())}
-  private val offsetDataCursor: ThreadLocal[Cursor] = ThreadLocal.withInitial(() => {
-    offsetDataEnv.beginReadonlyTransaction()
-    val s = offsetDataEnv.openStore("offsetdata", StoreConfig.WITHOUT_DUPLICATES_WITH_PREFIXING)
-    s.openCursor()
-  })
-
   val indexMetadata: IndexMetadata = try {
     readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
   } catch {
@@ -727,6 +714,15 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
       Logger.error("Encountered an exception reading "+path+"/indexmeta.json",e)
       throw e
   }
+
+  private val offsetDataEnv = if (indexMetadata.offsetDataConverterAsText.isDefined) Environments.newContextualInstance(path+"/offsetdata", new EnvironmentConfig().setEnvIsReadonly(true).setLogFileSize(Int.MaxValue+1l).setMemoryUsage(Math.min(1073741824l, Runtime.getRuntime.maxMemory/4)).setEnvCloseForcedly(true)) else null
+  if (indexMetadata.offsetDataConverterAsText.isDefined) lifecycle.addStopHook{() => Future.successful(offsetDataEnv.close())}
+  private val offsetDataCursor: ThreadLocal[Cursor] = ThreadLocal.withInitial(() => {
+    offsetDataEnv.beginReadonlyTransaction()
+    val s = offsetDataEnv.openStore("offsetdata", StoreConfig.WITHOUT_DUPLICATES_WITH_PREFIXING)
+    s.openCursor()
+  })
+
 
   try {
     val futures = for (level <- indexMetadata.levels) yield Future {
@@ -761,6 +757,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
   }
 
   def offsetDataGetter: (Int,Int,OffsetSearchType.Value) => JsValue = {
+    if (indexMetadata.offsetDataConverterAsText.isEmpty) return (doc: Int, offset: Int, searchType: OffsetSearchType.Value) => JsNull
     val cursor = offsetDataCursor.get
     val klos = new LightOutputStream()
     (doc: Int, offset: Int, searchType: OffsetSearchType.Value) => {
