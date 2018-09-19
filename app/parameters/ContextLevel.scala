@@ -151,6 +151,8 @@ class ExpandingWordBreakIterator(expandLeft: Int = 0, expandRight: Int = 0) exte
   override def preceding(offset: Int): Int = {
     val firstIndex = this.firstIndex
     var i = sub.preceding(offset)
+    while (i != BreakIterator.DONE && i != firstIndex && !Character.isLetterOrDigit(text.codePointAt(i)))
+      i = sub.previous()
     (0 until expandLeft).foreach(_ => this.previousWord() match {
       case `firstIndex` => return firstIndex
       case BreakIterator.DONE => return BreakIterator.DONE
@@ -223,6 +225,7 @@ class PatternBreakIterator(pattern: String) extends BreakIterator {
 }
 
 class ParagraphBreakIterator extends PatternBreakIterator("\n\n")
+class WordBreakIterator extends PatternBreakIterator("[\\p{Z}\\p{P}\\p{C}]*")
 class LineBreakIterator extends PatternBreakIterator("\n")
 
 sealed abstract class ContextLevel extends EnumEntry {
@@ -237,8 +240,13 @@ object ContextLevel extends Enum[ContextLevel] {
     val defaultStartSearchType = OffsetSearchType.PREV
     val defaultEndSearchType = OffsetSearchType.PREV
   }
+  case object TOKEN extends ContextLevel {
+    def apply(expandLeft: Int, expandRight: Int): BreakIterator =  if (expandLeft>0 || expandRight>0) new ExpandingBreakIterator(BreakIterator.getWordInstance, expandLeft,expandRight) else BreakIterator.getWordInstance
+    val defaultStartSearchType = OffsetSearchType.EXACT
+    val defaultEndSearchType = OffsetSearchType.PREV
+  }
   case object WORD extends ContextLevel {
-    def apply(expandLeft: Int, expandRight: Int): BreakIterator =  if (expandLeft>0 || expandRight>0) new ExpandingWordBreakIterator(expandLeft,expandRight) else BreakIterator.getWordInstance
+    def apply(expandLeft: Int, expandRight: Int): BreakIterator =  new ExpandingWordBreakIterator(expandLeft,expandRight)
     val defaultStartSearchType = OffsetSearchType.EXACT
     val defaultEndSearchType = OffsetSearchType.PREV
   }

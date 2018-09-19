@@ -8,6 +8,9 @@ GET     /status/:key                    controllers.QueryStatusController.status
 GET     /:index/search           		controllers.SearchController.search(index)
 POST    /:index/search           		controllers.SearchController.search(index)
 
+GET     /:index/kwic           		    controllers.KWICController.search(index)
+POST    /:index/kwic           		    controllers.KWICController.search(index)
+
 GET		/:index/similarTerms			controllers.SimilarTermsController.similarTerms(index, level: Option[String], query: String, limit: Int ?= 20)
 
 GET		/:index/indexStats				controllers.IndexStatsController.indexStats(index, field: Option[String], from: Double ?= 0.0, to: Double ?= 1.0, by: String ?= "0.1", level: Option[String])

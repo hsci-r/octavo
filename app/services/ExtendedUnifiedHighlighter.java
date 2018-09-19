@@ -32,7 +32,7 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
 
     public ExtendedUnifiedHighlighter(IndexSearcher indexSearcher, Analyzer indexAnalyzer) {
         super(indexSearcher, indexAnalyzer);
-        this.setFormatter(new PassageFormatter() {
+        setFormatter(new PassageFormatter() {
             @Override
             public Object format(Passage[] passages, String content) {
                 return new Passages(passages,content);
@@ -74,6 +74,15 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
         PhraseHelper phraseHelper = getPhraseHelper(field, query, highlightFlags);
         CharacterRunAutomaton[] automata = getAutomata(field, query, highlightFlags);
         OffsetSource offsetSource = getOptimizedOffsetSource(field, terms, phraseHelper, automata);
+        if (offsetSource == OffsetSource.POSTINGS_WITH_TERM_VECTORS) {
+            if (automata.length > 0) offsetSource = OffsetSource.ANALYSIS;
+            else {
+                hack = true;
+                OffsetSource offsetSource2 = getOptimizedOffsetSource(field, terms, phraseHelper, automata);
+                hack = false;
+                if (offsetSource2 == OffsetSource.ANALYSIS) offsetSource = OffsetSource.ANALYSIS;
+            }
+        }
         return new ExtendedFieldHighlighter(field,
                 getOffsetStrategy(offsetSource, field, terms, phraseHelper, automata, highlightFlags),
                 new SplittingBreakIterator(getBreakIterator(field), UnifiedHighlighter.MULTIVAL_SEP_CHAR),
@@ -83,7 +92,10 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
                 getFormatter(field));
     }
 
+    private boolean hack = false;
+
     protected OffsetSource getOffsetSource(String field) {
+        if (hack) return OffsetSource.POSTINGS;
         FieldInfo fieldInfo = getFieldInfo(field);
         if (fieldInfo != null) {
             if (fieldInfo.getIndexOptions() == IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS) {

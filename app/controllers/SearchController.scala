@@ -67,6 +67,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       val is = searcher(queryLevel,srp.sumScaling)
       val ir = is.getIndexReader
       var total = 0
+      var totalScore = 0.0
       val maxHeap = mutable.PriorityQueue.empty[(Int,Float)]((x: (Int, Float), y: (Int, Float)) => y._2 compare x._2)
       val compareTermVector = if (ctv.query.isDefined)
         getAggregateContextVectorForQuery(is, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermsFromQuery(query),ctvpa, ctvs.maxDocs) else null
@@ -102,6 +103,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
           val doc = context.docBase + ldoc
           if (scorer.score >= minScore) {
             total+=1
+            totalScore += scorer.score
             if (srp.limit == -1) {
               val (cdocFields, cdocVectors) = processDocFields(context, doc, getters)
               docFields.put(doc, cdocFields)
@@ -141,21 +143,22 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         val originalIndicesToMDSValueIndices = nonEmptyVectorsAndTheirOriginalIndices.map(_._2).zipWithIndex.toMap
         values.indices.map(i => originalIndicesToMDSValueIndices.get(i).map(vi => Json.toJson(mdsValues(vi))).getOrElse(JsNull))
       } else null
-      val matchesByDocs: Array[Passages] = if (srp.returnMatches) {
+      val matchesByDocs: Array[Passages] = if (srp.snippetLimit!=0) {
         val highlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField))
-        highlighter.highlight(indexMetadata.contentField, query, values.map(_._1).toArray, Int.MaxValue - 1)
+        highlighter.highlight(indexMetadata.contentField, query, values.map(_._1).toArray, if (srp.snippetLimit == -1) Int.MaxValue - 1 else srp.snippetLimit)
       } else null
       Json.obj(
         "final_query"->query.toString,
         "total"->total,
+        "totalScore"->(if (srp.sumScaling == SumScaling.DF) Json.toJson(totalScore) else Json.toJson(totalScore.toInt)),
         "docs"->values.zipWithIndex.map{
           case ((doc,score),i) =>
             var df = docFields.get(doc)
             if (cvs!=null) df = df ++ Map("termVector"->cvs(i))
-            if (srp.returnMatches) {
+            if (srp.snippetLimit!=0) {
               val g = ia.offsetDataGetter
               df = df ++ Map("snippets" -> Json.toJson(Option(matchesByDocs(i)).map(hl =>
-                hl.passages.map(p => {
+                (if (srp.snippetLimit != -1) hl.passages.take(srp.snippetLimit) else hl.passages).map(p => {
                   val matches = new mutable.HashMap[(Int, Int), ArrayBuffer[String]]
                   var i = 0
                   while (i < p.getNumMatches) {
@@ -175,7 +178,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
                       "snippet" -> ExtendedUnifiedHighlighter.highlightToString(p, hl.content)
                     )
                   if (srp.offsetData) md = md ++ Json.obj(
-                    "startData" -> g(doc, p.getStartOffset,srp.startOffsetSearchType),
+                    "startData" -> g(doc, p.getStartOffset, srp.startOffsetSearchType),
                     "endData" -> g(doc, p.getEndOffset, srp.endOffsetSearchType)
                   )
                   md
