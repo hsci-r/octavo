@@ -30,7 +30,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
     }
   }
   
-  private def getStats(level: LevelMetadata, is: IndexSearcher, q: Query, grpp: GroupingParameters, sp: SamplingParameters, fieldSums: Seq[String], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector]): JsValue = {
+  private def getStats(level: LevelMetadata, is: IndexSearcher, q: Query, grpp: GroupingParameters, sp: SamplingParameters, fieldSums: Seq[String], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector], qm: QueryMetadata): JsValue = {
     if (grpp.isDefined) {
       val highlighter = if (grpp.groupByMatch) grpp.highlighter(is, ia.indexMetadata.indexingAnalyzers(ia.indexMetadata.contentField)) else null
       val globalStats = new Stats
@@ -48,6 +48,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
         var count = 0
 
         override def collect(doc: Int): Unit = {
+          qm.documentsProcessed += 1
           count = count + 1
           if (sp.maxDocs == -1 || count <= sp.maxDocs) {
             val baseGroupDefinition = grpp.grouper.map(ap => {
@@ -171,7 +172,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
       qm.estimatedNumberOfResults = if (grpp.limit != -1) grpp.limit else Math.min(hc.getTotalHits, grpp.limit)
     }, () => {
       val (qlevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, q.requiredQuery)
-      getStats(ia.indexMetadata.levelMap(qlevel),searcher(qlevel, SumScaling.ABSOLUTE), query, grpp, sp, fieldSums, gatherTermFreqsPerDoc)
+      Left(getStats(ia.indexMetadata.levelMap(qlevel),searcher(qlevel, SumScaling.ABSOLUTE), query, grpp, sp, fieldSums, gatherTermFreqsPerDoc))
     })
   }
 }

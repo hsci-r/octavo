@@ -10,6 +10,7 @@ import org.apache.lucene.index.Term
 import org.apache.lucene.search.BooleanClause.Occur
 import org.apache.lucene.search.{BooleanQuery, TermQuery}
 import parameters._
+import play.api.Logger
 import play.api.libs.json.Json
 import services.{Distance, IndexAccessProvider, TermVectors}
 
@@ -30,6 +31,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
     val gp = new GeneralParameters
     implicit val iec = gp.executionContext
     implicit val its = gp.taskSupport
+    val limitParameters = new LimitParameters()
     val termVectorQueryParameters = new QueryParameters()
     val termVectorLocalProcessingParameters = new LocalTermVectorProcessingParameters()
     val termVectorAggregateProcessingParameters = new AggregateTermVectorProcessingParameters()
@@ -53,62 +55,93 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
       val (_,collocations) = getAggregateContextVectorForQuery(is, termVectorQuery, termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters, termVectorSamplingParameters.maxDocs)
-      println("collocations: "+collocations.size)
+      Logger.debug("collocations: "+collocations.size)
       val futures = new ArrayBuffer[Future[LongSet]]
       val maxDocs3 = if (intermediaryTermVectorSamplingParameters.maxDocs == -1) -1 else intermediaryTermVectorSamplingParameters.maxDocs/collocations.size
-      val intermediaryLimitQuery = intermediaryTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false,_)._2)
-      collocations.forEach(new LongDoubleConsumer {
-        override def accept(term: Long, freq: Double) {
-          val termS = termOrdToTerm(ir, term)
-          val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,termS)), Occur.FILTER)
-          for (q <- intermediaryLimitQuery) bqb.add(q, Occur.FILTER)
-          futures += Future {
-            val (_,tv) = getContextTermsForQuery(is, bqb.build, intermediaryTermVectorLocalProcessingParameters, maxDocs3)
-            tv
-          }
-        }
-      })
-      val collocationCollocations = HashLongSets.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableSet() // tvs for all terms in the tv of the query
-      for (set <- Await.result(Future.sequence(futures), Duration.Inf))
-        set.forEach(new LongConsumer() {
-          override def accept(term: Long) {
-            collocationCollocations.add(term)
+      if (maxDocs3 == 0) Right(BadRequest("i_maxDocs of "+intermediaryTermVectorSamplingParameters.maxDocs+" results in 0 samples for collocation set of size "+collocations.size)) else {
+        val intermediaryLimitQuery = intermediaryTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false, _)._2)
+        collocations.forEach(new LongDoubleConsumer {
+          override def accept(term: Long, freq: Double) {
+            val termS = termOrdToTerm(ir, term)
+            val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField, termS)), Occur.FILTER)
+            for (q <- intermediaryLimitQuery) bqb.add(q, Occur.FILTER)
+            futures += Future {
+              val (_, tv) = getContextTermsForQuery(is, bqb.build, intermediaryTermVectorLocalProcessingParameters, maxDocs3)
+              tv
+            }
           }
         })
-      println("collocations of collocations: "+collocationCollocations.size)
-      val maxDocs4 = if (finalTermVectorSamplingParameters.maxDocs == -1) -1 else finalTermVectorSamplingParameters.maxDocs/collocationCollocations.size
-      val finalLimitQuery = finalTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false,_)._2)
-      val thirdOrderCollocations = for (term2 <- toParallel(termOrdsToTerms(ir, collocationCollocations))) yield {
-        val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField,term2)), Occur.FILTER)
-        for (q <- finalLimitQuery) bqb.add(q, Occur.FILTER)
-        val (_,tv) = getAggregateContextVectorForQuery(is, bqb.build,finalTermVectorLocalProcessingParameters,Seq(term2), finalTermVectorAggregateProcessingParameters, maxDocs4)
-        (term2,tv)
-      }
-      println("third order collocations:"+thirdOrderCollocations.size)
-      val ordering = new Ordering[(String,Double)] {
-        override def compare(x: (String,Double), y: (String,Double)) = y._2 compare x._2
-      }
-      val cmaxHeap = collection.mutable.PriorityQueue.empty[(String,Double)](ordering)
-      val dmaxHeap = collection.mutable.PriorityQueue.empty[(String,Double)](ordering)
-      var total = 0
-      val termsToScores = thirdOrderCollocations.filter(!_._2.isEmpty).map(p => (p._1,Distance.cosineSimilarity(collocations,p._2,finalTermVectorDistanceCalculationParameters.filtering),Distance.diceSimilarity(collocations,p._2)))
-      for ((term,cscore,dscore) <- termsToScores.seq) {
-        if (cscore != 0.0 || dscore != 0.0) total+=1
-        if (finalTermVectorAggregateProcessingParameters.limit == -1 || total<=finalTermVectorAggregateProcessingParameters.limit) { 
-          if (cscore!=0.0) cmaxHeap += ((term,cscore))
-          if (dscore!=0.0) dmaxHeap += ((term,dscore))
-        } else {
-          if (cmaxHeap.head._2<cscore && cscore!=0.0) {
-            cmaxHeap.dequeue()
-            cmaxHeap += ((term,cscore))
+        val collocationCollocations = HashLongSets.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableSet() // tvs for all terms in the tv of the query
+        for (set <- Await.result(Future.sequence(futures), Duration.Inf))
+          set.forEach(new LongConsumer() {
+            override def accept(term: Long) {
+              collocationCollocations.add(term)
+            }
+          })
+        Logger.debug("collocations of collocations: " + collocationCollocations.size)
+        val maxDocs4 = if (finalTermVectorSamplingParameters.maxDocs == -1) -1 else finalTermVectorSamplingParameters.maxDocs / collocationCollocations.size
+        if (maxDocs4 == 0) Right(BadRequest("f_maxDocs of "+intermediaryTermVectorSamplingParameters.maxDocs+" results in 0 samples for collocation set of size "+collocationCollocations.size)) else {
+          val finalLimitQuery = finalTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false, _)._2)
+          val thirdOrderCollocations = for (term <- toParallel(termOrdsToTerms(ir, collocationCollocations))) yield {
+            val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField, term)), Occur.FILTER)
+            for (q <- finalLimitQuery) bqb.add(q, Occur.FILTER)
+            val (_, tv) = getAggregateContextVectorForQuery(is, bqb.build, finalTermVectorLocalProcessingParameters, Seq(term), finalTermVectorAggregateProcessingParameters, maxDocs4)
+            if (tv.isEmpty) (term, 1.0, 1.0, 1.0, 1.0, 1.0) else (
+              term,
+              1.0-Distance.cosineSimilarity(collocations, tv, finalTermVectorDistanceCalculationParameters.filtering),
+              1.0-Distance.diceSimilarity(collocations, tv),
+              1.0-Distance.jaccardSimilarity(collocations, tv),
+              Distance.euclideanDistance(collocations, tv, finalTermVectorDistanceCalculationParameters.filtering),
+              Distance.manhattanDistance(collocations, tv, finalTermVectorDistanceCalculationParameters.filtering)
+            )
           }
-          if (dmaxHeap.head._2<dscore && dscore!=0.0) {
-            dmaxHeap.dequeue()
-            dmaxHeap += ((term,dscore))
+          val ordering = new Ordering[(String, Double)] {
+            override def compare(x: (String, Double), y: (String, Double)) = x._2 compare y._2
           }
+          val cmaxHeap = collection.mutable.PriorityQueue.empty[(String, Double)](ordering)
+          val dmaxHeap = collection.mutable.PriorityQueue.empty[(String, Double)](ordering)
+          val jmaxHeap = collection.mutable.PriorityQueue.empty[(String, Double)](ordering)
+          val emaxHeap = collection.mutable.PriorityQueue.empty[(String, Double)](ordering)
+          val mmaxHeap = collection.mutable.PriorityQueue.empty[(String, Double)](ordering)
+          for ((term,cscore,dscore,jscore,escore,mscore) <- thirdOrderCollocations.seq) {
+            if (limitParameters.limit == -1 || cmaxHeap.size <= limitParameters.limit) {
+              cmaxHeap += ((term, cscore))
+              dmaxHeap += ((term, dscore))
+              jmaxHeap += ((term, jscore))
+              emaxHeap += ((term, escore))
+              mmaxHeap += ((term, mscore))
+            } else {
+              if (cmaxHeap.head._2 > cscore) {
+                cmaxHeap.dequeue()
+                cmaxHeap += ((term, cscore))
+              }
+              if (dmaxHeap.head._2 > dscore) {
+                dmaxHeap.dequeue()
+                dmaxHeap += ((term, dscore))
+              }
+              if (jmaxHeap.head._2 > jscore) {
+                jmaxHeap.dequeue()
+                jmaxHeap += ((term, jscore))
+              }
+              if (emaxHeap.head._2 > escore) {
+                emaxHeap.dequeue()
+                emaxHeap += ((term, escore))
+              }
+              if (mmaxHeap.head._2 > mscore) {
+                mmaxHeap.dequeue()
+                mmaxHeap += ((term, mscore))
+              }
+            }
+          }
+          Left(Json.obj(
+            "cosine" -> cmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1,"distance"->p._2)),
+            "dice" -> dmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1,"distance"->p._2)),
+            "jaccard"-> jmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1,"distance"->p._2)),
+            "euclidean" -> emaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1,"distance"->p._2)),
+            "manhattan" -> mmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1,"distance"->p._2))
+          ))
         }
       }
-      Json.toJson(Map("cosine"->cmaxHeap.toMap,"dice"->dmaxHeap.toMap)) 
     })
   }
   

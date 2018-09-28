@@ -12,16 +12,23 @@ import play.api.mvc.{Action, AnyContent}
 import services.IndexAccessProvider
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 
 
 @Singleton
 class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
 
-  case class KWICMatch(context: String, docId: Int, matchStartIndex: Int, matchEndIndex: Int, sortIndices: Seq[(Int,Int,SortDirection.Value)]) extends Ordered[KWICMatch] {
-    def compare(that: KWICMatch): Int = {
-      for ((msi,osi) <- sortIndices.zip(that.sortIndices)) {
-        val cmp = context.substring(msi._1,msi._2).compare(that.context.substring(osi._1,osi._2))
-        if (cmp!=0) return msi._3 match {
+  case class KWICMatch(context: String, docId: Int, startOffset: Int, endOffset: Int, matchStartIndex: Int, matchEndIndex: Int, terms: Seq[String], sortIndices: Seq[(Int,Int)]) {
+    def compare(that: KWICMatch, sd: Seq[SortDirection.Value], cs: Seq[Boolean]): Int = {
+      for ((((msi,osi),csd),ccs) <- sortIndices.view.zip(that.sortIndices).zip(sd).zip(cs)) {
+        var s1 = context.substring(msi._1-startOffset,msi._2-startOffset)
+        var s2 = that.context.substring(osi._1-that.startOffset,osi._2-that.startOffset)
+        if (!ccs) {
+          s1 = s1.toLowerCase
+          s2 = s2.toLowerCase
+        }
+        val cmp = s1.compare(s2)
+        if (cmp!=0) return csd match {
           case SortDirection.ASC => cmp
           case SortDirection.DESC => -cmp
         }
@@ -55,7 +62,7 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
       val is = searcher(queryLevel,SumScaling.TTF)
       val ir = is.getIndexReader
       var total = 0
-      val maxHeap = mutable.PriorityQueue.empty[KWICMatch]
+      val maxHeap = mutable.PriorityQueue.empty[KWICMatch]((x: KWICMatch, y: KWICMatch) => x.compare(y,srp.sortContextDirections,srp.sortContextCaseSensitivities))
       val processDocFields = (context: LeafReaderContext, doc: Int, getters: Map[String,Int => Option[JsValue]]) => {
         val fields = new mutable.HashMap[String, JsValue]
         for (field <- srp.fields;
@@ -71,31 +78,32 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
 
         var getters: Map[String,Int => Option[JsValue]] = _
 
-        val ia = Array(0)
+        val da = Array(0)
         val highlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField))
         val sbi = srp.sortContextLevel(0,0)
+
 
         override def setScorer(scorer: Scorer) {this.scorer=scorer}
 
         override def collect(ldoc: Int) {
           qm.documentsProcessed += 1
           val doc = context.docBase + ldoc
-          ia(0) = doc
+          da(0) = doc
           for (
-            matchesInDoc <- highlighter.highlight(indexMetadata.contentField, query, ia, Int.MaxValue - 1);
+            matchesInDoc <- highlighter.highlight(indexMetadata.contentField, query, da, Int.MaxValue - 1);
             p <- matchesInDoc.passages
           ) {
-            val matches = new mutable.HashSet[(Int, Int)]
+            val matches = new mutable.HashMap[(Int, Int), ArrayBuffer[String]]
             var i = 0
             while (i < p.getNumMatches) {
-              matches += ((p.getMatchStarts()(i), p.getMatchEnds()(i)))
+              matches.getOrElseUpdate((p.getMatchStarts()(i), p.getMatchEnds()(i)), new ArrayBuffer[String]()) += p.getMatchTerms()(i).utf8ToString
               i += 1
             }
             sbi.setText(matchesInDoc.content)
             var soffset = p.getStartOffset
             var eoffset = p.getEndOffset
-            for (m <- matches) {
-              val sorts = (for ((dindex,dir,pindex) <- srp.sortContextDistancesByDistance) yield {
+            for ((m,terms) <- matches) {
+              val sorts = (for ((dindex,pindex) <- srp.sortContextDistancesByDistance) yield {
                 var startIndex = m._1
                 var endIndex = m._2
                 if (dindex < 0) {
@@ -119,13 +127,13 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
                 if (endIndex == BreakIterator.DONE) endIndex = matchesInDoc.content.length
                 if (startIndex < soffset) soffset = startIndex
                 if (endIndex > eoffset) eoffset = endIndex
-                (pindex,startIndex,endIndex,dir)
-              }).sortBy(_._1).map(p => (p._2,p._3,p._4))
-              val k = KWICMatch(matchesInDoc.content.substring(soffset,eoffset),doc,m._1-soffset,m._2-soffset,sorts.map(p => (p._1-soffset,p._2-soffset,p._3)))
+                (pindex,startIndex,endIndex)
+              }).sortBy(_._1).map(p => (p._2,p._3))
+              val k = KWICMatch(matchesInDoc.content.substring(soffset,eoffset),doc,soffset,eoffset,m._1,m._2,terms,sorts.map(p => (p._1,p._2)))
               total+=1
               if (srp.limit == -1 || total<=srp.offset + srp.limit)
                 maxHeap += k
-              else if (maxHeap.head<k) {
+              else if (maxHeap.head.compare(k,srp.sortContextDirections,srp.sortContextCaseSensitivities)<0) {
                 maxHeap.dequeue()
                 maxHeap += k
               }
@@ -153,25 +161,46 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
           docFields.put(p.docId, processDocFields(lr, doc, jsGetters))
         }
       }
-      Json.obj(
+      val g = ia.offsetDataGetter
+      Left(Json.obj(
         "final_query"->query.toString,
         "total"->total,
         "matches"->values.map(kwic => {
-          Json.obj(
-            "match"->Json.obj(
-              "text"->kwic.context.substring(kwic.matchStartIndex,kwic.matchEndIndex),
-              "start"->kwic.matchStartIndex,
-              "end"->kwic.matchEndIndex
-            ),
-            "sort"->kwic.sortIndices.map(p => Json.obj(
-              "text"->kwic.context.substring(p._1,p._2),
-              "start"->p._1,
-              "end"->p._2
-            )),
-            "context"->kwic.context,
-            "fields"->docFields.get(kwic.docId))
+          var md = Json.obj(
+            "match"->{
+              var m = Json.obj(
+                "text"->kwic.context.substring(kwic.matchStartIndex-kwic.startOffset,kwic.matchEndIndex-kwic.startOffset),
+                "start"->kwic.matchStartIndex,
+                "end"->kwic.matchEndIndex,
+                "terms"->kwic.terms
+              )
+              if (srp.offsetData) m = m ++ Json.obj("data"-> g(kwic.docId,kwic.matchStartIndex,srp.matchOffsetSearchType))
+              m
+            },
+            "start"->kwic.startOffset,
+            "end"->kwic.endOffset,
+            "snippet"->kwic.context
+          )
+          if (kwic.sortIndices.nonEmpty)
+            md = md ++ Json.obj(
+            "sort"->kwic.sortIndices.map(p => {
+              var m = Json.obj(
+                "text"->kwic.context.substring(p._1-kwic.startOffset,p._2-kwic.startOffset),
+                "start"->p._1,
+                "end"->p._2
+              )
+              if (srp.offsetData) m = m ++ Json.obj("data"-> g(kwic.docId,p._1,srp.matchOffsetSearchType))
+              m
+            }))
+          if (srp.fields.nonEmpty)
+            md = md ++ Json.obj("fields"->docFields.get(kwic.docId))
+          if (srp.offsetData) md = md ++ Json.obj(
+            "startData" -> g(kwic.docId, kwic.startOffset, srp.startOffsetSearchType),
+            "endData" -> g(kwic.docId, kwic.endOffset, srp.endOffsetSearchType)
+          )
+          md
         })
-      )
+      ))
     })
   }
  

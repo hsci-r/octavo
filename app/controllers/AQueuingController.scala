@@ -3,13 +3,16 @@ package controllers
 import java.io.{File, PrintWriter, StringWriter}
 import java.util.concurrent.ConcurrentHashMap
 
-import javax.inject.{Inject,Singleton}
+import groovy.lang.GroovyRuntimeException
+import javax.inject.{Inject, Singleton}
+import javax.script.ScriptException
 import org.apache.commons.codec.digest.DigestUtils
 import org.apache.lucene.search.TimeLimitingCollector
 import parameters.QueryMetadata
 import play.api.libs.json.{JsValue, Json}
 import play.api.mvc.{AnyContent, InjectedController, Request, Result}
 import play.api.{Configuration, Environment, Logger}
+import play.twirl.api.HtmlFormat
 import services.IndexMetadata
 
 import scala.concurrent.duration.Duration
@@ -55,54 +58,70 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController {
     pw.close()
   }
 
-  protected def getOrCreateResult(method: String, index: IndexMetadata, parameters: QueryMetadata, force: Boolean, pretty: Boolean, estimate: () => Unit, call: () => JsValue)(implicit request: Request[AnyContent]): Result = {
+  protected def getOrCreateResult(method: String, index: IndexMetadata, parameters: QueryMetadata, force: Boolean, pretty: Boolean, estimate: () => Unit, call: () => Either[JsValue,Result])(implicit request: Request[AnyContent]): Result = {
     val callId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.toString
-    Logger.info(callId)
     val name = DigestUtils.sha256Hex(callId)
+    val qm = Json.obj("method" -> method, "parameters" -> parameters.json, "index" -> Json.obj("name" -> index.indexName, "version" -> index.indexVersion), "octavoVersion" -> qc.version)
     if (parameters.longRunning && !parameters.key.contains(name)) {
       estimate()
-      Ok("<html><body><h1>Are you sure you want to do this? Our estimate is that you'll process some "+parameters.estimatedDocumentsToProcess+" documents and can get for example "+parameters.estimatedNumberOfResults+" results</h1>If you do wish to continue, add <pre>key="+name+"</pre> to your parameters.</pre> While running, the query status can be queried from <a href=\"../status/"+name+"\">here</a>.</body></html>").as(HTML).withHeaders("X-Octavo-Key" -> name)
+      Ok("<html><body>You are about to run the following query:<br /><pre>"+HtmlFormat.escape(Json.prettyPrint(qm))+"</pre><h1>Are you sure you want to do this? Our estimate is that you'll process some "+parameters.estimatedDocumentsToProcess+" documents and can get for example "+parameters.estimatedNumberOfResults+" results</h1>If you do wish to continue, add <pre>key="+name+"</pre> to your parameters.</pre> While running, the query status can be queried from <a href=\"../status/"+name+"\">here</a>.</body></html>").as(HTML).withHeaders("X-Octavo-Key" -> name)
     } else {
       val (tf,tf2) = qc.files(name)
       if (force) tf.delete()
-      if (tf.createNewFile()) {
-        writeFile(tf2, callId)
-        val promise = Promise[Result]
-        qc.runningQueries.put(name, (parameters, promise.future))
-        val startTime = System.currentTimeMillis
-        try {
-          estimate()
-          val resultsJson = call()
-          val json = Json.obj("queryMetadata" -> Json.obj("method" -> method, "parameters" -> parameters.json, "index" -> Json.obj("name" -> index.indexName, "version" -> index.indexVersion), "octavoVersion" -> qc.version, "timeTakenMS" -> (System.currentTimeMillis() - startTime)), "results" -> resultsJson)
-          val jsString = if (pretty)
-            Json.prettyPrint(json)
-          else
-            json.toString
-          writeFile(tf, jsString)
-          promise success Ok(jsString).as(JSON)
-          qc.runningQueries.remove(name)
-        } catch {
-          case cause: Throwable =>
-            Logger.error("Error processing " + callId + ": " + getStackTraceAsString(cause))
-            tf.delete()
-            qc.runningQueries.remove(name)
-            cause match {
-              case tlcause: TimeLimitingCollector.TimeExceededException =>
-                promise success BadRequest(s"Query timeout ${tlcause.getTimeAllowed / 1000}s exceeded. If you want this to succeed, increase the timeout parameter.")
-              case _ =>
-                promise failure cause
-                throw cause
+      val future =
+        if (tf.createNewFile()) {
+          Logger.info("Running call " + callId)
+          writeFile(tf2, callId)
+          val promise = Promise[Result]
+          qc.runningQueries.put(name, (parameters, promise.future))
+          val startTime = System.currentTimeMillis
+          try {
+            estimate()
+            call() match {
+              case Left(resultsJson) =>
+                val json = Json.obj("queryMetadata" -> (qm ++ Json.obj("timeTakenMS" -> (System.currentTimeMillis() - startTime))), "results" -> resultsJson)
+                val jsString = if (pretty)
+                  Json.prettyPrint(json)
+                else
+                  json.toString
+                writeFile(tf, jsString)
+                promise success Ok(jsString).as(JSON)
+              case Right(result) =>
+                tf.delete()
+                promise success result
             }
-        }
-      } else {
-        if (qc.runningQueries.containsKey(name)) Logger.info("Waiting for result from prior call for " + callId)
-        else Logger.info("Reusing ready result for " + callId)
-      }
-      if (!tf.exists()) InternalServerError("\"An error has occurred, please try again.\"")
-      else Option(qc.runningQueries.get(name)).map(p => Await.result(p._2, Duration.Inf)).getOrElse({
-        import scala.concurrent.ExecutionContext.Implicits.global
-        Ok.sendFile(tf).as(JSON)
-      })
+            qc.runningQueries.remove(name)
+          } catch {
+            case cause: Throwable =>
+              Logger.error("Error processing " + callId + ": " + getStackTraceAsString(cause))
+              tf.delete()
+              qc.runningQueries.remove(name)
+              cause match {
+                case tlcause: TimeLimitingCollector.TimeExceededException =>
+                  promise success BadRequest(s"Query timeout ${tlcause.getTimeAllowed / 1000}s exceeded. If you want this to succeed, increase the timeout parameter.")
+                case ccause: ScriptException =>
+                  promise success BadRequest("Error in script: "+ccause.getMessage)
+                case ccause: GroovyRuntimeException =>
+                  promise success BadRequest("Error in script: "+ccause.getMessage)
+                case _ =>
+                  promise failure cause
+                  throw cause
+              }
+          }
+          promise.future
+        } else
+          Option(qc.runningQueries.get(name)) match {
+            case Some(f) =>
+              Logger.info("Waiting for result from prior call for " + callId)
+              f._2
+            case None =>
+              import scala.concurrent.ExecutionContext.Implicits.global
+              if (tf.exists()) {
+                Logger.info("Reusing result from prior call for " + callId)
+                Future(Ok.sendFile(tf).as(JSON))
+              } else Future(InternalServerError("\"An error has occurred, please try again.\""))
+          }
+      Await.result(future, Duration.Inf)
     }
   }
 

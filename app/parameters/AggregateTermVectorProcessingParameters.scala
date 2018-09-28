@@ -21,14 +21,11 @@ class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: Strin
   final def matches(sumFreq: Int): Boolean = {
     (minSumFreq == 1 && maxSumFreq == Int.MaxValue) || (minSumFreq <= sumFreq && maxSumFreq >= sumFreq)
   }
-  val limitOpt = p.get(prefix+"limit"+suffix).map(_.head.toInt)
-  val limit: Int = limitOpt.getOrElse(20)
   def toJson: JsObject = Json.obj(
     prefix+"smoothing"+suffix->smoothing,
     prefix+"sumScaling"+suffix->sumScalingString,
     prefix+"minSumFreq"+suffix->minSumFreq,
     prefix+"maxSumFreq"+suffix->maxSumFreq,
-    prefix+"limit"+suffix->limit
   )
   queryMetadata.json = queryMetadata.json ++ toJson
 }

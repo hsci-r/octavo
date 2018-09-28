@@ -201,10 +201,18 @@ object IndexAccess {
   implicit def termsToRichTerms(te: Terms): RichTerms = RichTerms(te)
   
   def getHitCountForQuery(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): Long = {
-    val hc = new TotalHitCountCollector()
-    tlc.get.setCollector(hc)
-    is.search(q,tlc.get)
-    hc.getTotalHits
+    (q.rewrite(is.getIndexReader) match {
+      case q: ConstantScoreQuery => q.getQuery
+      case q => q
+    }) match {
+      case q: TermQuery => is.getIndexReader.totalTermFreq(q.getTerm)
+      case q =>
+        val hc = new TotalHitCountCollector()
+        tlc.get.setCollector(hc)
+        is.search(q,tlc.get)
+        hc.getTotalHits
+
+    }
   }
   
 }

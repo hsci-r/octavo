@@ -41,6 +41,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
     val ctvdp = new TermVectorDistanceCalculationParameters("ctv_")
     val rtvpl = new LocalTermVectorProcessingParameters("rtv_")
     val rtvpa = new AggregateTermVectorProcessingParameters("rtv_")
+    val rtvl = new LimitParameters("rtv_")
     val rtvdr = new TermVectorDimensionalityReductionParameters("rtv_")
     implicit val iec = gp.executionContext
     implicit val tlc = gp.tlc
@@ -83,7 +84,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
           fields += ("distance" -> Json.toJson(ctvdp.distance(cv, compareTermVector._2)))
         if (srp.returnExplanations)
           fields += ("explanation" -> Json.toJson(we.explain(context, doc).toString))
-        if (termVectors && rtvdr.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, limitTermVector(cv, rtvpa)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
+        if (termVectors && rtvdr.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, limitTermVector(cv, rtvl)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
         (fields, if (rtvdr.dimensions >0) cv else null)
       }
       val docFields = HashIntObjMaps.getDefaultFactory[collection.Map[String,JsValue]]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[collection.Map[String,JsValue]]
@@ -134,7 +135,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
           val doc = p._1 - lr.docBase
           val (cdocFields, cdocVectors) = processDocFields(lr, doc, jsGetters)
           docFields.put(p._1, cdocFields)
-          if (cdocVectors != null) docVectorsForMDS.put(p._1, limitTermVector(cdocVectors,rtvpa))
+          if (cdocVectors != null) docVectorsForMDS.put(p._1, limitTermVector(cdocVectors,rtvl))
         }
       }
       val cvs = if (rtvdr.dimensions > 0) {
@@ -147,7 +148,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         val highlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField))
         highlighter.highlight(indexMetadata.contentField, query, values.map(_._1).toArray, if (srp.snippetLimit == -1) Int.MaxValue - 1 else srp.snippetLimit)
       } else null
-      Json.obj(
+      Left(Json.obj(
         "final_query"->query.toString,
         "total"->total,
         "totalScore"->(if (srp.sumScaling == SumScaling.DF) Json.toJson(totalScore) else Json.toJson(totalScore.toInt)),
@@ -171,7 +172,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
                       "start" -> p.getStartOffset,
                       "end" -> p.getEndOffset,
                       "matches" -> matches.keys.map(k => {
-                        var m = Json.obj("start" -> k._1, "end" -> k._2, "terms" -> matches(k))
+                        var m = Json.obj("text"->hl.content.substring(k._1,k._2),"start" -> k._1, "end" -> k._2, "terms" -> matches(k))
                         if (srp.offsetData) m = m ++ Json.obj("data"-> g(doc,k._1,srp.matchOffsetSearchType))
                         m
                       }),
@@ -186,7 +187,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
               ).getOrElse(Array.empty)))
             }
             df ++ Map("score" -> (if (srp.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt)))
-        })
+        }))
     })
   }
  

@@ -190,7 +190,7 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
       var orderedTerms = termMap.toSeq.sortBy(-_._2.ttf)
       val tterms = orderedTerms.length
       if (limit != -1) orderedTerms = orderedTerms.take(limit)
-      Json.obj("general"->Json.obj("terms"->tterms,"totalDocFreq"->tdf,"totalTermFreq"->tttf),"results"->orderedTerms.map(p => Json.obj("term" -> p._1, "docFreq" -> p._2.df, "totalTermFreq" -> p._2.ttf)))
+      Left(Json.obj("general"->Json.obj("terms"->tterms,"totalDocFreq"->tdf,"totalTermFreq"->tttf),"results"->orderedTerms.map(p => Json.obj("term" -> p._1, "docFreq" -> p._2.df, "totalTermFreq" -> p._2.ttf))))
     })
   }
 

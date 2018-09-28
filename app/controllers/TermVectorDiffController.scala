@@ -1,12 +1,11 @@
 package controllers
 
 import java.util.function.LongConsumer
-import javax.inject.{Inject, Singleton}
 
 import com.koloboke.collect.set.hash.HashLongSets
+import javax.inject.{Inject, Singleton}
 import parameters._
 import play.api.libs.json.{JsNull, Json}
-import play.api.{Configuration, Environment}
 import services.{Distance, IndexAccessProvider, TermVectors}
 
 import scala.collection.mutable
@@ -99,7 +98,7 @@ class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, qc:
         }
         map
       })
-      Json.toJson(obj)
+      Left(Json.toJson(obj))
     })
   }
 }

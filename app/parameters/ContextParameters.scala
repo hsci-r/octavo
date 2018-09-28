@@ -8,7 +8,7 @@ import play.api.libs.json.Json
 import play.api.mvc.{AnyContent, Request}
 import services.{ExtendedUnifiedHighlighter, IndexAccess, OffsetSearchType}
 
-class ContextParameters()(implicit request: Request[AnyContent], ia: IndexAccess, queryMetadata: QueryMetadata) {
+class ContextParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent], ia: IndexAccess, queryMetadata: QueryMetadata) extends LimitParameters(prefix,suffix) {
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
 
   /** context level when returning matches */
@@ -35,6 +35,6 @@ class ContextParameters()(implicit request: Request[AnyContent], ia: IndexAccess
     "matchOffsetSearchType" -> matchOffsetSearchType
   )
 
-  def toJson = myJson
+  override def toJson = super.toJson ++ myJson
   queryMetadata.json = queryMetadata.json ++ myJson
 }

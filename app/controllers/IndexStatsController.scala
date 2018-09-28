@@ -76,7 +76,7 @@ class IndexStatsController @Inject()(iap: IndexAccessProvider, qc: QueryCache) e
         )
       if (gatherFreqsPerTerm)
         ret = ret ++ Json.obj("termFreqs"->ia.reader(level).leaves.get(0).reader.terms(field).asBytesRefAndDocFreqAndTotalTermFreqIterable.map(t => t._1.utf8ToString()->Json.obj("docFreq"->t._2,"totalTermFreq"->t._3)))
-      ret
+      Left(ret)
     })
   }
 }
