@@ -541,7 +541,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
     }    
   }
   case object NONE extends StoredFieldType {
-    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = throw new IllegalArgumentException
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] = throw new IllegalArgumentException
     def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[_] = throw new IllegalArgumentException
   }
   val values = findValues
@@ -569,7 +569,7 @@ case class FieldInfo(
   containsJson: Boolean
 ) {
   def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[_] = storedAs.getMatchingValues(is, q, id)
-  def jsGetter(lr: LeafReader): (Int) => Option[JsValue] = storedAs.jsGetter(lr, id, containsJson)
+  def jsGetter(lr: LeafReader): Int => Option[JsValue] = storedAs.jsGetter(lr, id, containsJson)
   def toJson(lr: LeafReader) = {
     val ret = Json.obj(
       "description"->description,
