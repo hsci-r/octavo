@@ -27,8 +27,10 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
     val termVectors = p.get("termVectors").exists(v => v.head=="" || v.head.toBoolean)
     /** minimum query score (by default term match frequency) for doc to be included in query results */
     val minScore: Float = p.get("minScore").map(_.head.toFloat).getOrElse(0.0f)
+    val maxScore: Float = p.get("maxScore").map(_.head.toFloat).getOrElse(-1.0f)
     implicit val qm = new QueryMetadata(Json.obj(
       "minScore"->minScore,
+      "maxScore"->maxScore,
       "termVectors"->termVectors
     ))
     val qp = new QueryParameters()
@@ -63,8 +65,8 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       qm.estimatedNumberOfResults = Math.min(qhits, srp.limit)
     }, () => {
       val (queryLevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, qp.requiredQuery)
-      // Logger.debug(f"Final query: $query%s, level: $queryLevel%s")
       val ql = ia.indexMetadata.levelMap(queryLevel)
+      val rfields = if (srp.offsetData && ql.fields.contains("startOffset") && !srp.fields.contains("startOffset")) srp.fields :+ "startOffset" else srp.fields
       val is = searcher(queryLevel,srp.sumScaling)
       val ir = is.getIndexReader
       var total = 0
@@ -75,9 +77,9 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       val we = if (srp.returnExplanations)
         query.createWeight(is, true, 1.0f)
       else null
-      val processDocFields = (context: LeafReaderContext, doc: Int, getters: Map[String,(Int) => Option[JsValue]]) => {
+      val processDocFields = (context: LeafReaderContext, doc: Int, getters: Map[String,Int => Option[JsValue]]) => {
         val fields = new mutable.HashMap[String, JsValue]
-        for (field <- srp.fields;
+        for (field <- rfields;
              value <- getters(field)(doc)) fields += (field -> value)
         val cv = if (termVectors || ctv.query.isDefined) getTermVectorForDocument(ir, doc, rtvpl, rtvpa) else null
         if (ctv.query.isDefined)
@@ -95,14 +97,14 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         var scorer: Scorer = _
         var context: LeafReaderContext = _
 
-        var getters: Map[String,(Int) => Option[JsValue]] = _
+        var getters: Map[String,Int => Option[JsValue]] = _
 
         override def setScorer(scorer: Scorer) {this.scorer=scorer}
 
         override def collect(ldoc: Int) {
           qm.documentsProcessed += 1
           val doc = context.docBase + ldoc
-          if (scorer.score >= minScore) {
+          if (scorer.score >= minScore && (maxScore == -1.0f || scorer.score<=maxScore)) {
             total+=1
             totalScore += scorer.score
             if (srp.limit == -1) {
@@ -122,7 +124,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         override def doSetNextReader(context: LeafReaderContext) {
           this.context = context
           if (srp.limit == -1)
-            this.getters = srp.fields.map(f => f -> ql.fields(f).jsGetter(context.reader)).toMap
+            this.getters = rfields.map(f => f -> ql.fields(f).jsGetter(context.reader)).toMap
         }
       }
       tlc.get.setCollector(collector)
@@ -130,7 +132,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       val values = maxHeap.dequeueAll.reverse.drop(srp.offset)
       if (srp.limit!= -1) {
         val lr = ir.leaves.get(0)
-        val jsGetters = srp.fields.map(f => f -> ql.fields(f).jsGetter(lr.reader)).toMap
+        val jsGetters = rfields.map(f => f -> ql.fields(f).jsGetter(lr.reader)).toMap
         values.sortBy(_._1).foreach{p => // sort by id so that advanceExact works
           val doc = p._1 - lr.docBase
           val (cdocFields, cdocVectors) = processDocFields(lr, doc, jsGetters)
