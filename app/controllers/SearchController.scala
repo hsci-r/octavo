@@ -6,7 +6,7 @@ import javax.inject._
 import org.apache.lucene.index.LeafReaderContext
 import org.apache.lucene.search.{Scorer, SimpleCollector, TotalHitCountCollector}
 import parameters._
-import play.api.libs.json.{JsNull, JsValue, Json}
+import play.api.libs.json._
 import play.api.mvc.{Action, AnyContent}
 import services.ExtendedUnifiedHighlighter.Passages
 import services.{ExtendedUnifiedHighlighter, IndexAccessProvider, TermVectors}
@@ -19,7 +19,16 @@ import scala.collection.mutable.ArrayBuffer
 class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
   
   import TermVectors._
-  
+
+  private def compare(x: JsValue, y: JsValue, ci: Boolean): Int = x match {
+    case null => if (y == null) 0 else 1
+    case _ if y == null => -1
+    case n : JsNumber => n.value.compare(y.asInstanceOf[JsNumber].value)
+    case s : JsString => if (ci) s.value.toLowerCase.compare(y.asInstanceOf[JsString].value.toLowerCase) else s.value.compare(y.asInstanceOf[JsString].value)
+    case a: JsArray => a.value.view.zipAll(y.asInstanceOf[JsArray].value,null,null).map(p => compare(p._1,p._2,ci)).find(_ != 0).getOrElse(0)
+    case _ => 0
+  }
+
   def search(index: String): Action[AnyContent] = Action { implicit request =>
     implicit val ia = iap(index)
     import ia._
@@ -66,12 +75,19 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
     }, () => {
       val (queryLevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, qp.requiredQuery)
       val ql = ia.indexMetadata.levelMap(queryLevel)
-      val rfields = if (srp.offsetData && ql.fields.contains("startOffset") && !srp.fields.contains("startOffset")) srp.fields :+ "startOffset" else srp.fields
+      val rfields = {
+        val f =  srp.fields ++ srp.sorts.filter(p => p._1 != "score" && !srp.fields.contains(p._1)).map(_._1)
+        if (srp.offsetData && ql.fields.contains("startOffset") && !f.contains("startOffset")) f :+ "startOffset" else f
+      }
       val is = searcher(queryLevel,srp.sumScaling)
       val ir = is.getIndexReader
       var total = 0
       var totalScore = 0.0
-      val maxHeap = mutable.PriorityQueue.empty[(Int,Float)]((x: (Int, Float), y: (Int, Float)) => y._2 compare x._2)
+      val mcompare : ((Int,Float,Seq[JsValue]),(Int,Float,Seq[JsValue])) => Int = if (srp.sorts.nonEmpty) (x,y) => x._3.view.zip(y._3).zip(srp.sorts).map(p => {
+        val c = compare(p._1._1,p._1._2,p._2._3)
+        if (p._2._2 == SortDirection.DESC) -c else c
+      }).find(_ != 0).getOrElse(0) else (x,y) => y._2.compare(x._2)
+      val maxHeap = mutable.PriorityQueue.empty[(Int,Float,Seq[JsValue])]((x,y) => mcompare(x,y))
       val compareTermVector = if (ctv.query.isDefined)
         getAggregateContextVectorForQuery(is, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermsFromQuery(query),ctvpa, ctvs.maxDocs) else null
       val we = if (srp.returnExplanations)
@@ -98,6 +114,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         var context: LeafReaderContext = _
 
         var getters: Map[String,Int => Option[JsValue]] = _
+        var sortGetters: Seq[Int => Option[JsValue]] = Seq.empty
 
         override def setScorer(scorer: Scorer) {this.scorer=scorer}
 
@@ -111,12 +128,15 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
               val (cdocFields, cdocVectors) = processDocFields(context, doc, getters)
               docFields.put(doc, cdocFields)
               if (cdocVectors != null) docVectorsForMDS.put(doc, cdocVectors)
-              maxHeap += ((doc, scorer.score))
+              maxHeap += ((doc, scorer.score, srp.sorts.map(p => if (p._1 == "score") JsNumber(BigDecimal.decimal(scorer.score)) else cdocFields(p._1))))
             } else if (total<=srp.offset + srp.limit)
-              maxHeap += ((doc, scorer.score))
-            else if (maxHeap.head._2<scorer.score) {
-              maxHeap.dequeue()
-              maxHeap += ((doc, scorer.score))
+              maxHeap += ((doc, scorer.score, sortGetters.map(sg => sg(doc).orNull)))
+            else {
+              val entry = (doc, scorer.score, sortGetters.map(sg => sg(doc).orNull))
+              if (mcompare(maxHeap.head,entry)>0) {
+                maxHeap.dequeue()
+                maxHeap += entry
+              }
             }
           }
         }
@@ -125,6 +145,8 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
           this.context = context
           if (srp.limit == -1)
             this.getters = rfields.map(f => f -> ql.fields(f).jsGetter(context.reader)).toMap
+          else if (srp.sorts.nonEmpty)
+            this.sortGetters = srp.sorts.map(f => if (f._1 == "score") (doc: Int) => Some(JsNumber(BigDecimal.decimal(scorer.score))) else ql.fields(f._1).jsGetter(context.reader))
         }
       }
       tlc.get.setCollector(collector)
@@ -155,7 +177,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         "total"->total,
         "totalScore"->(if (srp.sumScaling == SumScaling.DF) Json.toJson(totalScore) else Json.toJson(totalScore.toInt)),
         "docs"->values.zipWithIndex.map{
-          case ((doc,score),i) =>
+          case ((doc,score,_),i) =>
             var df = docFields.get(doc)
             if (cvs!=null) df = df ++ Map("termVector"->cvs(i))
             if (srp.snippetLimit!=0) {

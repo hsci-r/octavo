@@ -17,20 +17,26 @@ class QueryReturnParameters()(implicit request: Request[AnyContent], ia: IndexAc
   val snippetLimit: Int = p.get("snippetLimit").map(_.head.toInt).getOrElse(0)
   /** how many results to skip */
   val offset: Int = p.get("offset").map(_.head.toInt).getOrElse(0)
-  private val sortFields = p.getOrElse("sortField",Seq.empty)
-  private val sortDirections = p.getOrElse("sortDirection",Seq.empty).map(sd => sd match {
+  private val sortFields = p.getOrElse("sort",Seq.empty)
+  private val sortDirections = p.getOrElse("sortDirection",Seq.empty).map {
     case "A" | "a" => SortDirection.ASC
     case "D" | "d" => SortDirection.DESC
-    case _ => SortDirection.withName(sd.toUpperCase)})
-  val sorts = sortFields.zipAll(sortDirections,ia.indexMetadata.contentField,SortDirection.ASC)
+    case sd => SortDirection.withName(sd.toUpperCase)
+  }
+  private val sortCaseInsensitivities = p.getOrElse("sortCaseInsensitive",Seq.empty).map(sd => sd.toLowerCase match {
+    case "i" | "insensitive" => true
+    case "s" | "sensitive" => false
+  })
+  val sorts = sortFields.zipAll(sortDirections,ia.indexMetadata.contentField,SortDirection.ASC).zipAll(sortCaseInsensitivities,null,false).map(p => (p._1._1,p._1._2,p._2))
 
   private val myJson = Json.obj(
     "snippetLimit" -> snippetLimit,
     "offset" -> offset,
     "sumScaling"->sumScalingString,
     "fields"->fields,
-    "sortFields"->sortFields,
+    "sorts"->sortFields,
     "sortDirections"->sortDirections,
+    "sortCaseInsensitivities"->sortCaseInsensitivities,
     "returnExplanations"->returnExplanations
   )
   override def toJson = super.toJson ++ myJson
