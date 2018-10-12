@@ -797,7 +797,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
       override def getFieldQuery(field: String, content: String, quoted: Boolean): Query = {
         val ext = field.indexOf("|")
         if (ext == -1)
-          level.fields(field).indexedAs match {
+          level.fields.get(field).map(_.indexedAs).getOrElse(IndexedFieldType.NONE) match {
             case IndexedFieldType.INTPOINT =>
               val value = content.toInt
               IntPoint.newRangeQuery(field, value, value)
@@ -938,7 +938,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
     outField.indexedAs match {
       case IndexedFieldType.STRING =>
         inField.storedAs match {
-          case StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.SORTEDSETDOCVALUES | StoredFieldType.TERMVECTOR =>
+          case StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.SORTEDDOCVALUES | StoredFieldType.SORTEDSETDOCVALUES | StoredFieldType.TERMVECTOR =>
             new ExtractingTermInSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[BytesRef]].asJava)
           case StoredFieldType.NUMERICDOCVALUES | StoredFieldType.SORTEDNUMERICDOCVALUES =>
             new ExtractingTermInSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Long]].map(v => new BytesRef(v.toString)).asJava)
@@ -950,7 +950,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
         }
       case IndexedFieldType.INTPOINT =>
         inField.storedAs match {
-          case StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.SORTEDSETDOCVALUES | StoredFieldType.TERMVECTOR =>
+          case StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS  | StoredFieldType.SORTEDDOCVALUES | StoredFieldType.SORTEDSETDOCVALUES | StoredFieldType.TERMVECTOR =>
             IntPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[BytesRef]].view.map(_.utf8ToString.toInt).toSeq:_*)
           case StoredFieldType.NUMERICDOCVALUES | StoredFieldType.SORTEDNUMERICDOCVALUES =>
             IntPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Long]].view.map(_.toInt).toSeq:_*)
@@ -962,7 +962,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
         }
       case IndexedFieldType.LONGPOINT =>
         inField.storedAs match {
-          case StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.SORTEDSETDOCVALUES | StoredFieldType.TERMVECTOR =>
+          case StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.SORTEDDOCVALUES | StoredFieldType.SORTEDSETDOCVALUES | StoredFieldType.TERMVECTOR =>
             LongPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[BytesRef]].view.map(_.utf8ToString.toLong).toSeq:_*)
           case StoredFieldType.NUMERICDOCVALUES | StoredFieldType.SORTEDNUMERICDOCVALUES =>
             LongPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Long]].toSeq:_*)
@@ -974,7 +974,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
         }
       case IndexedFieldType.FLOATPOINT =>
         inField.storedAs match {
-          case StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.SORTEDSETDOCVALUES | StoredFieldType.TERMVECTOR =>
+          case StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.SORTEDDOCVALUES | StoredFieldType.SORTEDSETDOCVALUES | StoredFieldType.TERMVECTOR =>
             FloatPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[BytesRef]].view.map(_.utf8ToString.toFloat).toSeq:_*)
           case StoredFieldType.NUMERICDOCVALUES | StoredFieldType.SORTEDNUMERICDOCVALUES =>
             FloatPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Long]].view.map(_.toFloat).toSeq:_*)
@@ -986,7 +986,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
         }
       case IndexedFieldType.DOUBLEPOINT =>
         inField.storedAs match {
-          case StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.SORTEDSETDOCVALUES | StoredFieldType.TERMVECTOR =>
+          case StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.SORTEDDOCVALUES | StoredFieldType.SORTEDSETDOCVALUES | StoredFieldType.TERMVECTOR =>
             DoublePoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[BytesRef]].view.map(_.utf8ToString.toDouble).toSeq:_*)
           case StoredFieldType.NUMERICDOCVALUES | StoredFieldType.SORTEDNUMERICDOCVALUES =>
             DoublePoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Long]].view.map(_.toDouble).toSeq:_*)
