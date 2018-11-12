@@ -25,7 +25,7 @@ class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: Strin
     prefix+"smoothing"+suffix->smoothing,
     prefix+"sumScaling"+suffix->sumScalingString,
     prefix+"minSumFreq"+suffix->minSumFreq,
-    prefix+"maxSumFreq"+suffix->maxSumFreq,
+    prefix+"maxSumFreq"+suffix->maxSumFreq
   )
   queryMetadata.json = queryMetadata.json ++ toJson
 }

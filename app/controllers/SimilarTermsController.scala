@@ -6,7 +6,7 @@ import org.apache.lucene.index.{PostingsEnum, Term, Terms}
 import org.apache.lucene.search._
 import org.apache.lucene.util.automaton.CompiledAutomaton
 import org.apache.lucene.util.{AttributeSource, BytesRef}
-import parameters.{GeneralParameters, QueryMetadata, SumScaling}
+import parameters.{GeneralParameters, QueryMetadata, SortDirection, SumScaling}
 import play.api.libs.json.Json
 import services.IndexAccessProvider
 
@@ -14,6 +14,10 @@ import scala.collection.JavaConverters._
 import scala.collection.Searching.Found
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.{Searching, mutable}
+
+object SortBy extends Enumeration {
+  val TERM, TTF, TDF = Value
+}
 
 @Singleton
 class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
@@ -105,13 +109,22 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
   }
   
   // get terms lexically similar to a query term - used in topic definition to get past OCR errors
-  def similarTerms(index: String, levelO: Option[String], query: String, limit:Int = 20) = Action { implicit request =>
+  def similarTerms(index: String, levelO: Option[String], query: String, limit: Int = 20, offset: Int = 0, sortS: String = "TDF", sortDirectionS: String = "D") = Action { implicit request =>
     implicit val ia = iap(index)
     import ia._
     val level = levelO.getOrElse(indexMetadata.defaultLevel.id)
+    val sortDirection = sortDirectionS match {
+      case "A" | "a" => SortDirection.ASC
+      case "D" | "d" => SortDirection.DESC
+      case sd => SortDirection.withName(sd.toUpperCase)
+    }
+    val sort = SortBy.withName(sortS.toUpperCase)
     implicit val qm = new QueryMetadata(Json.obj(
       "query" -> query,
+      "sort" -> sort,
+      "sortDirection" -> sortDirection,
       "level" -> level,
+      "offset"->offset,
       "limit"->limit))
     val gp = new GeneralParameters()
     implicit val ec = gp.executionContext
@@ -187,10 +200,24 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
         tdf = hc.tdf
         tttf = hc.tttf
       }
-      var orderedTerms = termMap.toSeq.sortBy(-_._2.ttf)
+      var orderedTerms = termMap.toSeq.sortWith((x,y) => sort match {
+          case SortBy.TERM => sortDirection match {
+            case SortDirection.ASC => x._1<y._1
+            case SortDirection.DESC => x._1>y._1
+          }
+          case SortBy.TDF => sortDirection match {
+            case SortDirection.ASC => x._2.df<y._2.df
+            case SortDirection.DESC => x._2.df>y._2.df
+          }
+          case SortBy.TTF => sortDirection match {
+            case SortDirection.ASC => x._2.ttf<y._2.ttf
+            case SortDirection.DESC => x._2.ttf>y._2.ttf
+          }
+        })
       val tterms = orderedTerms.length
+      orderedTerms = orderedTerms.drop(offset)
       if (limit != -1) orderedTerms = orderedTerms.take(limit)
-      Left(Json.obj("general"->Json.obj("terms"->tterms,"totalDocFreq"->tdf,"totalTermFreq"->tttf),"results"->orderedTerms.map(p => Json.obj("term" -> p._1, "docFreq" -> p._2.df, "totalTermFreq" -> p._2.ttf))))
+      Left(Json.obj("general"->Json.obj("terms"->tterms,"totalDocFreq"->tdf,"totalTermFreq"->tttf),"results"->orderedTerms.map(p => Json.obj("term" -> p._1, "totalDocFreq" -> p._2.df, "totalTermFreq" -> p._2.ttf))))
     })
   }
 

@@ -8,7 +8,7 @@ import javax.inject.{Inject, Singleton}
 import javax.script.ScriptException
 import org.apache.commons.codec.digest.DigestUtils
 import org.apache.lucene.search.TimeLimitingCollector
-import parameters.QueryMetadata
+import parameters.{GeneralParameters, QueryMetadata}
 import play.api.libs.json.{JsValue, Json}
 import play.api.mvc.{AnyContent, InjectedController, Request, Result}
 import play.api.{Configuration, Environment, Logger}
@@ -43,6 +43,8 @@ class QueryCache @Inject() (env: Environment, configuration: Configuration) {
   private def tmpDir(key: String): String = mtmpDir + '/' + key.charAt(0) + '/' + key.charAt(1)
 
 }
+
+class ResponseTooBigException(val limit: Long) extends RuntimeException()
 
 abstract class AQueuingController(qc: QueryCache) extends InjectedController {
 
@@ -103,6 +105,8 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController {
                   promise success BadRequest("Error in script: "+ccause.getMessage)
                 case ccause: GroovyRuntimeException =>
                   promise success BadRequest("Error in script: "+ccause.getMessage)
+                case ccause: ResponseTooBigException =>
+                  promise success BadRequest(s"Maximum response size estimate (${ccause.limit/1024/1024}MB) exceeded. If you want this to succeed, you may try increasing the maxResponseSize parameter, up to ${GeneralParameters.maxMaxResponseSize} (MB).")
                 case _ =>
                   promise failure cause
                   throw cause

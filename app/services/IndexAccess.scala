@@ -724,7 +724,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
   }
 
   private val offsetDataEnv = if (indexMetadata.offsetDataConverterAsText.isDefined) Environments.newContextualInstance(path+"/offsetdata", new EnvironmentConfig().setEnvIsReadonly(true).setLogFileSize(Int.MaxValue+1l).setMemoryUsage(Math.min(1073741824l, Runtime.getRuntime.maxMemory/4)).setEnvCloseForcedly(true)) else null
-  if (indexMetadata.offsetDataConverterAsText.isDefined) lifecycle.addStopHook{() => Future.successful(offsetDataEnv.close())}
+  if (indexMetadata.offsetDataConverterAsText.isDefined && lifecycle != null) lifecycle.addStopHook{() => Future.successful(offsetDataEnv.close())}
   private val offsetDataCursor: ThreadLocal[Cursor] = ThreadLocal.withInitial(() => {
     offsetDataEnv.beginReadonlyTransaction()
     val s = offsetDataEnv.openStore("offsetdata", StoreConfig.WITHOUT_DUPLICATES_WITH_PREFIXING)

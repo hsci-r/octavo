@@ -1,8 +1,9 @@
 package parameters
 
+import play.api.http.MimeTypes
 import play.api.libs.json.{JsObject, Json}
 
-class QueryMetadata(var json: JsObject = Json.obj()) {
+class QueryMetadata(var json: JsObject = Json.obj(), mimeType: MimeTypes = MimeTypes.JSON) {
   var longRunning: Boolean = false
   var key: Option[String] = None
   var estimatedDocumentsToProcess: Int = 0

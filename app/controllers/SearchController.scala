@@ -87,6 +87,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         val c = compare(p._1._1,p._1._2,p._2._3)
         if (p._2._2 == SortDirection.DESC) -c else c
       }).find(_ != 0).getOrElse(0) else (x,y) => y._2.compare(x._2)
+      var responseSizeHint = 0l
       val maxHeap = mutable.PriorityQueue.empty[(Int,Float,Seq[JsValue])]((x,y) => mcompare(x,y))
       val compareTermVector = if (ctv.query.isDefined)
         getAggregateContextVectorForQuery(is, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermsFromQuery(query),ctvpa, ctvs.maxDocs) else null
@@ -96,7 +97,15 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       val processDocFields = (context: LeafReaderContext, doc: Int, getters: Map[String,Int => Option[JsValue]]) => {
         val fields = new mutable.HashMap[String, JsValue]
         for (field <- rfields;
-             value <- getters(field)(doc)) fields += (field -> value)
+             value <- getters(field)(doc)) {
+          value match {
+            case value: JsString =>
+              responseSizeHint += value.value.length
+              if (responseSizeHint>gp.maxResponseSize) throw new ResponseTooBigException(responseSizeHint)
+            case _ =>
+          }
+          fields += (field -> value)
+        }
         val cv = if (termVectors || ctv.query.isDefined) getTermVectorForDocument(ir, doc, rtvpl, rtvpa) else null
         if (ctv.query.isDefined)
           fields += ("distance" -> Json.toJson(ctvdp.distance(cv, compareTermVector._2)))
@@ -190,6 +199,9 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
                     matches.getOrElseUpdate((p.getMatchStarts()(i), p.getMatchEnds()(i)), new ArrayBuffer[String]()) += p.getMatchTerms()(i).utf8ToString
                     i += 1
                   }
+                  val highlightedSnippet = ExtendedUnifiedHighlighter.highlightToString(p, hl.content)
+                  responseSizeHint += highlightedSnippet.length
+                  if (responseSizeHint>gp.maxResponseSize) throw new ResponseTooBigException(responseSizeHint)
                   var md =
                     Json.obj(
 
@@ -200,7 +212,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
                         if (srp.offsetData) m = m ++ Json.obj("data"-> g(doc,k._1,srp.matchOffsetSearchType))
                         m
                       }),
-                      "snippet" -> ExtendedUnifiedHighlighter.highlightToString(p, hl.content)
+                      "snippet" -> highlightedSnippet
                     )
                   if (srp.offsetData) md = md ++ Json.obj(
                     "startData" -> g(doc, p.getStartOffset, srp.startOffsetSearchType),

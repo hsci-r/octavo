@@ -9,7 +9,7 @@ class LimitParameters(prefix: String = "", suffix: String = "")(implicit request
   /** how many results to return at maximum */
   val limit: Int = p.get("limit").map(_.head.toInt).getOrElse(20)
   private val myJson = Json.obj(
-    "limit"->limit,
+    "limit"->limit
   )
   def toJson =  myJson
   queryMetadata.json = queryMetadata.json ++ myJson

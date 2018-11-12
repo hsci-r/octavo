@@ -34,6 +34,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
     if (grpp.isDefined) {
       val highlighter = if (grpp.groupByMatch) grpp.highlighter(is, ia.indexMetadata.indexingAnalyzers(ia.indexMetadata.contentField)) else null
       val globalStats = new Stats
+      var count = 0
       grpp.grouper.foreach(_.invokeMethod("setParameters", Seq(level, is, q, grpp, gatherTermFreqsPerDoc, globalStats).toArray))
       var fieldGetters: Seq[(Int) => JsValue] = null
       var fieldVGetters: Seq[(Int) => JsValue] = null
@@ -45,7 +46,6 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
 
         var scorer: Scorer = _
 
-        var count = 0
 
         override def collect(doc: Int): Unit = {
           qm.documentsProcessed += 1
@@ -104,7 +104,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
         }
       })
       is.search(q, tlc.get)
-      Json.obj("general"->globalStats.toJson,"grouped"->groupedStats.toSeq.sortWith((x,y) => {
+      Json.obj("general"->(globalStats.toJson ++ Json.obj("totalDocs"->count)),"grouped"->groupedStats.toSeq.sortWith((x,y) => {
         val lt = x._1.fields.filter(_._1 != "match").exists(p => {
           val other = y._1.value(p._1)
           if (other == null) false
