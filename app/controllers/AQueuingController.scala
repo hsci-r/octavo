@@ -65,8 +65,19 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController {
     val name = DigestUtils.sha256Hex(callId)
     val qm = Json.obj("method" -> method, "parameters" -> parameters.json, "index" -> Json.obj("name" -> index.indexName, "version" -> index.indexVersion), "octavoVersion" -> qc.version)
     if (parameters.longRunning && !parameters.key.contains(name)) {
-      estimate()
-      Ok("<html><body>You are about to run the following query:<br /><pre>"+HtmlFormat.escape(Json.prettyPrint(qm))+"</pre><h1>Are you sure you want to do this? Our estimate is that you'll process some "+parameters.estimatedDocumentsToProcess+" documents and can get for example "+parameters.estimatedNumberOfResults+" results</h1>If you do wish to continue, add <pre>key="+name+"</pre> to your parameters.</pre> While running, the query status can be queried from <a href=\"../status/"+name+"\">here</a>.</body></html>").as(HTML).withHeaders("X-Octavo-Key" -> name)
+      try {
+        estimate()
+        Ok("<html><body>You are about to run the following query:<br /><pre>"+HtmlFormat.escape(Json.prettyPrint(qm))+"</pre><h1>Are you sure you want to do this? Our estimate is that you'll process some "+parameters.estimatedDocumentsToProcess+" documents and can get for example "+parameters.estimatedNumberOfResults+" results</h1>If you do wish to continue, add <pre>key="+name+"</pre> to your parameters.</pre> While running, the query status can be queried from <a href=\"../status/"+name+"\">here</a>.</body></html>").as(HTML).withHeaders("X-Octavo-Key" -> name)
+      } catch {
+        case cause: Throwable =>
+          Logger.error("Error processing estimate for " + callId + ": " + getStackTraceAsString(cause))
+          cause match {
+            case tlcause: TimeLimitingCollector.TimeExceededException =>
+              BadRequest(s"Query estimate timeout ${tlcause.getTimeAllowed / 1000}s exceeded. This is probably due to a bad query, but if you want still want to continue, increase the etimeout parameter.")
+            case _ =>
+              throw cause
+          }
+      }
     } else {
       val (tf,tf2) = qc.files(name)
       if (force) tf.delete()

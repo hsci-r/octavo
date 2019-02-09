@@ -165,9 +165,10 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
     implicit val tlc = gp.tlc
     implicit val qps = documentQueryParsers
     getOrCreateResult("queryStats", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
-      val hc = new TotalHitCountCollector()
       val (qlevel, query) = buildFinalQueryRunningSubQueries(exactCounts = false, q.requiredQuery)
-      searcher(qlevel, SumScaling.ABSOLUTE).search(query, hc)
+      val hc = new TotalHitCountCollector()
+      gp.etlc.setCollector(hc)
+      searcher(qlevel, SumScaling.ABSOLUTE).search(query, gp.etlc)
       qm.estimatedDocumentsToProcess = if (sp.maxDocs == -1) hc.getTotalHits else Math.min(hc.getTotalHits, sp.maxDocs)
       qm.estimatedNumberOfResults = if (grpp.limit != -1) grpp.limit else Math.min(hc.getTotalHits, grpp.limit)
     }, () => {

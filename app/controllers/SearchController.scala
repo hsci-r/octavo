@@ -59,15 +59,17 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
     implicit val ifjp = gp.forkJoinPool
     getOrCreateResult("search",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       val qhits = {
-        val hc = new TotalHitCountCollector()
         val (qlevel,query) = buildFinalQueryRunningSubQueries(exactCounts = false, qp.requiredQuery)
-        searcher(qlevel, SumScaling.ABSOLUTE).search(query, hc)
+        val hc = new TotalHitCountCollector()
+        gp.etlc.setCollector(hc)
+        searcher(qlevel, SumScaling.ABSOLUTE).search(query, gp.etlc)
         hc.getTotalHits
       }
       val chits = if (ctv.query.isDefined) {
-        val hc = new TotalHitCountCollector()
         val (qlevel, query) = buildFinalQueryRunningSubQueries(exactCounts = false, ctv.requiredQuery)
-        searcher(qlevel, SumScaling.ABSOLUTE).search(query, hc)
+        val hc = new TotalHitCountCollector()
+        gp.etlc.setCollector(hc)
+        searcher(qlevel, SumScaling.ABSOLUTE).search(query, gp.etlc)
         hc.getTotalHits
       } else 0
       qm.estimatedDocumentsToProcess = qhits + chits

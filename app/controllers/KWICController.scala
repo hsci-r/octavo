@@ -49,10 +49,10 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
     implicit val tlc = gp.tlc
     implicit val ifjp = gp.forkJoinPool
     getOrCreateResult("kwic",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
-      val hc = new TotalHitCountCollector()
       val (qlevel,query) = buildFinalQueryRunningSubQueries(exactCounts = false, qp.requiredQuery)
-      searcher(qlevel, SumScaling.ABSOLUTE).search(query, hc)
-      hc.getTotalHits
+      val hc = new TotalHitCountCollector()
+      gp.etlc.setCollector(hc)
+      searcher(qlevel, SumScaling.ABSOLUTE).search(query, gp.etlc)
       qm.estimatedDocumentsToProcess = hc.getTotalHits
       qm.estimatedNumberOfResults = Math.min(hc.getTotalHits, srp.limit)
     }, () => {
