@@ -16,15 +16,15 @@ import org.apache.lucene.index.{IndexReader, LeafReaderContext}
 import org.apache.lucene.search.{IndexSearcher, Query, SimpleCollector, TimeLimitingCollector}
 import org.apache.lucene.util.BytesRef
 import parameters._
-import play.api.Logger
+import play.api.Logging
 import play.api.libs.json.{JsString, JsValue, Json}
 
+import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.parallel.{ParIterable, ParSeq, TaskSupport}
-import scala.collection.JavaConverters._
 
-object TermVectors {
+object TermVectors extends Logging {
   
   import IndexAccess._
   
@@ -72,7 +72,7 @@ object TermVectors {
     val totalHits = getHitCountForQuery(is, q)
     val sampleProbability = if (maxDocs == -1) 1.0 else math.min(maxDocs.toDouble / totalHits, 1.0)
     val ir = is.getIndexReader
-    //Logger.debug(f"q: $q%s, sampleProbability:$sampleProbability%,.4f <- maxDocs:$maxDocs%,d, hits:$totalHits%,d")
+    //logger.debug(f"q: $q%s, sampleProbability:$sampleProbability%,.4f <- maxDocs:$maxDocs%,d, hits:$totalHits%,d")
     tlc.get.setCollector(new SimpleCollector() {
       override def needsScores: Boolean = false
       var context: LeafReaderContext = _
@@ -84,7 +84,7 @@ object TermVectors {
           val tv = this.context.reader.getTermVector(doc, ia.indexMetadata.contentField)
           if (tv != null) {
             docCollector(doc)
-            if (tv.size()>10000) Logger.debug(f"Long term vector for doc $doc%d: ${tv.size}%,d")
+            if (tv.size()>10000) logger.debug(f"Long term vector for doc $doc%d: ${tv.size}%,d")
             val tvt = tv.iterator().asInstanceOf[TVTermsEnum]
             val min = if (ctvp.localScaling!=LocalTermVectorScaling.MIN) 0 else if (minScalingTerms.isEmpty) Int.MaxValue else minScalingTerms.foldLeft(0)((f,term) => if (tvt.seekExact(new BytesRef(term))) f+tvt.totalTermFreq.toInt else f)
             var term = tvt.nextOrd()
@@ -119,7 +119,7 @@ object TermVectors {
       }
     })
     is.search(q, tlc.get)
-    //Logger.debug(f"$q%s, total docs: $totalHits%,d, processed docs: $processedDocs%,d, sample probability: $sampleProbability%,.2f. Contributing docs: $contributingDocs%,d, processed terms: $processedTerms%,d, accepted terms: $acceptedTerms%,d, total accepted term freq: $totalAcceptedTermFreq%,d")
+    //logger.debug(f"$q%s, total docs: $totalHits%,d, processed docs: $processedDocs%,d, sample probability: $sampleProbability%,.2f. Contributing docs: $contributingDocs%,d, processed terms: $processedTerms%,d, accepted terms: $acceptedTerms%,d, total accepted term freq: $totalAcceptedTermFreq%,d")
     TermVectorQueryMetadata(totalHits, processedDocs, sampleProbability, contributingDocs, processedTerms, acceptedTerms, totalAcceptedTermFreq)
   }
   
