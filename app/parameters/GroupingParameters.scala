@@ -6,7 +6,7 @@ import play.api.libs.json.Json
 import play.api.mvc.{AnyContent, Request}
 import services.IndexAccess
 
-class GroupingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent], ia: IndexAccess, queryMetadata: QueryMetadata) extends ContextParameters(prefix,suffix) {
+class GroupingParameters(prefix: String = "", suffix: String = "")(implicit protected val request: Request[AnyContent], protected val ia: IndexAccess, protected val queryMetadata: QueryMetadata) extends ContextParameters(prefix,suffix) with SortParameters {
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   val fields = p.getOrElse("field", Seq.empty)
   val fieldLengths = p.getOrElse("fieldLength", Seq.empty).map(_.toInt)

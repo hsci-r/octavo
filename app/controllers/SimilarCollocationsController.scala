@@ -10,7 +10,7 @@ import org.apache.lucene.index.Term
 import org.apache.lucene.search.BooleanClause.Occur
 import org.apache.lucene.search.{BooleanQuery, TermQuery}
 import parameters._
-import play.api.Logger
+import play.api.Logging
 import play.api.libs.json.Json
 import services.{Distance, IndexAccessProvider, TermVectors}
 
@@ -19,7 +19,7 @@ import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future}
 
 @Singleton
-class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
+class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) with Logging {
   
   import TermVectors._
   
@@ -55,7 +55,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
       val (_,collocations) = getAggregateContextVectorForQuery(is, termVectorQuery, termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters, termVectorSamplingParameters.maxDocs)
-      Logger.debug("collocations: "+collocations.size)
+      logger.debug("collocations: "+collocations.size)
       val futures = new ArrayBuffer[Future[LongSet]]
       val maxDocs3 = if (intermediaryTermVectorSamplingParameters.maxDocs == -1) -1 else intermediaryTermVectorSamplingParameters.maxDocs/collocations.size
       if (maxDocs3 == 0) Right(BadRequest("i_maxDocs of "+intermediaryTermVectorSamplingParameters.maxDocs+" results in 0 samples for collocation set of size "+collocations.size)) else {
@@ -78,7 +78,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
               collocationCollocations.add(term)
             }
           })
-        Logger.debug("collocations of collocations: " + collocationCollocations.size)
+        logger.debug("collocations of collocations: " + collocationCollocations.size)
         val maxDocs4 = if (finalTermVectorSamplingParameters.maxDocs == -1) -1 else finalTermVectorSamplingParameters.maxDocs / collocationCollocations.size
         if (maxDocs4 == 0) Right(BadRequest("f_maxDocs of "+intermediaryTermVectorSamplingParameters.maxDocs+" results in 0 samples for collocation set of size "+collocationCollocations.size)) else {
           val finalLimitQuery = finalTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false, _)._2)

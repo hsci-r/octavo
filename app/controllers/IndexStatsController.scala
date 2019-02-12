@@ -39,7 +39,7 @@ class IndexStatsController @Inject()(iap: IndexAccessProvider, qc: QueryCache) e
     }
   }
   
-  def indexStats(index: String, fieldO: Option[String], from: Double, to: Double, byS: String, levelO: Option[String]) = Action { implicit request =>
+  def indexStats(index: String, fieldO: Option[String], from: BigDecimal, to: BigDecimal, byS: String, levelO: Option[String]) = Action { implicit request =>
     implicit val ia = iap(index)
     import IndexAccess._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
@@ -47,7 +47,7 @@ class IndexStatsController @Inject()(iap: IndexAccessProvider, qc: QueryCache) e
     val level = levelO.getOrElse(ia.indexMetadata.defaultLevel.id)
     val gatherFreqsPerTerm = p.get("termFreqs").exists(v => v.head=="" || v.head.toBoolean)
     val quantiles = p.get("quantiles").exists(v => v.head=="" || v.head.toBoolean)
-    val by = byS.toDouble
+    val by = BigDecimal(byS)
     implicit val qm = new QueryMetadata(Json.obj(
       "from"->from,
       "to"->to,
@@ -71,8 +71,8 @@ class IndexStatsController @Inject()(iap: IndexAccessProvider, qc: QueryCache) e
         "sumTotalTermFreq" -> ia.reader(level).getSumTotalTermFreq(field))
       if (quantiles)
         ret = ret ++ Json.obj(
-        "termFreqQuantiles"-> (from to to by by).map(q => Json.obj("quantile"->(formatString format q), "freq" -> ttft((level,field)).quantile(Math.min(q, 1.0)).toLong)),
-        "docFreqQuantiles" -> (from to to by by).map(q => Json.obj("quantile"->(formatString format q), "freq" -> dft((level,field)).quantile(Math.min(q, 1.0)).toLong))
+        "termFreqQuantiles"-> (from to to by by).map(q => Json.obj("quantile"->(formatString format q), "freq" -> ttft((level,field)).quantile(Math.min(q.doubleValue, 1.0)).toLong)),
+        "docFreqQuantiles" -> (from to to by by).map(q => Json.obj("quantile"->(formatString format q), "freq" -> dft((level,field)).quantile(Math.min(q.doubleValue, 1.0)).toLong))
         )
       if (gatherFreqsPerTerm)
         ret = ret ++ Json.obj("termFreqs"->ia.reader(level).leaves.get(0).reader.terms(field).asBytesRefAndDocFreqAndTotalTermFreqIterable.map(t => t._1.utf8ToString()->Json.obj("docFreq"->t._2,"totalTermFreq"->t._3)))

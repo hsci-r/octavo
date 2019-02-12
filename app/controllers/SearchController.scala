@@ -20,15 +20,6 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
   
   import TermVectors._
 
-  private def compare(x: JsValue, y: JsValue, ci: Boolean): Int = x match {
-    case null => if (y == null) 0 else 1
-    case _ if y == null => -1
-    case n : JsNumber => n.value.compare(y.asInstanceOf[JsNumber].value)
-    case s : JsString => if (ci) s.value.toLowerCase.compare(y.asInstanceOf[JsString].value.toLowerCase) else s.value.compare(y.asInstanceOf[JsString].value)
-    case a: JsArray => a.value.view.zipAll(y.asInstanceOf[JsArray].value,null,null).map(p => compare(p._1,p._2,ci)).find(_ != 0).getOrElse(0)
-    case _ => 0
-  }
-
   def search(index: String): Action[AnyContent] = Action { implicit request =>
     implicit val ia = iap(index)
     import ia._
@@ -85,10 +76,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       val ir = is.getIndexReader
       var total = 0
       var totalScore = 0.0
-      val mcompare : ((Int,Float,Seq[JsValue]),(Int,Float,Seq[JsValue])) => Int = if (srp.sorts.nonEmpty) (x,y) => x._3.view.zip(y._3).zip(srp.sorts).map(p => {
-        val c = compare(p._1._1,p._1._2,p._2._3)
-        if (p._2._2 == SortDirection.DESC) -c else c
-      }).find(_ != 0).getOrElse(0) else (x,y) => y._2.compare(x._2)
+      val mcompare : ((Int,Float,Seq[JsValue]),(Int,Float,Seq[JsValue])) => Int = if (srp.sorts.nonEmpty) (x,y) => srp.compare(x._3,y._3) else (x,y) => y._2.compare(x._2)
       var responseSizeHint = 0l
       val maxHeap = mutable.PriorityQueue.empty[(Int,Float,Seq[JsValue])]((x,y) => mcompare(x,y))
       val compareTermVector = if (ctv.query.isDefined)

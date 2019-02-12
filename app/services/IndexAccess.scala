@@ -36,7 +36,7 @@ import parameters.SumScaling
 import play.api.inject.ApplicationLifecycle
 import play.api.libs.json.Reads._
 import play.api.libs.json._
-import play.api.{Configuration, Logger}
+import play.api.{Configuration, Logging}
 import services.IndexAccess.scriptEngineManager
 
 import scala.collection.JavaConverters._
@@ -234,7 +234,7 @@ sealed abstract class StoredFieldType extends EnumEntry {
   def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[_]
 }
 
-object StoredFieldType extends Enum[StoredFieldType] {
+object StoredFieldType extends Enum[StoredFieldType] with Logging {
   case object NUMERICDOCVALUES extends StoredFieldType {
     def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] = {
       val dvs = DocValues.getNumeric(lr, field)
@@ -258,7 +258,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
         }
       })
       is.search(q, tlc.get)
-      Logger.debug(f"NumericDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      logger.debug(f"NumericDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
       ret
     }
   }
@@ -286,7 +286,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
         }
       })
       is.search(q, tlc.get)
-      Logger.debug(f"FloatDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      logger.debug(f"FloatDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
       ret
     }
   }
@@ -313,7 +313,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
         }
       })
       is.search(q, tlc.get)
-      Logger.debug(f"DoubleDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      logger.debug(f"DoubleDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
       ret
     }
   }
@@ -343,7 +343,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
         }
       })
       is.search(q, tlc.get)
-      Logger.debug(f"SortedDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      logger.debug(f"SortedDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
       ret
     }
   }    
@@ -383,7 +383,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
         }
       })
       is.search(q, tlc.get)
-      Logger.debug(f"SortedNumericDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      logger.debug(f"SortedNumericDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
       ret
     }        
   }
@@ -435,7 +435,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
         }
       })
       is.search(q, tlc.get)
-      Logger.debug(f"SortedSetDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      logger.debug(f"SortedSetDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
       ret
     }    
   }
@@ -466,7 +466,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
         }
       })
       is.search(q, tlc.get)
-      Logger.debug(f"SingularStoredField -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      logger.debug(f"SingularStoredField -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
       ret
     }    
   }
@@ -502,7 +502,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
         }
       })
       is.search(q, tlc.get)
-      Logger.debug(f"MultiStoredField -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      logger.debug(f"MultiStoredField -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
       ret
     }    
   }
@@ -536,7 +536,7 @@ object StoredFieldType extends Enum[StoredFieldType] {
         }
       })
       is.search(q, tlc.get)
-      Logger.debug(f"Termvector -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      logger.debug(f"Termvector -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
       ret
     }    
   }
@@ -622,11 +622,6 @@ case class IndexMetadata(
   val directoryCreator: Path => Directory = (path: Path) => indexType match {
     case "MMapDirectory" =>
       new MMapDirectory(path)        
-    case "RAMDirectory" =>
-      val id = new NIOFSDirectory(path)
-      val d = new RAMDirectory(id, new IOContext())
-      id.close()
-      d
     case "SimpleFSDirectory" => new SimpleFSDirectory(path)
     case "NIOFSDirectory" => new NIOFSDirectory(path)
     case any => throw new IllegalArgumentException("Unknown directory type "+any)
@@ -677,7 +672,7 @@ case class IndexMetadata(
   )
 }
 
-class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
+class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging {
   
   import IndexAccess._
  
@@ -719,7 +714,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
     readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
   } catch {
     case e: Exception =>
-      Logger.error("Encountered an exception reading "+path+"/indexmeta.json",e)
+      logger.error("Encountered an exception reading "+path+"/indexmeta.json",e)
       throw e
   }
 
@@ -734,7 +729,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
 
   try {
     val futures = for (level <- indexMetadata.levels) yield Future {
-      Logger.info("Initializing index at "+path+"/["+level.indices.mkString(", ")+"]")
+      logger.info("Initializing index at "+path+"/["+level.indices.mkString(", ")+"]")
       val seenFields = new collection.mutable.HashSet[String]()
       val mreaders = level.indices.map(index => {
         val directory = indexMetadata.directoryCreator(FileSystems.getDefault.getPath(path+"/"+index))
@@ -742,25 +737,25 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
         val ret = DirectoryReader.open(directory)
         for (fi <- ret.leaves().get(0).reader().getFieldInfos.iterator.asScala) {
           fi.getDocValuesType
-          if (!level.fields.contains(fi.name)) Logger.warn(s"Encountered undocumented field ${fi.name} in ${path + "/" + index}. Won't know how to handle/publicise it.")
+          if (!level.fields.contains(fi.name)) logger.warn(s"Encountered undocumented field ${fi.name} in ${path + "/" + index}. Won't know how to handle/publicise it.")
           else seenFields += fi.name
         }
         ret
       })
       val reader = if (mreaders.length == 1) mreaders.head else new ParallelCompositeReader(mreaders:_*)
-      for (field <- level.fields) if (!seenFields.contains(field._1)) Logger.warn("Documented field "+ field._1 + " not found in "+path+"/["+level.indices.mkString(", ")+"]")
+      for (field <- level.fields) if (!seenFields.contains(field._1)) logger.warn("Documented field "+ field._1 + " not found in "+path+"/["+level.indices.mkString(", ")+"]")
       readers.put(level.id, reader)
       val tfSearcher = new IndexSearcher(reader)
       tfSearcher.setSimilarity(termFrequencySimilarity)
       tfSearchers.put(level.id, tfSearcher)
       tfidfSearchers.put(level.id, new IndexSearcher(reader))
-      Logger.info("Initialized index at "+path+"/["+level.indices.mkString(", ")+"]")
+      logger.info("Initialized index at "+path+"/["+level.indices.mkString(", ")+"]")
       (level.id, reader)
     }(shortTaskExecutionContext)
     futures.foreach(Await.result(_, Duration.Inf))
   } catch {
     case e: Exception =>
-      Logger.error("Encountered an exception initializing index at "+path,e)
+      logger.error("Encountered an exception initializing index at "+path,e)
       throw e
   }
 
@@ -1027,8 +1022,8 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) {
       query = query.substring(0, firstStart.get.start) + "MAGIC:" + replacements.size + query.substring(curEnd + 1)
       firstStart = queryPartStart.findFirstMatchIn(query)
     }
-    Logger.debug(s"Query $queryIn rewritten to $query with replacements $replacements.")
-    val q = if (query.isEmpty) {
+    logger.debug(s"Query $queryIn rewritten to $query with replacements $replacements.")
+    val q = if (query.isEmpty || query == "*") {
       if (exactCounts) new NumericDocValuesWeightedMatchAllDocsQuery(indexMetadata.contentTokensField)
       else new MatchAllDocsQuery()
     } else {

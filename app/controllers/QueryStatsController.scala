@@ -36,8 +36,8 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
       val globalStats = new Stats
       var count = 0
       grpp.grouper.foreach(_.invokeMethod("setParameters", Seq(level, is, q, grpp, gatherTermFreqsPerDoc, globalStats).toArray))
-      var fieldGetters: Seq[(Int) => JsValue] = null
-      var fieldVGetters: Seq[(Int) => JsValue] = null
+      var fieldGetters: Seq[Int => JsValue] = null
+      var fieldVGetters: Seq[Int => JsValue] = null
       val groupedStats = new mutable.HashMap[JsObject,Stats]
       tlc.get.setCollector(new SimpleCollector() {
         override def needsScores: Boolean = true
@@ -105,29 +105,10 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
       })
       is.search(q, tlc.get)
       Json.obj("general"->(globalStats.toJson ++ Json.obj("totalDocs"->count)),"grouped"->groupedStats.toSeq.sortWith((x,y) => {
-        val lt = x._1.fields.filter(_._1 != "match").exists(p => {
-          val other = y._1.value(p._1)
-          if (other == null) false
-          else p._2 match {
-            case me: JsNumber => me.value < other.as[JsNumber].value
-            case me: JsString => me.value < other.as[JsString].value
-            case null => other != null
-            case _ => false
-          }
-        })
-        if (lt) true else {
-          val gt = x._1.fields.filter(_._1 != "match").exists(p => {
-            val other = y._1.value(p._1)
-            if (other == null) p._2 != null
-            else p._2 match {
-              case null => false
-              case me: JsNumber => me.value > other.as[JsNumber].value
-              case me: JsString => me.value > other.as[JsString].value
-              case _ => false
-            }
-          })
-          if (gt) false else x._2.docFreq > y._2.docFreq
-        }
+        val xf = grpp.sorts.map{ case (o,_,_) => x._1.value(o)}
+        val yf = grpp.sorts.map{ case (o,_,_) => y._1.value(o)}
+        val c = grpp.compare(xf,yf)
+        if (c>0) false else if (c<0) true else x._2.docFreq > y._2.docFreq
       }).map(p => Json.obj("fields"->p._1,"stats" -> p._2.toJson)))
     } else {
       val s = new Stats
@@ -144,7 +125,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
           if (gatherTermFreqsPerDoc) s.termFreqs += score
           s.totalTermFreq += score
         }
-        
+
       })
       s.toJson
     }

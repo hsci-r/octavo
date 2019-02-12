@@ -3,7 +3,7 @@ import com.typesafe.config._
 lazy val conf = ConfigFactory.parseFile(new File("conf/application.conf")).resolve()
 
 lazy val commonSettings = Seq(
-  scalaVersion := "2.12.7",
+  scalaVersion := "2.12.8",
   resolvers += Resolver.mavenLocal,
   developers := List(Developer(id="jiemakel",name="Eetu Mäkelä",email="eetu.makela@iki.fi",url=url("http://iki.fi/eetu.makela"))),
   organization := "io.github.jiemakel",
@@ -24,13 +24,15 @@ lazy val mainSettings = Seq(
   name := "octavo",
   libraryDependencies ++= Seq(
     guice,
-    "org.apache.lucene" % "lucene-core" % "7.1.0",
-    "org.apache.lucene" % "lucene-analyzers-common" % "7.1.0",
+    "commons-codec" % "commons-codec" % "1.11",
+    "org.apache.lucene" % "lucene-core" % "7.6.0",
+    "org.apache.lucene" % "lucene-codecs" % "7.6.0",
+    "org.apache.lucene" % "lucene-analyzers-common" % "7.6.0",
     "fi.seco" %% "lucene-morphologicalanalyzer" % "1.2.0",
     "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.1",
     "fi.seco" % "lexicalanalysis-resources-fi-core" % "1.5.16",
-    "org.apache.lucene" % "lucene-queryparser" % "7.1.0",
-    "org.apache.lucene" % "lucene-highlighter" % "7.1.0",
+    "org.apache.lucene" % "lucene-queryparser" % "7.6.0",
+    "org.apache.lucene" % "lucene-highlighter" % "7.6.0",
     "com.koloboke" % "koloboke-api-jdk8" % "1.0.0",
     "com.koloboke" % "koloboke-impl-jdk8" % "1.0.0",
     "com.beachape" %% "enumeratum" % "1.5.12",
@@ -57,9 +59,6 @@ lazy val dockerSettings = Seq(
   dockerBaseImage := "openjdk:alpine",
   dockerExposedPorts in Docker := Seq(9000, 9443)
 )
-
-import scala.xml.{Node => XmlNode, NodeSeq => XmlNodeSeq, _}
-import scala.xml.transform.{RewriteRule, RuleTransformer}
 
 lazy val assemblySettings = Seq(
   mainClass in assembly := Some("play.core.server.ProdServerStart"),

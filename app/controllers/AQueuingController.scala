@@ -3,6 +3,7 @@ package controllers
 import java.io.{File, PrintWriter, StringWriter}
 import java.util.concurrent.ConcurrentHashMap
 
+import com.google.common.net.InetAddresses
 import groovy.lang.GroovyRuntimeException
 import javax.inject.{Inject, Singleton}
 import javax.script.ScriptException
@@ -11,7 +12,7 @@ import org.apache.lucene.search.TimeLimitingCollector
 import parameters.{GeneralParameters, QueryMetadata}
 import play.api.libs.json.{JsValue, Json}
 import play.api.mvc.{AnyContent, InjectedController, Request, Result}
-import play.api.{Configuration, Environment, Logger}
+import play.api.{Configuration, Environment, Logging}
 import play.twirl.api.HtmlFormat
 import services.IndexMetadata
 
@@ -19,7 +20,7 @@ import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future, Promise}
 
 @Singleton
-class QueryCache @Inject() (env: Environment, configuration: Configuration) {
+class QueryCache @Inject() (env: Environment, configuration: Configuration) extends Logging {
   val runningQueries = new ConcurrentHashMap[String,(QueryMetadata,Future[Result])]
 
   final val version = configuration.get[String]("app.version")
@@ -31,7 +32,7 @@ class QueryCache @Inject() (env: Environment, configuration: Configuration) {
       tmpDir.mkdirs()
       for (tf <- tmpDir.listFiles()) // clean up calls that were aborted when the application shut down/crashed
         if (tf.isFile && tf.getName.startsWith("result-") && tf.getName.endsWith(".json") && tf.length == 0) {
-          Logger.warn("Cleaning up aborted call "+tf)
+          logger.warn("Cleaning up aborted call "+tf)
           tf.delete()
         }
     }
@@ -46,7 +47,7 @@ class QueryCache @Inject() (env: Environment, configuration: Configuration) {
 
 class ResponseTooBigException(val limit: Long) extends RuntimeException()
 
-abstract class AQueuingController(qc: QueryCache) extends InjectedController {
+abstract class AQueuingController(qc: QueryCache) extends InjectedController with Logging {
 
   private def getStackTraceAsString(t: Throwable) = {
     val sw = new StringWriter
@@ -62,7 +63,9 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController {
 
   protected def getOrCreateResult(method: String, index: IndexMetadata, parameters: QueryMetadata, force: Boolean, pretty: Boolean, estimate: () => Unit, call: () => Either[JsValue,Result])(implicit request: Request[AnyContent]): Result = {
     val callId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.toString
+    val startTime = System.currentTimeMillis
     val name = DigestUtils.sha256Hex(callId)
+    val remoteHost = InetAddresses.forString(request.remoteAddress).getCanonicalHostName
     val qm = Json.obj("method" -> method, "parameters" -> parameters.json, "index" -> Json.obj("name" -> index.indexName, "version" -> index.indexVersion), "octavoVersion" -> qc.version)
     if (parameters.longRunning && !parameters.key.contains(name)) {
       try {
@@ -70,7 +73,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController {
         Ok("<html><body>You are about to run the following query:<br /><pre>"+HtmlFormat.escape(Json.prettyPrint(qm))+"</pre><h1>Are you sure you want to do this? Our estimate is that you'll process some "+parameters.estimatedDocumentsToProcess+" documents and can get for example "+parameters.estimatedNumberOfResults+" results</h1>If you do wish to continue, add <pre>key="+name+"</pre> to your parameters.</pre> While running, the query status can be queried from <a href=\"../status/"+name+"\">here</a>.</body></html>").as(HTML).withHeaders("X-Octavo-Key" -> name)
       } catch {
         case cause: Throwable =>
-          Logger.error("Error processing estimate for " + callId + ": " + getStackTraceAsString(cause))
+          logger.error(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Error processing estimate for " + callId + ": " + getStackTraceAsString(cause))
           cause match {
             case tlcause: TimeLimitingCollector.TimeExceededException =>
               BadRequest(s"Query estimate timeout ${tlcause.getTimeAllowed / 1000}s exceeded. This is probably due to a bad query, but if you want still want to continue, increase the etimeout parameter.")
@@ -83,7 +86,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController {
       if (force) tf.delete()
       val future =
         if (tf.createNewFile()) {
-          Logger.info("Running call " + callId)
+          logger.info(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Running call " + callId)
           writeFile(tf2, callId)
           val promise = Promise[Result]
           qc.runningQueries.put(name, (parameters, promise.future))
@@ -106,7 +109,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController {
             qc.runningQueries.remove(name)
           } catch {
             case cause: Throwable =>
-              Logger.error("Error processing " + callId + ": " + getStackTraceAsString(cause))
+              logger.error(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Error processing " + callId + ": " + getStackTraceAsString(cause))
               tf.delete()
               qc.runningQueries.remove(name)
               cause match {
@@ -127,16 +130,20 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController {
         } else
           Option(qc.runningQueries.get(name)) match {
             case Some(f) =>
-              Logger.info("Waiting for result from prior call for " + callId)
+              logger.info(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Waiting for result from prior call for " + callId)
               f._2
             case None =>
               import scala.concurrent.ExecutionContext.Implicits.global
               if (tf.exists()) {
-                Logger.info("Reusing result from prior call for " + callId)
+                logger.info(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Reusing result from prior call for " + callId)
                 Future(Ok.sendFile(tf).as(JSON))
               } else Future(InternalServerError("\"An error has occurred, please try again.\""))
           }
-      Await.result(future, Duration.Inf)
+      val result = Await.result(future, Duration.Inf)
+      val endTime = System.currentTimeMillis
+      val requestTime = endTime - startTime
+      logger.info(f"$remoteHost%s %% [${name.substring(0,6).toUpperCase}] - After $requestTime%,dms, returning ${result.body.contentLength.map(""+_).getOrElse("unknown")}%s bytes with status ${result.header.status}%s for call $callId%s.")
+      result
     }
   }
 

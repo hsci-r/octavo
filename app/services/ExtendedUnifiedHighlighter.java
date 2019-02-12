@@ -14,6 +14,7 @@ import org.apache.lucene.util.automaton.CharacterRunAutomaton;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.function.Predicate;
 
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource;
 
@@ -65,11 +66,12 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
     @Override
     protected FieldHighlighter getFieldHighlighter(String field, Query query, Set<Term> allTerms, int maxPassages) {
         try {
-            searcher.createNormalizedWeight(query, false).extractTerms(allTerms); // needs to be redone here because superclass uses an empty indexsearcher, which doesn't work with complex phrase queries.
+            searcher.createWeight(searcher.rewrite(query), false, 1.0f).extractTerms(allTerms); // needs to be redone here because superclass uses an empty indexsearcher, which doesn't work with complex phrase queries.
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        BytesRef[] terms = filterExtractedTerms(getFieldMatcher(field), allTerms);
+        Predicate<String> fieldMatcher = getFieldMatcher(field);
+        BytesRef[] terms = filterExtractedTerms(fieldMatcher, allTerms);
         Set<HighlightFlag> highlightFlags = getFlags(field);
         PhraseHelper phraseHelper = getPhraseHelper(field, query, highlightFlags);
         CharacterRunAutomaton[] automata = getAutomata(field, query, highlightFlags);
@@ -83,8 +85,9 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
                 if (offsetSource2 == OffsetSource.ANALYSIS) offsetSource = OffsetSource.ANALYSIS;
             }
         }
+        UHComponents components = new UHComponents(field, fieldMatcher, query, terms, phraseHelper, automata, highlightFlags);
         return new ExtendedFieldHighlighter(field,
-                getOffsetStrategy(offsetSource, field, terms, phraseHelper, automata, highlightFlags),
+                getOffsetStrategy(offsetSource, components),
                 new SplittingBreakIterator(getBreakIterator(field), UnifiedHighlighter.MULTIVAL_SEP_CHAR),
                 getScorer(field),
                 maxPassages,
@@ -94,6 +97,7 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
 
     private boolean hack = false;
 
+    @Override
     protected OffsetSource getOffsetSource(String field) {
         if (hack) return OffsetSource.POSTINGS;
         FieldInfo fieldInfo = getFieldInfo(field);
@@ -108,6 +112,7 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
         return OffsetSource.ANALYSIS;
     }
 
+    @Override
     protected Collection<Query> preSpanQueryRewrite(Query query) {
         if (query == null) return null;
         else if ("org.apache.lucene.queryparser.complexPhrase.ComplexPhraseQueryParser.ComplexPhraseQuery".equals(query.getClass().getCanonicalName())) try {
