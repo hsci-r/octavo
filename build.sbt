@@ -46,7 +46,7 @@ lazy val mainSettings = Seq(
     "org.jetbrains.kotlin" % "kotlin-stdlib" % "1.2.60" % "runtime" exclude("org.jetbrains","annotations"),
     "mdsj" % "mdsj" % "0.2",
     "org.nd4j" % "nd4j-native-platform" % "0.8.0",
-    "org.deeplearning4j" % "deeplearning4j-core" % "0.7.2",
+    "org.deeplearning4j" % "deeplearning4j-core" % "1.0.0-beta3",
     "com.jujutsu.tsne" % "tsne" % "2.3.0",
     "org.jetbrains.xodus" % "xodus-environment" % "1.2.3" exclude("org.jetbrains","annotations")
   )
