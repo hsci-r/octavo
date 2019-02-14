@@ -11,7 +11,7 @@ import org.apache.lucene.search.BooleanClause.Occur
 import org.apache.lucene.search.{BooleanQuery, TermQuery}
 import parameters._
 import play.api.Logging
-import play.api.libs.json.Json
+import play.api.libs.json.{JsObject, Json}
 import services.{Distance, IndexAccessProvider, TermVectors}
 
 import scala.collection.mutable.ArrayBuffer
@@ -26,7 +26,13 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
   // get terms with similar collocations for a term - to find out what other words are talked about in a similar manner, for topic definition
   def similarCollocations(index: String) = Action { implicit request =>
     implicit val ia = iap(index)
-    implicit val qm = new QueryMetadata()
+    implicit val qm = new QueryMetadata() {
+      var phase = ""
+      var collocations = -1
+      var secondOrderCollocations = -1
+      var thirdOrderCollocations = -1
+      override def status: JsObject = super.status ++ Json.obj("phase"->phase, "collocations"->collocations,"secondOrderCollocations"->secondOrderCollocations,"thirdOrderCollocations"->thirdOrderCollocations)
+    }
     import ia._
     val gp = new GeneralParameters
     implicit val iec = gp.executionContext
@@ -51,11 +57,14 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
     getOrCreateResult("similarCollocations",ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       // FIXME
     }, () => {
+      qm.phase="termVectors"
       val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(exactCounts = false, termVectorQueryParameters.requiredQuery)
       val is = searcher(qlevel, SumScaling.ABSOLUTE)
       val ir = is.getIndexReader
       val (_,collocations) = getAggregateContextVectorForQuery(is, termVectorQuery, termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters, termVectorSamplingParameters.maxDocs)
-      logger.debug("collocations: "+collocations.size)
+      qm.collocations = collocations.size
+      logger.debug("Collocations: "+collocations.size)
+      qm.phase = "secondOrderCollocations"
       val futures = new ArrayBuffer[Future[LongSet]]
       val maxDocs3 = if (intermediaryTermVectorSamplingParameters.maxDocs == -1) -1 else intermediaryTermVectorSamplingParameters.maxDocs/collocations.size
       if (maxDocs3 == 0) Right(BadRequest("i_maxDocs of "+intermediaryTermVectorSamplingParameters.maxDocs+" results in 0 samples for collocation set of size "+collocations.size)) else {
@@ -78,7 +87,10 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
               collocationCollocations.add(term)
             }
           })
-        logger.debug("collocations of collocations: " + collocationCollocations.size)
+        logger.info("Collocations of collocations: " + collocationCollocations.size)
+        qm.secondOrderCollocations = collocationCollocations.size
+        qm.phase = "thirdOrderCollocations"
+        qm.thirdOrderCollocations = 0
         val maxDocs4 = if (finalTermVectorSamplingParameters.maxDocs == -1) -1 else finalTermVectorSamplingParameters.maxDocs / collocationCollocations.size
         if (maxDocs4 == 0) Right(BadRequest("f_maxDocs of "+intermediaryTermVectorSamplingParameters.maxDocs+" results in 0 samples for collocation set of size "+collocationCollocations.size)) else {
           val finalLimitQuery = finalTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false, _)._2)
@@ -86,6 +98,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
             val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField, term)), Occur.FILTER)
             for (q <- finalLimitQuery) bqb.add(q, Occur.FILTER)
             val (_, tv) = getAggregateContextVectorForQuery(is, bqb.build, finalTermVectorLocalProcessingParameters, Seq(term), finalTermVectorAggregateProcessingParameters, maxDocs4)
+            qm.thirdOrderCollocations += 1
             if (tv.isEmpty) (term, 1.0, 1.0, 1.0, 1.0, 1.0) else (
               term,
               1.0-Distance.cosineSimilarity(collocations, tv, finalTermVectorDistanceCalculationParameters.filtering),
