@@ -1,30 +1,30 @@
 package parameters
 
-import org.apache.lucene.index.IndexReader
+import org.apache.lucene.index.TermsEnum
 import services.IndexAccess
 
 trait SumScaling {
-  def apply(ir: IndexReader, term: Long, freq: Int)(implicit ia: IndexAccess): Double
+  def apply(it: TermsEnum, term: Long, freq: Int)(implicit ia: IndexAccess): Double
 }
 
 object SumScaling {
   
   case object ABSOLUTE extends SumScaling {
-    def apply(ir: IndexReader, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble
+    def apply(it: TermsEnum, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble
   }
   case object DF extends SumScaling {
-    def apply(ir: IndexReader, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble/ia.docFreq(ir,term)
+    def apply(it: TermsEnum, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble/ia.docFreq(it,term)
   }
   case object TTF extends SumScaling {
-    def apply(ir: IndexReader, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble/ia.totalTermFreq(ir, term)
+    def apply(it: TermsEnum, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble/ia.totalTermFreq(it, term)
   }
   
   def STTF(smoothing: Double): SumScaling = new SumScaling {
-    def apply(ir: IndexReader, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble/(ia.totalTermFreq(ir, term)+smoothing)
+    def apply(it: TermsEnum, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble/(ia.totalTermFreq(it, term)+smoothing)
   }
 
   def SDF(smoothing: Double): SumScaling = new SumScaling {
-    def apply(ir: IndexReader, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble/(ia.docFreq(ir,term)+smoothing)
+    def apply(it: TermsEnum, term: Long, freq: Int)(implicit ia: IndexAccess) = freq.toDouble/(ia.docFreq(it,term)+smoothing)
   }
   
   def get(name: String, smoothing: Double): SumScaling = {

@@ -11,7 +11,7 @@ import scala.concurrent.duration.Duration
 class QueryStatusController @Inject()(qc: QueryCache) extends InjectedController {
 
   def result(key: String) = Action {
-    val (tf,_) = qc.files(key)
+    val (_,tf) = qc.files(key)
     if (!tf.exists()) NotFound("\"No query with this key found either running or completed.\"").as(HTML)
     else Option(qc.runningQueries.get(key)).map(p => Await.result(p._2, Duration.Inf)).getOrElse({
       import scala.concurrent.ExecutionContext.Implicits.global

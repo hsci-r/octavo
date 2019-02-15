@@ -894,20 +894,28 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging
   private val queryPartStart = "(?<!\\\\)<".r
   private val queryPartEnd = "(?<!\\\\)>".r
 
-  def docFreq(ir: IndexReader, term: Long): Int = {
-    val it = ir.leaves.get(0).reader.terms(indexMetadata.contentField).iterator
+  val termsEnums: Map[String,ThreadLocal[TermsEnum]] = indexMetadata.levels.map(level => (level.id, new ThreadLocal[TermsEnum] {
+
+    override def initialValue(): TermsEnum = reader(level.id).leaves.get(0).reader.terms(indexMetadata.contentField).iterator
+
+  })).toMap
+
+  def docFreq(it: TermsEnum, term: Long): Int = {
     it.seekExact(term)
     it.docFreq
   }
 
-  def totalTermFreq(ir: IndexReader, term: Long): Long = {
-    val it = ir.leaves.get(0).reader.terms(indexMetadata.contentField).iterator
+  def totalTermFreq(it: TermsEnum, term: Long): Long = {
     it.seekExact(term)
     it.totalTermFreq
   }
 
-  def termOrdToTerm(ir: IndexReader, term: Long): String = {
-    val it = ir.leaves.get(0).reader.terms(indexMetadata.contentField).iterator
+  def termOrdToBytesRef(it: TermsEnum, term: Long): BytesRef = {
+    it.seekExact(term)
+    BytesRef.deepCopyOf(it.term)
+  }
+
+  def termOrdToTerm(it: TermsEnum, term: Long): String = {
     it.seekExact(term)
     it.term.utf8ToString
   }

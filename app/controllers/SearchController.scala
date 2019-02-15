@@ -73,14 +73,15 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         if (srp.offsetData && ql.fields.contains("startOffset") && !f.contains("startOffset")) f :+ "startOffset" else f
       }
       val is = searcher(queryLevel,srp.sumScaling)
-      val ir = is.getIndexReader
+      val ir = reader(queryLevel)
+      val it = termsEnums(queryLevel).get
       var total = 0
       var totalScore = 0.0
       val mcompare : ((Int,Float,Seq[JsValue]),(Int,Float,Seq[JsValue])) => Int = if (srp.sorts.nonEmpty) (x,y) => srp.compare(x._3,y._3) else (x,y) => y._2.compare(x._2)
       var responseSizeHint = 0l
       val maxHeap = mutable.PriorityQueue.empty[(Int,Float,Seq[JsValue])]((x,y) => mcompare(x,y))
       val compareTermVector = if (ctv.query.isDefined)
-        getAggregateContextVectorForQuery(is, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermsFromQuery(query),ctvpa, ctvs.maxDocs) else null
+        getAggregateContextVectorForQuery(is, it, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermsFromQuery(query),ctvpa, ctvs.maxDocs) else null
       val we = if (srp.returnExplanations)
         query.createWeight(is, true, 1.0f)
       else null
@@ -96,12 +97,12 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
           }
           fields += (field -> value)
         }
-        val cv = if (termVectors || ctv.query.isDefined) getTermVectorForDocument(ir, doc, rtvpl, rtvpa) else null
+        val cv = if (termVectors || ctv.query.isDefined) getTermVectorForDocument(ir, it, doc, rtvpl, rtvpa) else null
         if (ctv.query.isDefined)
           fields += ("distance" -> Json.toJson(ctvdp.distance(cv, compareTermVector._2)))
         if (srp.returnExplanations)
           fields += ("explanation" -> Json.toJson(we.explain(context, doc).toString))
-        if (termVectors && rtvdr.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(ir, limitTermVector(cv, rtvl)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
+        if (termVectors && rtvdr.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(it, limitTermVector(cv, rtvl)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
         (fields, if (rtvdr.dimensions >0) cv else null)
       }
       val docFields = HashIntObjMaps.getDefaultFactory[collection.Map[String,JsValue]]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[collection.Map[String,JsValue]]

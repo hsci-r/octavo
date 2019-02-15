@@ -82,12 +82,12 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
           }
       }
     } else {
-      val (tf,tf2) = qc.files(name)
+      val (pf,tf) = qc.files(name)
       if (force) tf.delete()
       val future =
         if (tf.createNewFile()) {
-          logger.info(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Running call " + callId)
-          writeFile(tf2, callId)
+          logger.info(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Running call " + callId + " ("+name+")")
+          writeFile(pf, callId)
           val promise = Promise[Result]
           qc.runningQueries.put(name, (parameters, promise.future))
           val startTime = System.currentTimeMillis
@@ -130,19 +130,19 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
         } else
           Option(qc.runningQueries.get(name)) match {
             case Some(f) =>
-              logger.info(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Waiting for result from prior call for " + callId)
+              logger.info(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Waiting for result from prior call for " + callId + " ("+name+")")
               f._2
             case None =>
               import scala.concurrent.ExecutionContext.Implicits.global
               if (tf.exists()) {
-                logger.info(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Reusing result from prior call for " + callId)
+                logger.info(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Reusing result from prior call for " + callId + " ("+name+")")
                 Future(Ok.sendFile(tf).as(JSON))
               } else Future(InternalServerError("\"An error has occurred, please try again.\""))
           }
       val result = Await.result(future, Duration.Inf)
       val endTime = System.currentTimeMillis
       val requestTime = endTime - startTime
-      logger.info(f"$remoteHost%s %% [${name.substring(0,6).toUpperCase}] - After $requestTime%,dms, returning ${result.body.contentLength.map(""+_).getOrElse("unknown")}%s bytes with status ${result.header.status}%s for call $callId%s.")
+      logger.info(f"$remoteHost%s %% [${name.substring(0,6).toUpperCase}] - After $requestTime%,dms, returning ${result.body.contentLength.map(""+_).getOrElse("unknown")}%s bytes with status ${result.header.status}%s for call $callId%s ($name%s).")
       result
     }
   }

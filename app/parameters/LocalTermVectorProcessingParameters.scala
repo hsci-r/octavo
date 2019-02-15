@@ -1,7 +1,7 @@
 package parameters
 
 import groovy.lang.{Binding, GroovyClassLoader, Script}
-import org.apache.lucene.index.IndexReader
+import org.apache.lucene.index.TermsEnum
 import org.codehaus.groovy.runtime.InvokerHelper
 import play.api.libs.json.Json
 import play.api.mvc.{AnyContent, Request}
@@ -26,9 +26,9 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
   private val maxTotalTermFreqOpt = p.get(prefix+"maxTotalTermFreq"+suffix).map(_.head.toLong)
   /** maximum total term frequency of term to be added to the term vector */
   val maxTotalTermFreq: Long = maxTotalTermFreqOpt.getOrElse(Long.MaxValue)
-  private def totalTermFreqMatches(ir: IndexReader, term: Long): Boolean = {
+  private def totalTermFreqMatches(it: TermsEnum, term: Long): Boolean = {
     if (minTotalTermFreq == 1 && maxTotalTermFreq==Long.MaxValue) return true
-    val ttfr = totalTermFreq(ir, term)
+    val ttfr = totalTermFreq(it, term)
     ttfr>=minTotalTermFreq && ttfr<=maxTotalTermFreq
   }
   private val minDocFreqOpt = p.get(prefix+"minDocFreq"+suffix).map(_.head.toInt)
@@ -37,9 +37,9 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
   private val maxDocFreqOpt = p.get(prefix+"maxDocFreq"+suffix).map(_.head.toInt)
   /** maximum total document frequency of term to be added to the term vector */
   val maxDocFreq: Int = maxDocFreqOpt.getOrElse(Int.MaxValue)
-  private def docFreqMatches(ir: IndexReader, term: Long): Boolean = {
+  private def docFreqMatches(it: TermsEnum, term: Long): Boolean = {
     if (minDocFreq == 1 && maxDocFreq==Int.MaxValue) return true
-    val dfr = docFreq(ir, term)
+    val dfr = docFreq(it, term)
     dfr>=minDocFreq && dfr<=maxDocFreq
   }
   private val minTermLengthOpt = p.get(prefix+"minTermLength"+suffix).map(_.head.toInt)
@@ -48,9 +48,9 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
   private val maxTermLengthOpt = p.get(prefix+"maxTermLength"+suffix).map(_.head.toInt)
   /** maximum length of term to be included in the term vector */
   val maxTermLength: Int = maxTermLengthOpt.getOrElse(Int.MaxValue)
-  private def termLengthMatches(ir: IndexReader, term: Long): Boolean = {
+  private def termLengthMatches(it: TermsEnum, term: Long): Boolean = {
     if (minTermLength == 1 && maxTermLength == Int.MaxValue) return true
-    val terms = termOrdToTerm(ir, term)
+    val terms = termOrdToTerm(it, term)
     terms.length>=minTermLength && terms.length<=maxTermLength
   }
   private val termFilterAsStringOpt = p.get(prefix+"termFilter"+suffix).map(_.head)
@@ -69,10 +69,10 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
       override def initialValue(): Script = InvokerHelper.createScript(script, new Binding())
     }
   })
-  final def matches(ir: IndexReader, term: Long, freq: Long): Boolean =
-    freqInDocMatches(freq) && docFreqMatches(ir,term) && totalTermFreqMatches(ir,term) && termLengthMatches(ir,term) && termFilter.forall(stl => {
+  final def matches(it: TermsEnum, term: Long, freq: Long): Boolean =
+    freqInDocMatches(freq) && docFreqMatches(it,term) && totalTermFreqMatches(it,term) && termLengthMatches(it,term) && termFilter.forall(stl => {
       val s = stl.get
-      s.getBinding.setProperty("term", termOrdToTerm(ir, term))
+      s.getBinding.setProperty("term", termOrdToTerm(it, term))
       s.getBinding.setProperty("freq", freq)
       s.run().asInstanceOf[Boolean]
     })
