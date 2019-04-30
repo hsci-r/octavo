@@ -7,6 +7,7 @@ import org.apache.lucene.index.Term;
 import org.apache.lucene.queryparser.complexPhrase.ComplexPhraseQueryParser;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
+import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.search.highlight.WeightedSpanTerm;
 import org.apache.lucene.search.uhighlight.*;
 import org.apache.lucene.util.BytesRef;
@@ -66,7 +67,7 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
     @Override
     protected FieldHighlighter getFieldHighlighter(String field, Query query, Set<Term> allTerms, int maxPassages) {
         try {
-            searcher.createWeight(searcher.rewrite(query), false, 1.0f).extractTerms(allTerms); // needs to be redone here because superclass uses an empty indexsearcher, which doesn't work with complex phrase queries.
+            searcher.createWeight(searcher.rewrite(query), ScoreMode.COMPLETE_NO_SCORES, 1.0f).extractTerms(allTerms); // needs to be redone here because superclass uses an empty indexsearcher, which doesn't work with complex phrase queries.
         } catch (IOException e) {
             throw new RuntimeException(e);
         }

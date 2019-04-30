@@ -5,7 +5,7 @@ import java.text.BreakIterator
 import com.koloboke.collect.map.hash.HashIntObjMaps
 import javax.inject._
 import org.apache.lucene.index.LeafReaderContext
-import org.apache.lucene.search.{Scorer, SimpleCollector, TotalHitCountCollector}
+import org.apache.lucene.search.{ScoreMode, SimpleCollector, TotalHitCountCollector}
 import parameters._
 import play.api.libs.json.{JsValue, Json}
 import play.api.mvc.{Action, AnyContent}
@@ -52,14 +52,14 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
       val (qlevel,query) = buildFinalQueryRunningSubQueries(exactCounts = false, qp.requiredQuery)
       val hc = new TotalHitCountCollector()
       gp.etlc.setCollector(hc)
-      searcher(qlevel, SumScaling.ABSOLUTE).search(query, gp.etlc)
+      searcher(qlevel, QueryScoring.NONE).search(query, gp.etlc)
       qm.estimatedDocumentsToProcess = hc.getTotalHits
       qm.estimatedNumberOfResults = Math.min(hc.getTotalHits, srp.limit)
     }, () => {
       val (queryLevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, qp.requiredQuery)
       // Logger.debug(f"Final query: $query%s, level: $queryLevel%s")
       val ql = ia.indexMetadata.levelMap(queryLevel)
-      val is = searcher(queryLevel,SumScaling.TTF)
+      val is = searcher(queryLevel,QueryScoring.TF)
       val ir = is.getIndexReader
       var total = 0
       val maxHeap = mutable.PriorityQueue.empty[KWICMatch]((x: KWICMatch, y: KWICMatch) => x.compare(y,srp.sortContextDirections,srp.sortContextCaseSensitivities))
@@ -72,8 +72,7 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
       val docFields = HashIntObjMaps.getDefaultFactory[collection.Map[String,JsValue]]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[collection.Map[String,JsValue]]
       val collector = new SimpleCollector() {
 
-        override def needsScores: Boolean = false
-        var scorer: Scorer = _
+        override def scoreMode = ScoreMode.COMPLETE
         var context: LeafReaderContext = _
 
         var getters: Map[String,Int => Option[JsValue]] = _
@@ -82,8 +81,6 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
         val highlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField))
         val sbi = srp.sortContextLevel(0,0)
 
-
-        override def setScorer(scorer: Scorer) {this.scorer=scorer}
 
         override def collect(ldoc: Int) {
           qm.documentsProcessed += 1

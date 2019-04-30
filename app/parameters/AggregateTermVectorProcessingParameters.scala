@@ -1,9 +1,11 @@
 package parameters
 
+import org.apache.lucene.index.TermsEnum
 import play.api.libs.json.{JsObject, Json}
 import play.api.mvc.{AnyContent, Request}
+import services.IndexAccess
 
-class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent], queryMetadata: QueryMetadata) {
+class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent], queryMetadata: QueryMetadata, ia: IndexAccess) {
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   private val smoothingOpt = p.get(prefix+"smoothing"+suffix).map(_.head.toDouble)
   /** Laplace smoothing to use */
@@ -11,7 +13,7 @@ class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: Strin
   private val sumScalingStringOpt = p.get(prefix+"sumScaling"+suffix).map(v => v.head.toUpperCase)
   private val sumScalingString = sumScalingStringOpt.getOrElse("TTF")
   /** sum scaling to use */
-  val sumScaling = SumScaling.get(sumScalingString, smoothing)
+  def sumScaling(te: TermsEnum, queryDocFreq: Long, totalDocFreq: Long) = SumScaling.get(sumScalingString, te, smoothing, queryDocFreq, totalDocFreq)
   private val minSumFreqOpt = p.get(prefix+"minSumFreq"+suffix).map(_.head.toInt)
   /** minimum sum frequency of term to filter resulting term vector */
   val minSumFreq: Int = minSumFreqOpt.getOrElse(1)

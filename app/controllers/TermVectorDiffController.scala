@@ -6,7 +6,7 @@ import com.koloboke.collect.set.hash.HashLongSets
 import javax.inject.{Inject, Singleton}
 import parameters._
 import play.api.libs.json.{JsNull, Json}
-import services.{Distance, IndexAccessProvider, TermVectors}
+import services.{Distance, IndexAccessProvider, TermVectors, IndexAccess}
 
 import scala.collection.mutable
 import scala.concurrent.duration.Duration
@@ -19,6 +19,7 @@ class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, qc:
   
     // calculate distance between two term vectors across a metadata variable (use to create e.g. graphs of term meaning changes)
   def termVectorDiff(index: String) = Action { implicit request =>
+    import IndexAccess._
     implicit val ia = iap(index)
     import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
@@ -39,8 +40,8 @@ class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, qc:
     }, () => {
       val (qlevel1,termVector1Query) = buildFinalQueryRunningSubQueries(exactCounts = false, tvq1.requiredQuery)
       val (qlevel2,termVector2Query) = buildFinalQueryRunningSubQueries(exactCounts = false, tvq2.requiredQuery)
-      val tvm1f = Future { getGroupedAggregateContextVectorsForQuery(ia.indexMetadata.levelMap(qlevel1),searcher(qlevel1, SumScaling.ABSOLUTE), termsEnums(qlevel1).get, termVector1Query,tvpl,extractContentTermsFromQuery(termVector1Query),grpp,tvpa,if (tvs.maxDocs == -1) -1 else tvs.maxDocs/2) }
-      val tvm2f = Future { getGroupedAggregateContextVectorsForQuery(ia.indexMetadata.levelMap(qlevel2),searcher(qlevel2, SumScaling.ABSOLUTE), termsEnums(qlevel2).get, termVector2Query,tvpl,extractContentTermsFromQuery(termVector2Query),grpp,tvpa,if (tvs.maxDocs == -1) -1 else tvs.maxDocs/2) }
+      val tvm1f = Future { getGroupedAggregateContextVectorsForQuery(ia.indexMetadata.levelMap(qlevel1),searcher(qlevel1, QueryScoring.NONE), termsEnums(qlevel1).get, termVector1Query,tvpl,extractContentTermBytesRefsFromQuery(termVector1Query),grpp,tvpa,if (tvs.maxDocs == -1) -1 else tvs.maxDocs/2) }
+      val tvm2f = Future { getGroupedAggregateContextVectorsForQuery(ia.indexMetadata.levelMap(qlevel2),searcher(qlevel2, QueryScoring.NONE), termsEnums(qlevel2).get, termVector2Query,tvpl,extractContentTermBytesRefsFromQuery(termVector2Query),grpp,tvpa,if (tvs.maxDocs == -1) -1 else tvs.maxDocs/2) }
       val (_,tvm1) = Await.result(tvm1f, Duration.Inf)
       val (_,tvm2) = Await.result(tvm2f, Duration.Inf)
       val obj = (tvm1.keySet ++ tvm2.keySet).map(key => {
@@ -91,10 +92,10 @@ class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, qc:
             }
           })
           val it = termsEnums(qlevel1).get
-          map = map + ("mostDifferentTerms"->Json.toJson(maxHeap.map(p => (termOrdToTerm(it, p._1),p._2)).toMap))
-          map = map + ("mostDistinctiveTermsForTerm1"->Json.toJson(maxHeap1.map(p => (termOrdToTerm(it, p._1),p._2)).toMap))
-          map = map + ("mostDistinctiveTermsForTerm2"->Json.toJson(maxHeap2.map(p => (termOrdToTerm(it, p._1),p._2)).toMap))
-          map = map + ("mostSimilarTerms"->Json.toJson(minHeap.map(p => (termOrdToTerm(it, p._1),p._2)).toMap))
+          map = map + ("mostDifferentTerms"->Json.toJson(maxHeap.map(p => (termOrdToString(it, p._1),p._2)).toMap))
+          map = map + ("mostDistinctiveTermsForTerm1"->Json.toJson(maxHeap1.map(p => (termOrdToString(it, p._1),p._2)).toMap))
+          map = map + ("mostDistinctiveTermsForTerm2"->Json.toJson(maxHeap2.map(p => (termOrdToString(it, p._1),p._2)).toMap))
+          map = map + ("mostSimilarTerms"->Json.toJson(minHeap.map(p => (termOrdToString(it, p._1),p._2)).toMap))
         }
         map
       })

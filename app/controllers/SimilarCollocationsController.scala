@@ -9,7 +9,7 @@ import org.apache.lucene.util.BytesRef
 import parameters._
 import play.api.Logging
 import play.api.libs.json.{JsObject, Json}
-import services.{Distance, IndexAccessProvider, TermVectors}
+import services.{Distance, IndexAccess, IndexAccessProvider, TermVectors}
 
 @Singleton
 class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) with Logging {
@@ -26,6 +26,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
       var thirdOrderCollocations = -1
       override def status: JsObject = super.status ++ Json.obj("phase"->phase, "collocations"->collocations,"secondOrderCollocations"->secondOrderCollocations,"thirdOrderCollocations"->thirdOrderCollocations)
     }
+    import IndexAccess._
     import ia._
     val gp = new GeneralParameters
     implicit val iec = gp.executionContext
@@ -52,9 +53,9 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
     }, () => {
       qm.phase="termVectors"
       val (qlevel,termVectorQuery) = buildFinalQueryRunningSubQueries(exactCounts = false, termVectorQueryParameters.requiredQuery)
-      val is = searcher(qlevel, SumScaling.ABSOLUTE)
+      val is = searcher(qlevel, QueryScoring.NONE)
       val it = termsEnums(qlevel).get
-      val (cmd,collocations) = getAggregateContextVectorForQuery(is, it, termVectorQuery, termVectorLocalProcessingParameters,extractContentTermsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters, termVectorSamplingParameters.maxDocs)
+      val (cmd,collocations) = getAggregateContextVectorForQuery(is, it, termVectorQuery, termVectorLocalProcessingParameters,extractContentTermBytesRefsFromQuery(termVectorQuery),termVectorAggregateProcessingParameters, termVectorSamplingParameters.maxDocs)
       qm.collocations = collocations.size
       logger.debug("Collocations: "+collocations.size)
       qm.phase = "secondOrderCollocations"
@@ -80,7 +81,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
         var tcmd: TermVectorQueryMetadata = null
         if (maxDocs4 == 0) Right(BadRequest("f_maxDocs of "+finalTermVectorSamplingParameters.maxDocs+" results in 0 samples for collocation set of size "+collocationCollocations.size)) else {
           val finalLimitQuery = finalTermVectorLimitQueryParameters.query.map(buildFinalQueryRunningSubQueries(false, _)._2)
-          val thirdOrderCollocations = for (term <- toParallel(termOrdsToTerms(it, collocationCollocations))) yield {
+          val thirdOrderCollocations = for (term <- toParallel(termOrdsToBytesRefs(it, collocationCollocations))) yield {
             val it2 = termsEnums(qlevel).get
             val bqb = new BooleanQuery.Builder().add(new TermQuery(new Term(indexMetadata.contentField, term)), Occur.FILTER)
             for (q <- finalLimitQuery) bqb.add(q, Occur.FILTER)
@@ -96,14 +97,14 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
               Distance.manhattanDistance(collocations, tv, finalTermVectorDistanceCalculationParameters.filtering)
             )
           }
-          val ordering = new Ordering[(String, Double)] {
-            override def compare(x: (String, Double), y: (String, Double)) = x._2 compare y._2
+          val ordering = new Ordering[(BytesRef, Double)] {
+            override def compare(x: (BytesRef, Double), y: (BytesRef, Double)) = x._2 compare y._2
           }
-          val cmaxHeap = collection.mutable.PriorityQueue.empty[(String, Double)](ordering)
-          val dmaxHeap = collection.mutable.PriorityQueue.empty[(String, Double)](ordering)
-          val jmaxHeap = collection.mutable.PriorityQueue.empty[(String, Double)](ordering)
-          val emaxHeap = collection.mutable.PriorityQueue.empty[(String, Double)](ordering)
-          val mmaxHeap = collection.mutable.PriorityQueue.empty[(String, Double)](ordering)
+          val cmaxHeap = collection.mutable.PriorityQueue.empty[(BytesRef, Double)](ordering)
+          val dmaxHeap = collection.mutable.PriorityQueue.empty[(BytesRef, Double)](ordering)
+          val jmaxHeap = collection.mutable.PriorityQueue.empty[(BytesRef, Double)](ordering)
+          val emaxHeap = collection.mutable.PriorityQueue.empty[(BytesRef, Double)](ordering)
+          val mmaxHeap = collection.mutable.PriorityQueue.empty[(BytesRef, Double)](ordering)
           for ((term,cscore,dscore,jscore,escore,mscore) <- thirdOrderCollocations.seq) {
             if (limitParameters.limit == -1 || cmaxHeap.size <= limitParameters.limit) {
               cmaxHeap += ((term, cscore))
@@ -140,11 +141,11 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
               "secondOrderCollocations" -> (scmd.toJson ++ Json.obj("size"->qm.secondOrderCollocations)),
               "thirdOrderCollocations" -> tcmd.toJson
              ),
-           "cosine" -> cmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1,"distance"->p._2)),
-            "dice" -> dmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1,"distance"->p._2)),
-            "jaccard"-> jmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1,"distance"->p._2)),
-            "euclidean" -> emaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1,"distance"->p._2)),
-            "manhattan" -> mmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1,"distance"->p._2))
+           "cosine" -> cmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2)),
+            "dice" -> dmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2)),
+            "jaccard"-> jmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2)),
+            "euclidean" -> emaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2)),
+            "manhattan" -> mmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2))
           ))
         }
       }

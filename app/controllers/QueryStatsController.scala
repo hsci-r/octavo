@@ -40,12 +40,11 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
       var fieldVGetters: Seq[Int => JsValue] = null
       val groupedStats = new mutable.HashMap[JsObject,Stats]
       tlc.get.setCollector(new SimpleCollector() {
-        override def needsScores: Boolean = true
+        override def scoreMode = ScoreMode.COMPLETE
 
-        override def setScorer(scorer: Scorer) { this.scorer = scorer }
+        override def setScorer(scorer: Scorable) { this.scorer = scorer }
 
-        var scorer: Scorer = _
-
+        var scorer: Scorable = _
 
         override def collect(doc: Int): Unit = {
           qm.documentsProcessed += 1
@@ -113,11 +112,11 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
     } else {
       val s = new Stats
       is.search(q, new SimpleCollector() {
-        override def needsScores: Boolean = true
+        override def scoreMode = ScoreMode.COMPLETE
         
-        override def setScorer(scorer: Scorer) { this.scorer = scorer }
+        override def setScorer(scorer: Scorable) { this.scorer = scorer }
   
-        var scorer: Scorer = _
+        var scorer: Scorable = _
   
         override def collect(doc: Int) {
           s.docFreq += 1
@@ -149,12 +148,12 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
       val (qlevel, query) = buildFinalQueryRunningSubQueries(exactCounts = false, q.requiredQuery)
       val hc = new TotalHitCountCollector()
       gp.etlc.setCollector(hc)
-      searcher(qlevel, SumScaling.ABSOLUTE).search(query, gp.etlc)
+      searcher(qlevel, QueryScoring.NONE).search(query, gp.etlc)
       qm.estimatedDocumentsToProcess = if (sp.maxDocs == -1) hc.getTotalHits else Math.min(hc.getTotalHits, sp.maxDocs)
       qm.estimatedNumberOfResults = if (grpp.limit != -1) grpp.limit else Math.min(hc.getTotalHits, grpp.limit)
     }, () => {
       val (qlevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, q.requiredQuery)
-      Left(getStats(ia.indexMetadata.levelMap(qlevel),searcher(qlevel, SumScaling.ABSOLUTE), query, grpp, sp, fieldSums, gatherTermFreqsPerDoc))
+      Left(getStats(ia.indexMetadata.levelMap(qlevel),searcher(qlevel, QueryScoring.TF), query, grpp, sp, fieldSums, gatherTermFreqsPerDoc))
     })
   }
 }

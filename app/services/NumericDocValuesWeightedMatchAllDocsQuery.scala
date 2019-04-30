@@ -1,24 +1,26 @@
 package services
 
 import org.apache.lucene.index.LeafReaderContext
-import org.apache.lucene.search.Scorer.ChildScorer
 import org.apache.lucene.search._
 import org.apache.lucene.util.Bits
 
 class NumericDocValuesWeightedMatchAllDocsQuery(field: String) extends Query {
-  override def createWeight(searcher: IndexSearcher, needsScores: Boolean, boost: Float): Weight = new ConstantScoreWeight(this, boost) {
+  override def createWeight(searcher: IndexSearcher, scoreMode: ScoreMode, boost: Float): Weight = new ConstantScoreWeight(this, boost) {
     val mscore = boost
     override def toString: String = "weight(" + NumericDocValuesWeightedMatchAllDocsQuery.this + ")"
     override def scorer(context: LeafReaderContext): Scorer =
-      if (!needsScores) new ConstantScoreScorer(this, mscore, DocIdSetIterator.all(context.reader.maxDoc))
-      else new Scorer(this) {
-        val ndv = context.reader.getNumericDocValues(field)
-        val disi = DocIdSetIterator.all(context.reader.maxDoc)
-        def docID: Int = disi.docID
-        def iterator: org.apache.lucene.search.DocIdSetIterator = disi
-        def score: Float = {
-          ndv.advanceExact(disi.docID)
-          ndv.longValue.toFloat
+      scoreMode match {
+        case ScoreMode.COMPLETE_NO_SCORES => new ConstantScoreScorer(this, mscore, scoreMode, DocIdSetIterator.all(context.reader.maxDoc))
+        case ScoreMode.COMPLETE | ScoreMode.TOP_SCORES => new Scorer(this) {
+          val ndv = context.reader.getNumericDocValues(field)
+          val disi = DocIdSetIterator.all(context.reader.maxDoc)
+          def docID: Int = disi.docID
+          def iterator: org.apache.lucene.search.DocIdSetIterator = disi
+          def score: Float = {
+            ndv.advanceExact(disi.docID)
+            ndv.longValue.toFloat
+          }
+          def getMaxScore(upTo: Int): Float = Float.PositiveInfinity
         }
       }
     override def bulkScorer(context: LeafReaderContext): BulkScorer = new BulkScorer() {
@@ -29,12 +31,9 @@ class NumericDocValuesWeightedMatchAllDocsQuery(field: String) extends Query {
         var mscore: Float = 0.0f
         var mdoc: Int = -1
         var mfreq: Int = 1
-        val scorer = new Scorer(null) {
+        val scorer = new Scorable {
           override def docID: Int = mdoc
           override def score: Float = mscore
-          override def iterator: DocIdSetIterator = throw new UnsupportedOperationException()
-          override def getWeight: Weight = throw new UnsupportedOperationException()
-          override def getChildren: java.util.Collection[ChildScorer] = throw new UnsupportedOperationException()
         }
         collector.setScorer(scorer)
         var doc = min

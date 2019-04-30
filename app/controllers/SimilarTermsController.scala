@@ -6,7 +6,7 @@ import org.apache.lucene.index.{PostingsEnum, Term, Terms}
 import org.apache.lucene.search._
 import org.apache.lucene.util.automaton.CompiledAutomaton
 import org.apache.lucene.util.{AttributeSource, BytesRef}
-import parameters.{GeneralParameters, QueryMetadata, SortDirection, SumScaling}
+import parameters._
 import play.api.libs.json.Json
 import services.IndexAccessProvider
 
@@ -29,14 +29,11 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
   class Stats(var df: Long = 0,var ttf: Long = 0) {}
 
   class StatsCollector(val termMap: mutable.HashMap[String, Stats], val apostings: ArrayBuffer[(Int,ArrayBuffer[(String,PostingsEnum)])]) extends SimpleCollector {
-    var scorer: Scorer = _
 
     var tdf = 0l
     var tttf = 0l
 
-    override def setScorer(scorer: Scorer) = this.scorer = scorer
-
-    override def needsScores() = true
+    override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
 
     val docMatches = new mutable.HashMap[String,Stats]()
 
@@ -196,7 +193,7 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
         }
         val hc = new StatsCollector(termMap,postings)
         gp.tlc.get.setCollector(hc)
-        searcher(level, SumScaling.ABSOLUTE).search(mpqb.build, gp.tlc.get)
+        searcher(level, QueryScoring.NONE).search(mpqb.build, gp.tlc.get)
         tdf = hc.tdf
         tttf = hc.tttf
       }

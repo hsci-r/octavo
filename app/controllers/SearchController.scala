@@ -4,7 +4,7 @@ import com.koloboke.collect.map.LongDoubleMap
 import com.koloboke.collect.map.hash.HashIntObjMaps
 import javax.inject._
 import org.apache.lucene.index.LeafReaderContext
-import org.apache.lucene.search.{Scorer, SimpleCollector, TotalHitCountCollector}
+import org.apache.lucene.search.{Scorable, ScoreMode, Scorer, SimpleCollector, TotalHitCountCollector}
 import parameters._
 import play.api.libs.json._
 import play.api.mvc.{Action, AnyContent}
@@ -53,14 +53,14 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         val (qlevel,query) = buildFinalQueryRunningSubQueries(exactCounts = false, qp.requiredQuery)
         val hc = new TotalHitCountCollector()
         gp.etlc.setCollector(hc)
-        searcher(qlevel, SumScaling.ABSOLUTE).search(query, gp.etlc)
+        searcher(qlevel, QueryScoring.NONE).search(query, gp.etlc)
         hc.getTotalHits
       }
       val chits = if (ctv.query.isDefined) {
         val (qlevel, query) = buildFinalQueryRunningSubQueries(exactCounts = false, ctv.requiredQuery)
         val hc = new TotalHitCountCollector()
         gp.etlc.setCollector(hc)
-        searcher(qlevel, SumScaling.ABSOLUTE).search(query, gp.etlc)
+        searcher(qlevel, QueryScoring.NONE).search(query, gp.etlc)
         hc.getTotalHits
       } else 0
       qm.estimatedDocumentsToProcess = qhits + chits
@@ -72,7 +72,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         val f =  srp.fields ++ srp.sorts.filter(p => p._1 != "score" && !srp.fields.contains(p._1)).map(_._1)
         if (srp.offsetData && ql.fields.contains("startOffset") && !f.contains("startOffset")) f :+ "startOffset" else f
       }
-      val is = searcher(queryLevel,srp.sumScaling)
+      val is = searcher(queryLevel,srp.queryScoring)
       val ir = reader(queryLevel)
       val it = termsEnums(queryLevel).get
       var total = 0
@@ -81,9 +81,9 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       var responseSizeHint = 0l
       val maxHeap = mutable.PriorityQueue.empty[(Int,Float,Seq[JsValue])]((x,y) => mcompare(x,y))
       val compareTermVector = if (ctv.query.isDefined)
-        getAggregateContextVectorForQuery(is, it, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermsFromQuery(query),ctvpa, ctvs.maxDocs) else null
+        getAggregateContextVectorForQuery(is, it, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermBytesRefsFromQuery(query),ctvpa, ctvs.maxDocs) else null
       val we = if (srp.returnExplanations)
-        query.createWeight(is, true, 1.0f)
+        query.createWeight(is, ScoreMode.COMPLETE, 1.0f)
       else null
       val processDocFields = (context: LeafReaderContext, doc: Int, getters: Map[String,Int => Option[JsValue]]) => {
         val fields = new mutable.HashMap[String, JsValue]
@@ -102,21 +102,21 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
           fields += ("distance" -> Json.toJson(ctvdp.distance(cv, compareTermVector._2)))
         if (srp.returnExplanations)
           fields += ("explanation" -> Json.toJson(we.explain(context, doc).toString))
-        if (termVectors && rtvdr.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedTermSeq(it, limitTermVector(cv, rtvl)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
+        if (termVectors && rtvdr.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedStringSeq(it, limitTermVector(cv, rtvl)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
         (fields, if (rtvdr.dimensions >0) cv else null)
       }
       val docFields = HashIntObjMaps.getDefaultFactory[collection.Map[String,JsValue]]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[collection.Map[String,JsValue]]
       val docVectorsForMDS = if (rtvdr.dimensions>0) HashIntObjMaps.getDefaultFactory[LongDoubleMap]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[LongDoubleMap] else null
       val collector = new SimpleCollector() {
 
-        override def needsScores: Boolean = true
-        var scorer: Scorer = _
+        override def scoreMode = ScoreMode.COMPLETE
+        var scorer: Scorable = _
         var context: LeafReaderContext = _
 
         var getters: Map[String,Int => Option[JsValue]] = _
         var sortGetters: Seq[Int => Option[JsValue]] = Seq.empty
 
-        override def setScorer(scorer: Scorer) {this.scorer=scorer}
+        override def setScorer(scorer: Scorable) {this.scorer=scorer}
 
         override def collect(ldoc: Int) {
           qm.documentsProcessed += 1
@@ -175,7 +175,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       Left(Json.obj(
         "final_query"->query.toString,
         "total"->total,
-        "totalScore"->(if (srp.sumScaling == SumScaling.DF) Json.toJson(totalScore) else Json.toJson(totalScore.toInt)),
+        "totalScore"->(if (srp.queryScoring != QueryScoring.TF) Json.toJson(totalScore) else Json.toJson(totalScore.toInt)),
         "docs"->values.zipWithIndex.map{
           case ((doc,score,_),i) =>
             var df = docFields.get(doc)
@@ -213,7 +213,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
                 })
               ).getOrElse(Array.empty)))
             }
-            df ++ Map("score" -> (if (srp.sumScaling == SumScaling.DF) Json.toJson(score) else Json.toJson(score.toInt)))
+            df ++ Map("score" -> (if (srp.queryScoring != QueryScoring.TF) Json.toJson(score) else Json.toJson(score.toInt)))
         }))
     })
   }

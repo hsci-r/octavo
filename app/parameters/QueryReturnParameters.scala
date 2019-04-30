@@ -9,10 +9,9 @@ class QueryReturnParameters()(implicit protected val request: Request[AnyContent
   val fields: Seq[String] = p.getOrElse("field", Seq.empty)
   /** return explanations for matches in search */
   val returnExplanations: Boolean = p.get("returnExplanations").exists(v => v.head=="" || v.head.toBoolean)
-  private val sumScalingStringOpt = p.get("sumScaling").map(v => v.head.toUpperCase)
-  private val sumScalingString = sumScalingStringOpt.getOrElse("TTF")
+  private val queryScoringString = p.get("sumScaling").map(v => v.head.toUpperCase).getOrElse("TF")
   /** sum scaling to use */
-  val sumScaling = SumScaling.get(sumScalingString, 0.0)
+  val queryScoring = QueryScoring.withName(queryScoringString)
   /** how many snippets to return at maximum for each match */
   val snippetLimit: Int = p.get("snippetLimit").map(_.head.toInt).getOrElse(0)
   /** how many results to skip */
@@ -21,7 +20,7 @@ class QueryReturnParameters()(implicit protected val request: Request[AnyContent
   private val myJson = Json.obj(
     "snippetLimit" -> snippetLimit,
     "offset" -> offset,
-    "sumScaling"->sumScalingString,
+    "sumScaling"->queryScoringString,
     "fields"->fields,
     "returnExplanations"->returnExplanations
   )

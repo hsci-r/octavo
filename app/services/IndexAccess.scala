@@ -20,7 +20,8 @@ import org.apache.lucene.analysis.core.{KeywordAnalyzer, WhitespaceAnalyzer, Whi
 import org.apache.lucene.analysis.miscellaneous.{HyphenatedWordsFilter, LengthFilter, PerFieldAnalyzerWrapper}
 import org.apache.lucene.analysis.pattern.PatternReplaceFilter
 import org.apache.lucene.analysis.standard.StandardAnalyzer
-import org.apache.lucene.document.{DoublePoint, FloatPoint, IntPoint, LongPoint}
+import org.apache.lucene.document.{DoublePoint, FloatPoint, IntPoint, LatLonPoint, LongPoint}
+import org.apache.lucene.geo.{GeoEncodingUtils, Polygon}
 import org.apache.lucene.index._
 import org.apache.lucene.queryparser.classic.QueryParser
 import org.apache.lucene.queryparser.classic.QueryParser.Operator
@@ -32,7 +33,7 @@ import org.apache.lucene.search.similarities.{BasicStats, SimilarityBase}
 import org.apache.lucene.store._
 import org.apache.lucene.util.{BytesRef, BytesRefIterator}
 import org.joda.time.format.ISODateTimeFormat
-import parameters.SumScaling
+import parameters.QueryScoring
 import play.api.inject.ApplicationLifecycle
 import play.api.libs.json.Reads._
 import play.api.libs.json._
@@ -48,6 +49,26 @@ import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.language.implicitConversions
 
 object IndexAccess {
+
+  def docFreq(it: TermsEnum, term: Long): Int = {
+    it.seekExact(term)
+    it.docFreq
+  }
+
+  def totalTermFreq(it: TermsEnum, term: Long): Long = {
+    it.seekExact(term)
+    it.totalTermFreq
+  }
+
+  def termOrdToBytesRef(it: TermsEnum, term: Long): BytesRef = {
+    it.seekExact(term)
+    BytesRef.deepCopyOf(it.term)
+  }
+
+  def termOrdToString(it: TermsEnum, term: Long): String = {
+    it.seekExact(term)
+    it.term.utf8ToString
+  }
 
   val scriptEngineManager = new ScriptEngineManager()
 
@@ -74,13 +95,19 @@ object IndexAccess {
   BooleanQuery.setMaxClauseCount(Int.MaxValue)
 
   private val whitespaceAnalyzer = new WhitespaceAnalyzer()
-  
-  private val termFrequencySimilarity = new SimilarityBase() {
-    override def score(stats: BasicStats, freq: Float, docLen: Float): Float = freq
-    override def explain(stats: BasicStats, doc: Int, freq: Explanation, docLen: Float): Explanation = Explanation.`match`(freq.getValue,"")
-    override def toString: String = ""
+
+  private val noSimilarity = new SimilarityBase {
+    override def score(stats: BasicStats, freq: Double, docLen: Double): Double = throw new UnsupportedOperationException()
+    override def toString: String = "NoSimilarity"
   }
-  
+
+
+  private val termFrequencySimilarity = new SimilarityBase() {
+    override def score(stats: BasicStats, freq: Double, docLen: Double): Double = freq
+    override def explain(stats: BasicStats, freq: Explanation, docLen: Double): Explanation = Explanation.`match`(freq.getValue,"")
+    override def toString: String = "TermFrequencySimilarity"
+  }
+
   private case class TermsEnumToBytesRefIterator(te: BytesRefIterator) extends Iterator[BytesRef] {
     var br: BytesRef = te.next()
     var nextFetched: Boolean = true
@@ -235,6 +262,37 @@ sealed abstract class StoredFieldType extends EnumEntry {
 }
 
 object StoredFieldType extends Enum[StoredFieldType] with Logging {
+  case object LATLONDOCVALUES extends StoredFieldType {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] = {
+      val dvs = DocValues.getSortedNumeric(lr, field)
+      doc: Int => if (dvs.advanceExact(doc)) {
+        val value = dvs.nextValue
+        Some(JsObject(Seq("lat"->JsNumber(GeoEncodingUtils.decodeLatitude((value >> 32).toInt)),
+          "lon"->JsNumber(GeoEncodingUtils.decodeLongitude((value & 0xFFFFFFFF).toInt)))))
+      } else None
+    }
+    def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[Long] = {
+      val ret = new mutable.HashSet[Long]
+      tlc.get.setCollector(new SimpleCollector() {
+
+        override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
+
+        var dv: SortedNumericDocValues = _
+
+        override def collect(doc: Int) {
+          if (this.dv.advanceExact(doc))
+            ret += this.dv.nextValue()
+        }
+
+        override def doSetNextReader(context: LeafReaderContext) {
+          this.dv = DocValues.getSortedNumeric(context.reader, field)
+        }
+      })
+      is.search(q, tlc.get)
+      logger.debug(f"LatLonDocValues -subquery on $field%s: $q%s returning ${ret.size}%,d hits")
+      ret
+    }
+  }
   case object NUMERICDOCVALUES extends StoredFieldType {
     def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] = {
       val dvs = DocValues.getNumeric(lr, field)
@@ -244,7 +302,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
       val ret = new mutable.HashSet[Long]
       tlc.get.setCollector(new SimpleCollector() {
 
-        override def needsScores: Boolean = false
+        override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
 
         var dv: NumericDocValues = _
 
@@ -272,7 +330,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
       val ret = new mutable.HashSet[Float]
       tlc.get.setCollector(new SimpleCollector() {
 
-        override def needsScores: Boolean = false
+        override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
 
         var dv: NumericDocValues = _
 
@@ -299,7 +357,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
       val ret = new mutable.HashSet[Double]
       tlc.get.setCollector(new SimpleCollector() {
 
-        override def needsScores: Boolean = false
+        override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
 
         var dv: NumericDocValues = _
 
@@ -329,7 +387,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
       val ret = new mutable.HashSet[BytesRef]
       tlc.get.setCollector(new SimpleCollector() {
         
-        override def needsScores: Boolean = false
+        override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
         
         var dv: SortedDocValues = _
   
@@ -364,7 +422,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
       val ret = new mutable.HashSet[Long]
       tlc.get.setCollector(new SimpleCollector() {
         
-        override def needsScores: Boolean = false
+        override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
         
         var dv: SortedNumericDocValues = _
   
@@ -416,7 +474,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
       val ret = new mutable.HashSet[BytesRef]
       tlc.get.setCollector(new SimpleCollector() {
         
-        override def needsScores: Boolean = false
+        override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
         
         var dv: SortedSetDocValues = _
   
@@ -452,7 +510,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
       val fieldS = Collections.singleton(field)
       tlc.get.setCollector(new SimpleCollector() {
         
-        override def needsScores: Boolean = false
+        override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
         
         var r: LeafReader = _
   
@@ -489,7 +547,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
       val fieldS = Collections.singleton(field)
       tlc.get.setCollector(new SimpleCollector() {
         
-        override def needsScores: Boolean = false
+        override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
         
         var r: LeafReader = _
   
@@ -523,7 +581,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
       val ret = new mutable.HashSet[BytesRef]
       tlc.get.setCollector(new SimpleCollector() {
         
-        override def needsScores: Boolean = false
+        override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
         
         var r: LeafReader = _
   
@@ -557,6 +615,7 @@ object IndexedFieldType extends Enum[IndexedFieldType] {
   case object LONGPOINT extends IndexedFieldType
   case object FLOATPOINT extends IndexedFieldType
   case object DOUBLEPOINT extends IndexedFieldType
+  case object LATLONPOINT extends IndexedFieldType
   case object NONE extends IndexedFieldType
   val values = findValues
 }
@@ -575,11 +634,29 @@ case class FieldInfo(
       "description"->description,
       "storedAs"->storedAs.toString,
       "indexedAs"->indexedAs.toString,
-      "containsJson"->containsJson
-    )
-    if ((indexedAs == IndexedFieldType.TEXT || indexedAs == IndexedFieldType.STRING)) ret ++ Json.obj("distinctValues"-> (if (lr.terms(id) != null) lr.terms(id).size() else 0))
-    else ret
-  }
+      "containsJson"->containsJson)
+    indexedAs match {
+      case IndexedFieldType.TEXT | IndexedFieldType.STRING =>
+        val terms = lr.terms(id)
+        ret ++ Json.obj(
+          "totalDocs"->terms.getDocCount,
+          "totalTerms" -> terms.size,
+          "sumDocFreq" -> terms.getSumDocFreq,
+          "sumTotalTermFreq" -> terms.getSumTotalTermFreq)
+      case IndexedFieldType.INTPOINT | IndexedFieldType.LONGPOINT | IndexedFieldType.FLOATPOINT | IndexedFieldType.DOUBLEPOINT | IndexedFieldType.LATLONPOINT =>
+        val pv = lr.getPointValues(id)
+        ret ++ Json.obj(
+          "totalDocs"->pv.getDocCount,
+          "sumTotalTermFreq"->pv.size,
+        ) ++ (indexedAs match {
+          case IndexedFieldType.INTPOINT => Json.obj("min" -> IntPoint.decodeDimension(pv.getMinPackedValue, 0),"max" -> IntPoint.decodeDimension(pv.getMaxPackedValue, 0))
+          case IndexedFieldType.LONGPOINT => Json.obj("min" -> LongPoint.decodeDimension(pv.getMinPackedValue, 0),"max" -> LongPoint.decodeDimension(pv.getMaxPackedValue, 0))
+          case IndexedFieldType.FLOATPOINT => Json.obj("min" -> FloatPoint.decodeDimension(pv.getMinPackedValue, 0),"max" -> FloatPoint.decodeDimension(pv.getMaxPackedValue, 0))
+          case IndexedFieldType.DOUBLEPOINT => Json.obj("min" -> DoublePoint.decodeDimension(pv.getMinPackedValue, 0),"max" -> DoublePoint.decodeDimension(pv.getMaxPackedValue, 0))
+          case IndexedFieldType.LATLONPOINT => Json.obj("min" -> Json.obj("lat"->GeoEncodingUtils.decodeLatitude(pv.getMinPackedValue, 0),"lon"->GeoEncodingUtils.decodeLongitude(pv.getMinPackedValue, Integer.BYTES)),"max" -> Json.obj("lat"->GeoEncodingUtils.decodeLatitude(pv.getMaxPackedValue, 0),"lon"->GeoEncodingUtils.decodeLongitude(pv.getMaxPackedValue, Integer.BYTES)))
+        })
+      case IndexedFieldType.NONE => ret
+    }
 }
 
 case class LevelMetadata(
@@ -678,7 +755,8 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging
  
   private val readers = new mutable.HashMap[String,IndexReader]
   private val tfSearchers = new mutable.HashMap[String,IndexSearcher]
-  private val tfidfSearchers = new mutable.HashMap[String,IndexSearcher]
+  private val bm25Searchers = new mutable.HashMap[String,IndexSearcher]
+  private val noSearchers = new mutable.HashMap[String,IndexSearcher]
   
   def readFieldInfos(
       c: Map[String,JsValue]): Map[String,FieldInfo] = c.map{ case (fieldId,v) => (fieldId,FieldInfo(fieldId,(v \ "description").as[String], StoredFieldType.withName((v \ "storedAs").asOpt[String].getOrElse("NONE").toUpperCase) , IndexedFieldType.withName((v \ "indexedAs").asOpt[String].getOrElse("NONE").toUpperCase), (v \ "containsJson").asOpt[Boolean].getOrElse(false))) }
@@ -748,7 +826,10 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging
       val tfSearcher = new IndexSearcher(reader)
       tfSearcher.setSimilarity(termFrequencySimilarity)
       tfSearchers.put(level.id, tfSearcher)
-      tfidfSearchers.put(level.id, new IndexSearcher(reader))
+      val noSearcher = new IndexSearcher(reader)
+      noSearcher.setSimilarity(noSimilarity)
+      noSearchers.put(level.id, noSearcher)
+      bm25Searchers.put(level.id, new IndexSearcher(reader))
       logger.info("Initialized index at "+path+"/["+level.indices.mkString(", ")+"]")
       (level.id, reader)
     }(shortTaskExecutionContext)
@@ -775,11 +856,13 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging
 
   def reader(level: String): IndexReader = readers(level)
   
-  def searcher(level: String, sumScaling: SumScaling): IndexSearcher = {
-    sumScaling match {
-      case SumScaling.DF =>
-        tfidfSearchers(level)
-      case _ =>
+  def searcher(level: String, queryScoring: QueryScoring.Value): IndexSearcher = {
+    queryScoring match {
+      case QueryScoring.NONE =>
+        noSearchers(level)
+      case QueryScoring.BM25 =>
+        bm25Searchers(level)
+      case QueryScoring.TF =>
         tfSearchers(level)
     }
   }
@@ -807,6 +890,26 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging
                 ISODateTimeFormat.dateOptionalTimeParser().parseMillis(content)
               else content.toLong
               LongPoint.newRangeQuery(field, value, value)
+            case IndexedFieldType.LATLONPOINT =>
+              val parts = content.split(",")
+              parts.length match {
+                case 3 => LatLonPoint.newDistanceQuery(field, parts.head.toDouble, parts(1).toDouble, parts.last.toDouble)
+                case 4 => LatLonPoint.newBoxQuery(field, parts.head.toDouble,parts(2).toDouble,parts(1).toDouble,parts.last.toDouble)
+                case count =>
+                  val lats = Array[Double](count/2)
+                  val lons = Array[Double](count/2)
+                  var i = 0
+                  var j = 0
+                  while (i<count) {
+                    lats(j) = parts(i).toDouble
+                    i += 1
+                    lons(j) = parts(i).toDouble
+                    i += 1
+                    j += 1
+                  }
+                  LatLonPoint.newPolygonQuery(field, new Polygon(lats,lons))
+              }
+
             case _ =>
               super.getFieldQuery(field, content, quoted)
           } else {
@@ -900,32 +1003,12 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging
 
   })).toMap
 
-  def docFreq(it: TermsEnum, term: Long): Int = {
-    it.seekExact(term)
-    it.docFreq
-  }
-
-  def totalTermFreq(it: TermsEnum, term: Long): Long = {
-    it.seekExact(term)
-    it.totalTermFreq
-  }
-
-  def termOrdToBytesRef(it: TermsEnum, term: Long): BytesRef = {
-    it.seekExact(term)
-    BytesRef.deepCopyOf(it.term)
-  }
-
-  def termOrdToTerm(it: TermsEnum, term: Long): String = {
-    it.seekExact(term)
-    it.term.utf8ToString
-  }
-
-  def extractContentTermsFromQuery(q: Query): Seq[String] = QueryTermExtractor.getTerms(q, false, indexMetadata.contentField).map(_.getTerm).toSeq
+  def extractContentTermBytesRefsFromQuery(q: Query): Seq[BytesRef] = QueryTermExtractor.getTerms(q, false, indexMetadata.contentField).map(wt => new BytesRef(wt.getTerm)).toSeq
 
   class ExtractingTermInSetQuery(field: String, terms: java.util.Collection[BytesRef]) extends TermInSetQuery(field, terms) {
 
-    override def createWeight(searcher: IndexSearcher, needsScores: Boolean, boost: Float): Weight = {
-      val weight = super.createWeight(searcher, needsScores, boost)
+    override def createWeight(searcher: IndexSearcher, scoreMode: ScoreMode, boost: Float): Weight = {
+      val weight = super.createWeight(searcher, scoreMode, boost)
       new ConstantScoreWeight(this, boost) {
         override def extractTerms(aterms: java.util.Set[Term]): Unit = for (term <- terms.asScala) aterms.add(new Term(field,term))
 
@@ -999,17 +1082,23 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging
             DoublePoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Double]].toSeq:_*)
           case any => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
         }
+      case IndexedFieldType.LATLONPOINT =>
+        inField.storedAs match {
+          case StoredFieldType.LATLONDOCVALUES =>
+            LongPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Long]].toSeq:_*)
+          case any => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
+        }
       case any => throw new UnsupportedOperationException("Unsupported indexed field type "+any)
     }
   }
   
   private def runSubQuery(queryLevel: String, query: Query, targetLevel: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): Future[Query] = Future {
     if (!indexMetadata.levelOrder.contains(targetLevel)) // targetLevel is not really a target level but a regular field
-      matchingValuesToQuery(indexMetadata.levelMap(queryLevel).fields(targetLevel), indexMetadata.levelMap(queryLevel).fields(targetLevel), searcher(queryLevel, SumScaling.ABSOLUTE), query)
+      matchingValuesToQuery(indexMetadata.levelMap(queryLevel).fields(targetLevel), indexMetadata.levelMap(queryLevel).fields(targetLevel), searcher(queryLevel, QueryScoring.NONE), query)
     else if (indexMetadata.levelOrder(queryLevel)<indexMetadata.levelOrder(targetLevel)) // ql:DOCUMENT < tl:PARAGRAPH
-      matchingValuesToQuery(indexMetadata.levelMap(queryLevel).idFieldInfo, indexMetadata.levelMap(queryLevel).idFieldInfo , searcher(targetLevel, SumScaling.ABSOLUTE), query)
+      matchingValuesToQuery(indexMetadata.levelMap(queryLevel).idFieldInfo, indexMetadata.levelMap(queryLevel).idFieldInfo , searcher(targetLevel, QueryScoring.NONE), query)
     else // ql:PARAGRAPH > tl:DOCUMENT
-      matchingValuesToQuery(indexMetadata.levelMap(targetLevel).idFieldInfo, indexMetadata.levelMap(targetLevel).idFieldInfo , searcher(queryLevel, SumScaling.ABSOLUTE), query)
+      matchingValuesToQuery(indexMetadata.levelMap(targetLevel).idFieldInfo, indexMetadata.levelMap(targetLevel).idFieldInfo , searcher(queryLevel, QueryScoring.NONE), query)
   }
   
   private def processQueryInternal(exactCounts: Boolean, queryIn: String)(implicit iec: ExecutionContext, tlc: ThreadLocal[TimeLimitingCollector]): (String,Query,String) = {

@@ -8,7 +8,7 @@ import play.api.mvc.{AnyContent, Request}
 import services.IndexAccess
 
 class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = "")(implicit request: Request[AnyContent], ia: IndexAccess, queryMetadata: QueryMetadata) {
-  import ia.{docFreq, termOrdToTerm, totalTermFreq}
+  import IndexAccess.{docFreq, termOrdToString, totalTermFreq}
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   private val minFreqInDocOpt = p.get(prefix+"minFreqInDoc"+suffix).map(_.head.toLong)
   /** minimum per document frequency of term to be added to the term vector */
@@ -50,7 +50,7 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
   val maxTermLength: Int = maxTermLengthOpt.getOrElse(Int.MaxValue)
   private def termLengthMatches(it: TermsEnum, term: Long): Boolean = {
     if (minTermLength == 1 && maxTermLength == Int.MaxValue) return true
-    val terms = termOrdToTerm(it, term)
+    val terms = termOrdToString(it, term)
     terms.length>=minTermLength && terms.length<=maxTermLength
   }
   private val termFilterAsStringOpt = p.get(prefix+"termFilter"+suffix).map(_.head)
@@ -72,7 +72,7 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
   final def matches(it: TermsEnum, term: Long, freq: Long): Boolean =
     freqInDocMatches(freq) && docFreqMatches(it,term) && totalTermFreqMatches(it,term) && termLengthMatches(it,term) && termFilter.forall(stl => {
       val s = stl.get
-      s.getBinding.setProperty("term", termOrdToTerm(it, term))
+      s.getBinding.setProperty("term", IndexAccess.termOrdToString(it, term))
       s.getBinding.setProperty("freq", freq)
       s.run().asInstanceOf[Boolean]
     })
