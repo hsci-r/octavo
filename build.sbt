@@ -28,8 +28,8 @@ lazy val mainSettings = Seq(
     "org.apache.lucene" % "lucene-core" % "8.0.0",
     "org.apache.lucene" % "lucene-codecs" % "8.0.0",
     "org.apache.lucene" % "lucene-analyzers-common" % "8.0.0",
-    "fi.seco" %% "lucene-morphologicalanalyzer" % "1.2.0",
-    "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.1",
+    "fi.seco" %% "lucene-morphologicalanalyzer" % "1.2.1",
+    "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.2",
     "fi.seco" % "lexicalanalysis-resources-fi-core" % "1.5.16",
     "org.apache.lucene" % "lucene-queryparser" % "8.0.0",
     "org.apache.lucene" % "lucene-highlighter" % "8.0.0",
@@ -68,7 +68,8 @@ lazy val assemblySettings = Seq(
     art.withClassifier(Some("assembly"))
   },
   assemblyMergeStrategy in assembly := {
-    case PathList("org", "junit", xs @ _*) => MergeStrategy.first // tsne is borked
+    case PathList("org","nd4j","serde","base64","Nd4jBase64.class") => MergeStrategy.first
+    case PathList("org", "jetbrains", "annotations", xs @ _*) => MergeStrategy.first // these appear in multiple places
     case manifest if manifest.contains("MANIFEST.MF") =>
       MergeStrategy.discard
     case referenceOverrides if referenceOverrides.contains("reference-overrides.conf") =>

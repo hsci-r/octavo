@@ -95,7 +95,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
             estimate()
             call() match {
               case Left(resultsJson) =>
-                val json = Json.obj("queryMetadata" -> (qm ++ Json.obj("timeTakenMS" -> (System.currentTimeMillis() - startTime))), "results" -> resultsJson)
+                val json = Json.obj("queryMetadata" -> (qm ++ Json.obj("timeTakenMS" -> (System.currentTimeMillis() - startTime))), "result" -> resultsJson)
                 val jsString = if (pretty)
                   Json.prettyPrint(json)
                 else

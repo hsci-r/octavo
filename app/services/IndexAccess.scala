@@ -1,11 +1,15 @@
 package services
 
-import java.io.{File, FileInputStream}
+import java.io.{File, FileInputStream, FileOutputStream, RandomAccessFile}
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 import java.nio.file.{FileSystems, Path}
+import java.util
 import java.util.concurrent.ForkJoinPool
 import java.util.regex.Pattern
 import java.util.{Collections, Locale}
 
+import com.tdunning.math.stats.{MergingDigest, TDigest}
 import enumeratum.{Enum, EnumEntry}
 import fi.seco.lucene.MorphologicalAnalyzer
 import javax.inject.{Inject, Singleton}
@@ -33,10 +37,10 @@ import org.apache.lucene.search.similarities.{BasicStats, SimilarityBase}
 import org.apache.lucene.store._
 import org.apache.lucene.util.{BytesRef, BytesRefIterator}
 import org.joda.time.format.ISODateTimeFormat
-import parameters.QueryScoring
+import parameters.{QueryScoring, SortDirection}
 import play.api.inject.ApplicationLifecycle
 import play.api.libs.json.Reads._
-import play.api.libs.json._
+import play.api.libs.json.{Json, _}
 import play.api.{Configuration, Logging}
 import services.IndexAccess.scriptEngineManager
 
@@ -253,7 +257,7 @@ class IndexAccessProvider @Inject() (config: Configuration,lifecycle: Applicatio
     }(IndexAccess.shortTaskExecutionContext)).map(Await.result(_,Duration.Inf)).toMap
   }
   def apply(id: String): IndexAccess = indexAccesses(id)
-  def toJson: JsValue = Json.toJson(indexAccesses.mapValues(ia => ia.indexMetadata.toJson(ia)))
+  def toJson: JsValue = Json.toJson(indexAccesses.mapValues(v => v.indexMetadata.indexName))
 }
 
 sealed abstract class StoredFieldType extends EnumEntry {
@@ -620,6 +624,26 @@ object IndexedFieldType extends Enum[IndexedFieldType] {
   val values = findValues
 }
 
+object TermSort extends Enumeration {
+  val TERM,DOCFREQ,TERMFREQ = Value
+}
+
+case class MetadataOpts(
+  stats: Boolean,
+  quantiles: Boolean,
+  histograms: Boolean,
+  from: BigDecimal,
+  to: BigDecimal,
+  by: BigDecimal,
+  maxTermsToStat: Int,
+  sortTermsBy: TermSort.Value,
+  sortTermDirection: SortDirection.Value,
+  length: Int
+) {
+  val formatString: String = "%."+length+"f"
+}
+
+
 case class FieldInfo(
   id: String,
   description: String,
@@ -627,35 +651,126 @@ case class FieldInfo(
   indexedAs: IndexedFieldType,
   containsJson: Boolean
 ) {
-  def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[_] = storedAs.getMatchingValues(is, q, id)
-  def jsGetter(lr: LeafReader): Int => Option[JsValue] = storedAs.jsGetter(lr, id, containsJson)
-  def toJson(lr: LeafReader) = {
-    val ret = Json.obj(
-      "description"->description,
-      "storedAs"->storedAs.toString,
-      "indexedAs"->indexedAs.toString,
-      "containsJson"->containsJson)
-    indexedAs match {
+  def getStats(lr: LeafReader, stats: mutable.HashMap[String,(TDigest,TDigest)], metadataOpts: MetadataOpts): JsObject = {
+    var ret = indexedAs match {
       case IndexedFieldType.TEXT | IndexedFieldType.STRING =>
         val terms = lr.terms(id)
-        ret ++ Json.obj(
-          "totalDocs"->terms.getDocCount,
-          "totalTerms" -> terms.size,
-          "sumDocFreq" -> terms.getSumDocFreq,
-          "sumTotalTermFreq" -> terms.getSumTotalTermFreq)
+        if (terms==null) Json.obj()
+        else {
+          var ret = if (!metadataOpts.stats) Json.obj()
+            else Json.obj(
+            "totalDocs" -> terms.getDocCount,
+            "totalTerms" -> terms.size,
+            "sumDocFreq" -> terms.getSumDocFreq,
+            "sumTotalTermFreq" -> terms.getSumTotalTermFreq)
+          if (terms.size<=metadataOpts.maxTermsToStat) {
+            import IndexAccess._
+            var stats = terms.asBytesRefAndDocFreqAndTotalTermFreqIterable.map(t => (t._1.utf8ToString(),t._2,t._3)).toSeq
+            metadataOpts.sortTermsBy match {
+              case TermSort.TERM => stats = stats.sortBy(_._1)
+              case TermSort.DOCFREQ => stats = stats.sortBy(_._2)
+              case TermSort.TERMFREQ => stats = stats.sortBy(_._3)
+            }
+            if (metadataOpts.sortTermDirection==SortDirection.DESC) stats = stats.reverse
+            ret = ret ++ Json.obj("termFreqs"->stats.map(t => t._1->Json.obj("docFreq"->t._2,"totalTermFreq"->t._3)))
+          }
+          if (metadataOpts.quantiles && stats.contains(id)) ret = ret ++ {
+            val (ttft, dft) = stats(id)
+            Json.obj(
+              "termFreqQuantiles" -> (metadataOpts.from to metadataOpts.to by metadataOpts.by).map(q => Json.obj("quantile" -> metadataOpts.formatString.formatLocal(Locale.ROOT,q), "freq" -> ttft.quantile(Math.min(q.doubleValue, 1.0)).toLong)),
+              "docFreqQuantiles" -> (metadataOpts.from to metadataOpts.to by metadataOpts.by).map(q => Json.obj("quantile" -> metadataOpts.formatString.formatLocal(Locale.ROOT,q), "freq" -> dft.quantile(Math.min(q.doubleValue, 1.0)).toLong))
+            )
+          }
+          ret
+        }
       case IndexedFieldType.INTPOINT | IndexedFieldType.LONGPOINT | IndexedFieldType.FLOATPOINT | IndexedFieldType.DOUBLEPOINT | IndexedFieldType.LATLONPOINT =>
         val pv = lr.getPointValues(id)
-        ret ++ Json.obj(
-          "totalDocs"->pv.getDocCount,
-          "sumTotalTermFreq"->pv.size,
-        ) ++ (indexedAs match {
-          case IndexedFieldType.INTPOINT => Json.obj("min" -> IntPoint.decodeDimension(pv.getMinPackedValue, 0),"max" -> IntPoint.decodeDimension(pv.getMaxPackedValue, 0))
-          case IndexedFieldType.LONGPOINT => Json.obj("min" -> LongPoint.decodeDimension(pv.getMinPackedValue, 0),"max" -> LongPoint.decodeDimension(pv.getMaxPackedValue, 0))
-          case IndexedFieldType.FLOATPOINT => Json.obj("min" -> FloatPoint.decodeDimension(pv.getMinPackedValue, 0),"max" -> FloatPoint.decodeDimension(pv.getMaxPackedValue, 0))
-          case IndexedFieldType.DOUBLEPOINT => Json.obj("min" -> DoublePoint.decodeDimension(pv.getMinPackedValue, 0),"max" -> DoublePoint.decodeDimension(pv.getMaxPackedValue, 0))
-          case IndexedFieldType.LATLONPOINT => Json.obj("min" -> Json.obj("lat"->GeoEncodingUtils.decodeLatitude(pv.getMinPackedValue, 0),"lon"->GeoEncodingUtils.decodeLongitude(pv.getMinPackedValue, Integer.BYTES)),"max" -> Json.obj("lat"->GeoEncodingUtils.decodeLatitude(pv.getMaxPackedValue, 0),"lon"->GeoEncodingUtils.decodeLongitude(pv.getMaxPackedValue, Integer.BYTES)))
-        })
-      case IndexedFieldType.NONE => ret
+        if (pv == null || !metadataOpts.stats) Json.obj()
+        else
+          Json.obj(
+            "totalDocs" -> pv.getDocCount,
+            "sumTotalTermFreq" -> pv.size,
+          ) ++ (indexedAs match {
+            case IndexedFieldType.INTPOINT => Json.obj("min" -> IntPoint.decodeDimension(pv.getMinPackedValue, 0), "max" -> IntPoint.decodeDimension(pv.getMaxPackedValue, 0))
+            case IndexedFieldType.LONGPOINT => Json.obj("min" -> LongPoint.decodeDimension(pv.getMinPackedValue, 0), "max" -> LongPoint.decodeDimension(pv.getMaxPackedValue, 0))
+            case IndexedFieldType.FLOATPOINT => Json.obj("min" -> FloatPoint.decodeDimension(pv.getMinPackedValue, 0), "max" -> FloatPoint.decodeDimension(pv.getMaxPackedValue, 0))
+            case IndexedFieldType.DOUBLEPOINT => Json.obj("min" -> DoublePoint.decodeDimension(pv.getMinPackedValue, 0), "max" -> DoublePoint.decodeDimension(pv.getMaxPackedValue, 0))
+            case IndexedFieldType.LATLONPOINT => Json.obj("min" -> Json.obj("lat" -> GeoEncodingUtils.decodeLatitude(pv.getMinPackedValue, 0), "lon" -> GeoEncodingUtils.decodeLongitude(pv.getMinPackedValue, Integer.BYTES)), "max" -> Json.obj("lat" -> GeoEncodingUtils.decodeLatitude(pv.getMaxPackedValue, 0), "lon" -> GeoEncodingUtils.decodeLongitude(pv.getMaxPackedValue, Integer.BYTES)))
+          })
+      case IndexedFieldType.NONE => Json.obj()
+    }
+    if ((metadataOpts.quantiles || metadataOpts.histograms) && stats.contains(id)) storedAs match {
+      case StoredFieldType.NUMERICDOCVALUES | StoredFieldType.SORTEDNUMERICDOCVALUES =>
+        val (histogram, _) = stats(id)
+        if (metadataOpts.quantiles) ret = ret ++ Json.obj(
+          "quantiles" -> (metadataOpts.from to metadataOpts.to by metadataOpts.by).map(q => Json.obj("quantile" -> metadataOpts.formatString.formatLocal(Locale.ROOT,q), "max" -> histogram.quantile(Math.min(q.doubleValue, 1.0)).toLong))
+        )
+        if (metadataOpts.histograms) {
+          var min = histogram.getMin.toLong
+          var max = histogram.getMax.toLong
+          val distance = max-min
+          min = min + (metadataOpts.from.toDouble*distance).toLong
+          max = Math.min(min + (metadataOpts.to.toDouble*distance).toLong,max)
+          val step = (max-min)/Math.max(((metadataOpts.to.toDouble-metadataOpts.from.toDouble)/metadataOpts.by.toDouble).toLong,1)+1
+          ret = ret ++ Json.obj(
+            "histogram" -> (min to max by step).map(q => Json.obj("min" -> q, "max" -> (q+step), "proportion" -> (histogram.cdf(q+step) - histogram.cdf(q))))
+          )
+        }
+      case StoredFieldType.FLOATDOCVALUES | StoredFieldType.DOUBLEDOCVALUES =>
+        val (histogram, _) = stats(id)
+        if (metadataOpts.quantiles) ret = ret ++ Json.obj(
+          "quantiles" -> (metadataOpts.from to metadataOpts.to by metadataOpts.by).map(q => Json.obj("quantile" -> metadataOpts.formatString.formatLocal(Locale.ROOT,q), "max" -> histogram.quantile(Math.min(q.doubleValue, 1.0))))
+        )
+        if (metadataOpts.histograms) {
+          var min = histogram.getMin
+          var max = histogram.getMax
+          val distance = max-min
+          min = min + (metadataOpts.from.toDouble*distance)
+          max = Math.min(min + (metadataOpts.to.toDouble*distance),max)
+          val step = (max-min)/Math.max((metadataOpts.to.toDouble-metadataOpts.from.toDouble)/metadataOpts.by.toDouble,Double.MinPositiveValue)
+          ret = ret ++ Json.obj(
+            "histogram" -> (BigDecimal(min) to BigDecimal(max) by BigDecimal(step)).map(_.toDouble).map(q => Json.obj("min" -> q, "max" -> (q+step), "proportion" -> (histogram.cdf(q+step) - histogram.cdf(q))))
+          )
+        }
+      case StoredFieldType.LATLONDOCVALUES =>
+        val (lathistogram, lonhistogram) = stats(id)
+        if (metadataOpts.quantiles) ret = ret ++ Json.obj(
+          "latquantiles" -> (metadataOpts.from to metadataOpts.to by metadataOpts.by).map(q => Json.obj("quantile" -> metadataOpts.formatString.formatLocal(Locale.ROOT,q), "max" -> lathistogram.quantile(Math.min(q.doubleValue, 1.0)))),
+          "lonquantiles" -> (metadataOpts.from to metadataOpts.to by metadataOpts.by).map(q => Json.obj("quantile" -> metadataOpts.formatString.formatLocal(Locale.ROOT,q), "max" -> lonhistogram.quantile(Math.min(q.doubleValue, 1.0))))
+        )
+        if (metadataOpts.histograms) {
+          var min = lathistogram.getMin
+          var max = lathistogram.getMax
+          var distance = max-min
+          min = min + (metadataOpts.from.toDouble*distance)
+          max = Math.min(min + (metadataOpts.to.toDouble*distance),max)
+          var step = (max-min)/Math.max((metadataOpts.to.toDouble-metadataOpts.from.toDouble)/metadataOpts.by.toDouble,Double.MinPositiveValue)
+          ret = ret ++ Json.obj(
+            "lathistogram" -> (BigDecimal(min) to BigDecimal(max) by BigDecimal(step)).map(_.toDouble).map(q => Json.obj("min" -> q, "max" -> (q+step), "proportion" -> (lathistogram.cdf(q+step) - lathistogram.cdf(q))))
+          )
+          min = lonhistogram.getMin
+          max = lonhistogram.getMax
+          distance = max-min
+          min = min + (metadataOpts.from.toDouble*distance)
+          max = Math.min(min + (metadataOpts.to.toDouble*distance),max)
+          step = (max-min)/Math.max((metadataOpts.to.toDouble-metadataOpts.from.toDouble)/metadataOpts.by.toDouble,Double.MinPositiveValue)
+          ret = ret ++ Json.obj(
+            "lonhistogram" -> (BigDecimal(min) to BigDecimal(max) by BigDecimal(step)).map(_.toDouble).map(q => Json.obj("min" -> q, "max" -> (q+step), "proportion" -> (lonhistogram.cdf(q+step) - lonhistogram.cdf(q))))
+          )
+        }
+      case StoredFieldType.NONE | StoredFieldType.SORTEDDOCVALUES | StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.TERMVECTOR | StoredFieldType.SORTEDSETDOCVALUES =>
+    }
+    ret
+  }
+  def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[_] = storedAs.getMatchingValues(is, q, id)
+  def jsGetter(lr: LeafReader): Int => Option[JsValue] = storedAs.jsGetter(lr, id, containsJson)
+  def toJson(lr: LeafReader, stats: mutable.HashMap[String,(TDigest,TDigest)], metadataOpts: MetadataOpts) = {
+    val ret = Json.obj(
+      "description" -> description,
+      "storedAs" -> storedAs.toString,
+      "indexedAs" -> indexedAs.toString,
+      "containsJson" -> containsJson)
+    if (!metadataOpts.stats && !metadataOpts.quantiles && !metadataOpts.histograms) ret else ret ++ getStats(lr, stats, metadataOpts)
     }
 }
 
@@ -668,13 +783,114 @@ case class LevelMetadata(
   fields: Map[String,FieldInfo]) {
   val idFieldAsTerm = new Term(idField,"")
   val idFieldInfo: FieldInfo = fields(idField)
-  def toJson(ia: IndexAccess, commonFields: Set[FieldInfo]): JsValue = Json.obj(
+  val fieldStats = new mutable.HashMap[String,(TDigest,TDigest)]
+  def ensureFieldStats(path: String, lr: LeafReader): Unit =
+    for ((name, info) <- fields) {
+      new File(path+"/stats/"+id).mkdirs()
+      val fname = path + "/stats/" + id + "/" + name + ".stats"
+      if (new File(fname).exists) {
+        val f = new RandomAccessFile(fname, "r")
+        val inChannel = f.getChannel
+        val buffer = inChannel.map(FileChannel.MapMode.READ_ONLY, 0, inChannel.size)
+        val d1 = MergingDigest.fromBytes(buffer)
+        val d2 = if (buffer.position() < inChannel.size) MergingDigest.fromBytes(buffer) else null
+        fieldStats.put(name, (d1, d2))
+        inChannel.close()
+        f.close()
+      } else
+        info.indexedAs match {
+          case IndexedFieldType.TEXT | IndexedFieldType.STRING =>
+            val dft = TDigest.createMergingDigest(100)
+            val ttft = TDigest.createMergingDigest(100)
+            import IndexAccess._
+            val terms = lr.terms(name)
+            if (terms!=null) {
+              for ((_, df, ttf) <- terms.asBytesRefAndDocFreqAndTotalTermFreqIterable) {
+                dft.add(df)
+                ttft.add(ttf)
+              }
+              val bb = ByteBuffer.allocateDirect(dft.smallByteSize + ttft.smallByteSize)
+              dft.asSmallBytes(bb)
+              ttft.asSmallBytes(bb)
+              bb.flip()
+              val out = new FileOutputStream(fname)
+              out.getChannel.write(bb)
+              out.close()
+            }
+          case _ =>
+            info.storedAs match {
+              case StoredFieldType.NONE | StoredFieldType.SORTEDDOCVALUES | StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.TERMVECTOR | StoredFieldType.SORTEDSETDOCVALUES =>
+              case StoredFieldType.NUMERICDOCVALUES | StoredFieldType.SORTEDNUMERICDOCVALUES | StoredFieldType.DOUBLEDOCVALUES | StoredFieldType.FLOATDOCVALUES =>
+                val histogram = TDigest.createMergingDigest(100)
+                info.storedAs match {
+                  case StoredFieldType.NUMERICDOCVALUES =>
+                    val dv = lr.getNumericDocValues(name)
+                    var values = 0
+                    while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
+                      values += 1
+                      histogram.add(dv.longValue)
+                    }
+                    histogram.add(0,lr.numDocs-values)
+                  case StoredFieldType.SORTEDNUMERICDOCVALUES =>
+                    val dv = lr.getSortedNumericDocValues(name)
+                    var values = 0
+                    while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
+                      values += 1
+                      for (i <- 0 to dv.docValueCount)
+                        histogram.add(dv.nextValue)
+                    }
+                    histogram.add(0,lr.numDocs-values)
+                  case StoredFieldType.FLOATDOCVALUES =>
+                    val dv = lr.getNumericDocValues(name)
+                    var values = 0
+                    while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
+                      values += 1
+                      histogram.add(java.lang.Float.intBitsToFloat(dv.longValue.toInt))
+                    }
+                    histogram.add(0,lr.numDocs-values)
+                  case StoredFieldType.DOUBLEDOCVALUES =>
+                    val dv = lr.getNumericDocValues(name)
+                    var values = 0
+                    while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
+                      values += 1
+                      histogram.add(java.lang.Double.longBitsToDouble(dv.longValue))
+                    }
+                    histogram.add(0,lr.numDocs-values)
+                }
+                val bb = ByteBuffer.allocateDirect(histogram.smallByteSize)
+                histogram.asSmallBytes(bb)
+                bb.flip()
+                val out = new FileOutputStream(fname)
+                out.getChannel.write(bb)
+                out.close()
+                fieldStats.put(name,(histogram,null))
+              case StoredFieldType.LATLONDOCVALUES =>
+                val lathistogram = TDigest.createDigest(100)
+                val lonhistogram = TDigest.createDigest(100)
+                val dvs = DocValues.getSortedNumeric(lr, name)
+                while (dvs.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
+                  val value = dvs.nextValue
+                  lathistogram.add(GeoEncodingUtils.decodeLatitude((value >> 32).toInt))
+                  lonhistogram.add(GeoEncodingUtils.decodeLongitude((value & 0xFFFFFFFF).toInt))
+                }
+                val bb = ByteBuffer.allocateDirect(lathistogram.smallByteSize + lonhistogram.smallByteSize)
+                lathistogram.asSmallBytes(bb)
+                lonhistogram.asSmallBytes(bb)
+                bb.flip()
+                val out = new FileOutputStream(fname)
+                out.getChannel.write(bb)
+                out.close()
+                fieldStats.put(name,(lathistogram,lonhistogram))
+            }
+        }
+    }
+  def toJson(ia: IndexAccess, metadataOpts: MetadataOpts, commonFields: Set[FieldInfo]): JsValue = Json.obj(
     "id"->id,
     "description"->description,
     "idField"->idField,
     "indices"->indices,
     "preload"->preload,
-    "fields"->fields.filter(p => !commonFields.contains(p._2)).mapValues(_.toJson(ia.reader(id).leaves.get(0).reader))
+    "fields"->fields.filter(p => metadataOpts.stats || metadataOpts.histograms || metadataOpts.quantiles || !commonFields.contains(p._2)).mapValues(_.toJson(ia.reader(id).leaves.get(0).reader,fieldStats,metadataOpts))
   )
   def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[_] = fields(idField).getMatchingValues(is, q)
 }
@@ -695,7 +911,6 @@ case class IndexMetadata(
   offsetDataConverterLang: Option[String],
   offsetDataConverterAsText: Option[String]
 ) {
-  
   val directoryCreator: Path => Directory = (path: Path) => indexType match {
     case "MMapDirectory" =>
       new MMapDirectory(path)        
@@ -736,16 +951,16 @@ case class IndexMetadata(
       }
   } else null
   val commonFields: Map[String, FieldInfo] = levels.map(_.fields).reduce((l, r) => l.filter(lp => r.get(lp._1).contains(lp._2)))
-  def toJson(ia: IndexAccess) = Json.obj(
+  def toJson(ia: IndexAccess, metadataOpts: MetadataOpts) = Json.obj(
     "name"->indexName,
     "version"->indexVersion,
     "indexType"->indexType,
     "contentField"->contentField,
     "contentTokensField"->contentTokensField,
-    "levels"->levels.map(_.toJson(ia,commonFields.values.toSet)),
+    "levels"->levels.map(_.toJson(ia,metadataOpts,commonFields.values.toSet)),
     "defaultLevel"->defaultLevel.id,
     "indexingAnalyzers"->indexingAnalyzersAsText,
-    "commonFields"->commonFields.mapValues(_.toJson(ia.reader(defaultLevel.id).leaves.get(0).reader))
+    "commonFields"->commonFields.mapValues(_.toJson(ia.reader(defaultLevel.id).leaves.get(0).reader,defaultLevel.fieldStats,metadataOpts))
   )
 }
 
@@ -821,7 +1036,10 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging
         ret
       })
       val reader = if (mreaders.length == 1) mreaders.head else new ParallelCompositeReader(mreaders:_*)
-      for (field <- level.fields) if (!seenFields.contains(field._1)) logger.warn("Documented field "+ field._1 + " not found in "+path+"/["+level.indices.mkString(", ")+"]")
+      level.ensureFieldStats(path,reader.leaves.get(0).reader)
+      for (field <- level.fields) {
+        if (!seenFields.contains(field._1)) logger.warn("Documented field "+ field._1 + " not found in "+path+"/["+level.indices.mkString(", ")+"]")
+      }
       readers.put(level.id, reader)
       val tfSearcher = new IndexSearcher(reader)
       tfSearcher.setSimilarity(termFrequencySimilarity)
