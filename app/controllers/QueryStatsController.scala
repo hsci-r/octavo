@@ -36,8 +36,8 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
       val globalStats = new Stats
       var count = 0
       grpp.grouper.foreach(_.invokeMethod("setParameters", Seq(level, is, q, grpp, gatherTermFreqsPerDoc, globalStats).toArray))
-      var fieldGetters: Seq[Int => JsValue] = null
-      var fieldVGetters: Seq[Int => JsValue] = null
+      var fieldGetters: Seq[Int => Option[JsValue]] = null
+      var fieldVGetters: Seq[Int => Option[JsValue]] = null
       val groupedStats = new mutable.HashMap[JsObject,Stats]
       tlc.get.setCollector(new SimpleCollector() {
         override def scoreMode = ScoreMode.COMPLETE
@@ -61,10 +61,13 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
             }).getOrElse(
               JsObject(grpp.fields.zip(
                 grpp.fieldTransformer.map(ap => {
-                  ap.getBinding.setProperty("fields", fieldGetters.map(_ (doc)).asJava)
+                  ap.getBinding.setProperty("fields", fieldGetters.map(_ (doc).orNull).asJava)
                   ap.run().asInstanceOf[java.util.List[Any]].asScala.map(v => if (v.isInstanceOf[JsValue]) v else JsString(v.asInstanceOf[String])).asInstanceOf[Seq[JsValue]]
-                }).getOrElse(if (grpp.fieldLengths.isEmpty) fieldGetters.map(_ (doc)) else fieldGetters.zip(grpp.fieldLengths).map(p => {
-                  val value = p._1(doc).toString
+                }).getOrElse(if (grpp.fieldLengths.isEmpty) fieldGetters.map(_ (doc).getOrElse(JsNull)) else fieldGetters.zip(grpp.fieldLengths).map(p => {
+                  val value = p._1(doc).map(_ match {
+                    case JsString(s) => s
+                    case a => a.toString
+                  }).getOrElse("")
                   JsString(value.substring(0, Math.min(p._2, value.length)))
                 })))))
             val score = scorer.score().toInt
@@ -98,8 +101,8 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
 
         override def doSetNextReader(context: LeafReaderContext) {
           grpp.grouper.foreach(_.invokeMethod("setContext",context))
-          fieldGetters = grpp.fields.map(level.fields(_).jsGetter(context.reader).andThen(_.iterator.next))
-          fieldVGetters = fieldSums.map(level.fields(_).jsGetter(context.reader).andThen(_.iterator.next))
+          fieldGetters = grpp.fields.map(level.fields(_).jsGetter(context.reader))
+          fieldVGetters = fieldSums.map(level.fields(_).jsGetter(context.reader))
         }
       })
       is.search(q, tlc.get)

@@ -162,6 +162,49 @@ class ExpandingWordBreakIterator(expandLeft: Int = 0, expandRight: Int = 0) exte
   }
 }
 
+class NoBreakIterator extends BreakIterator {
+  var text: String = _
+  override def setText(text: String): Unit = {
+    atEnd = false
+    this.text = text
+  }
+
+  override def setText(ci: CharacterIterator): Unit = throw new UnsupportedOperationException
+
+  override def getText: CharacterIterator = new StringCharacterIterator(text)
+  var atEnd: Boolean = false
+  override def first(): Int = {
+    atEnd = false
+    0
+  }
+  override def last(): Int = {
+    atEnd = true
+    text.length
+  }
+  override def current: Int = if (atEnd) text.length else 0
+  override def next(): Int = if (atEnd) BreakIterator.DONE else {
+    atEnd = true
+    text.length
+  }
+  override def previous(): Int = if (!atEnd) BreakIterator.DONE else {
+    atEnd = false
+    0
+  }
+  override def next(n: Int): Int = if (atEnd) BreakIterator.DONE else {
+    atEnd = true
+    if (n>1) BreakIterator.DONE
+    else text.length
+  }
+  override def following(offset: Int): Int = if (offset<text.length) {
+    atEnd = true
+    text.length
+  } else BreakIterator.DONE
+  override def preceding(offset: Int): Int = if (offset>0) {
+    atEnd = false
+    0
+  } else BreakIterator.DONE
+}
+
 class PatternBreakIterator(pattern: String) extends BreakIterator {
 
   val pbr = pattern.r
@@ -264,6 +307,11 @@ object ContextLevel extends Enum[ContextLevel] {
     def apply(expandLeft: Int, expandRight: Int): BreakIterator =  if (expandLeft>0 || expandRight>0) new ExpandingBreakIterator(new ParagraphBreakIterator(),expandLeft,expandRight) else new ParagraphBreakIterator()
     val defaultStartSearchType = OffsetSearchType.EXACT
     val defaultEndSearchType = OffsetSearchType.PREV
+  }
+  case object DOCUMENT extends ContextLevel {
+    def apply(expandLeft: Int, expandRight: Int): BreakIterator = new NoBreakIterator()
+    val defaultStartSearchType = OffsetSearchType.EXACT
+    val defaultEndSearchType = OffsetSearchType.EXACT
   }
   val values = findValues
 }

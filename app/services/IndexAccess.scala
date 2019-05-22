@@ -101,7 +101,7 @@ object IndexAccess {
   private val whitespaceAnalyzer = new WhitespaceAnalyzer()
 
   private val noSimilarity = new SimilarityBase {
-    override def score(stats: BasicStats, freq: Double, docLen: Double): Double = throw new UnsupportedOperationException()
+    override def score(stats: BasicStats, freq: Double, docLen: Double): Double = 1
     override def toString: String = "NoSimilarity"
   }
 
@@ -672,7 +672,7 @@ case class FieldInfo(
               case TermSort.TERMFREQ => stats = stats.sortBy(_._3)
             }
             if (metadataOpts.sortTermDirection==SortDirection.DESC) stats = stats.reverse
-            ret = ret ++ Json.obj("termFreqs"->stats.map(t => t._1->Json.obj("docFreq"->t._2,"totalTermFreq"->t._3)))
+            ret = ret ++ Json.obj("termFreqs"->stats.map(t => Json.obj("term"->t._1,"docFreq"->t._2,"totalTermFreq"->t._3)))
           }
           if (metadataOpts.quantiles && stats.contains(id)) ret = ret ++ {
             val (ttft, dft) = stats(id)
@@ -787,6 +787,7 @@ case class LevelMetadata(
   def ensureFieldStats(path: String, lr: LeafReader): Unit =
     for ((name, info) <- fields) {
       new File(path+"/stats/"+id).mkdirs()
+      if (!new File(path+"/stats/"+id).exists) throw new IllegalArgumentException("Could not create directory "+path+"/stats/"+id)
       val fname = path + "/stats/" + id + "/" + name + ".stats"
       if (new File(fname).exists) {
         val f = new RandomAccessFile(fname, "r")
@@ -816,6 +817,7 @@ case class LevelMetadata(
               val out = new FileOutputStream(fname)
               out.getChannel.write(bb)
               out.close()
+              fieldStats.put(name, (dft, ttft))
             }
           case _ =>
             info.storedAs match {
@@ -890,6 +892,7 @@ case class LevelMetadata(
     "idField"->idField,
     "indices"->indices,
     "preload"->preload,
+    "documents"->ia.reader(id).maxDoc(),
     "fields"->fields.filter(p => metadataOpts.stats || metadataOpts.histograms || metadataOpts.quantiles || !commonFields.contains(p._2)).mapValues(_.toJson(ia.reader(id).leaves.get(0).reader,fieldStats,metadataOpts))
   )
   def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[_] = fields(idField).getMatchingValues(is, q)
@@ -1090,6 +1093,22 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging
 
   private def newQueryParser(level: LevelMetadata) = {
     val qp = new ComplexPhraseQueryParser(indexMetadata.contentField,queryAnalyzers(level.id)) {
+      override def getWildcardQuery(field: String, term: String): Query = {
+        if (term=="*") level.fields.get(field).map(_.indexedAs).getOrElse(IndexedFieldType.NONE) match {
+          case IndexedFieldType.INTPOINT =>
+            IntPoint.newRangeQuery(field, Int.MinValue, Int.MaxValue)
+          case IndexedFieldType.FLOATPOINT =>
+            FloatPoint.newRangeQuery(field, Float.NegativeInfinity, Float.PositiveInfinity)
+          case IndexedFieldType.DOUBLEPOINT =>
+            DoublePoint.newRangeQuery(field, Double.NegativeInfinity, Double.PositiveInfinity)
+          case IndexedFieldType.LONGPOINT =>
+            LongPoint.newRangeQuery(field,Long.MinValue,Long.MaxValue)
+          case IndexedFieldType.LATLONPOINT =>
+            LatLonPoint.newBoxQuery(field,Double.NegativeInfinity,Double.PositiveInfinity,Double.NegativeInfinity,Double.PositiveInfinity)
+          case _ => super.getWildcardQuery(field,term)
+        }
+        else super.getWildcardQuery(field,term)
+      }
       override def getFieldQuery(field: String, content: String, quoted: Boolean): Query = {
         val ext = field.indexOf("|")
         if (ext == -1)

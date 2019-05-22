@@ -13,8 +13,6 @@ POST    /:index/kwic           		    controllers.KWICController.search(index)
 
 GET		/:index/similarTerms			controllers.SimilarTermsController.similarTerms(index, level: Option[String], query: String, limit: Int ?= 20, offset: Int ?= 0, sort: String ?= "TDF", sortDirection: String ?= "D")
 
-GET		/:index/indexStats				controllers.IndexStatsController.indexStats(index, field: Option[String], from: Double ?= 0.0, to: Double ?= 1.0, by: String ?= "0.1", level: Option[String])
-
 GET		/:index/queryStats				controllers.QueryStatsController.queryStats(index)
 POST	/:index/queryStats				controllers.QueryStatsController.queryStats(index)
 

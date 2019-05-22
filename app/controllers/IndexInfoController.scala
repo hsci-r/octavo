@@ -25,6 +25,7 @@ class IndexInfoController @Inject() (implicit iap: IndexAccessProvider, qc: Quer
       case "D" | "d" => SortDirection.DESC
       case sd => SortDirection.withName(sd.toUpperCase)
     }.getOrElse(SortDirection.ASC)
+    val level = p.get("level").map(_.head)
     implicit val qm = new QueryMetadata(Json.obj(
       "stats"->stats,
       "quantiles"->quantiles,
@@ -34,13 +35,18 @@ class IndexInfoController @Inject() (implicit iap: IndexAccessProvider, qc: Quer
       "by"->byS,
       "maxTermsToStat"->maxTermsToStat,
       "sortTermsBy"->sortTermsBy,
-      "termSortDirection"->termSortDirection))
+      "termSortDirection"->termSortDirection,
+      "level"->level))
     qm.longRunning = false
-    val gp = new GeneralParameters()
+    val mo = MetadataOpts(stats,quantiles,histograms,from,to,by,maxTermsToStat,sortTermsBy,termSortDirection,byS.length-2)
+    val gp = new GeneralParameters
     getOrCreateResult("indexInfo", ia.indexMetadata, qm, gp.force, gp.pretty, () => {
       // will not be called because longRunning = false
-    }, () => {
-      Left(iap(index).indexMetadata.toJson(iap(index),MetadataOpts(stats,quantiles,histograms,from,to,by,maxTermsToStat,sortTermsBy,termSortDirection,byS.length-2)))
-    })
+    }, () =>
+      Left(level match {
+        case Some(levels) => iap(index).indexMetadata.levelMap(levels).toJson(iap(index),mo,Set.empty)
+        case None => iap(index).indexMetadata.toJson(iap(index),mo)
+      })
+    )
   }  
 }
