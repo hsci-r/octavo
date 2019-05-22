@@ -29,7 +29,7 @@ lazy val mainSettings = Seq(
     "org.apache.lucene" % "lucene-codecs" % "8.0.0",
     "org.apache.lucene" % "lucene-analyzers-common" % "8.0.0",
     "fi.seco" %% "lucene-morphologicalanalyzer" % "1.2.1",
-    "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.2",
+    "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.3",
     "fi.seco" % "lexicalanalysis-resources-fi-core" % "1.5.16",
     "org.apache.lucene" % "lucene-queryparser" % "8.0.0",
     "org.apache.lucene" % "lucene-highlighter" % "8.0.0",
