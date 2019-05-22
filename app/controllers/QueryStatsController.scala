@@ -64,14 +64,14 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
                   ap.getBinding.setProperty("fields", fieldGetters.map(_ (doc).orNull).asJava)
                   ap.run().asInstanceOf[java.util.List[Any]].asScala.map(v => if (v.isInstanceOf[JsValue]) v else JsString(v.asInstanceOf[String])).asInstanceOf[Seq[JsValue]]
                 }).getOrElse(if (grpp.fieldLengths.isEmpty) fieldGetters.map(_ (doc).getOrElse(JsNull)) else fieldGetters.zip(grpp.fieldLengths).map(p => {
-                  val value = p._1(doc).map(_ match {
+                  val value = p._1(doc).map {
                     case JsString(s) => s
                     case a => a.toString
-                  }).getOrElse("")
-                  JsString(value.substring(0, Math.min(p._2, value.length)))
+                  }.getOrElse("")
+                  if (p._2 == -1) JsString(value) else JsString(value.substring(0, Math.min(p._2, value.length)))
                 })))))
             val score = scorer.score().toInt
-            val fieldSumValues = for ((key, getter) <- fieldSums.zip(fieldVGetters)) yield (key, getter(doc).asInstanceOf[JsNumber].value.toLong)
+            val fieldSumValues = for ((key, getter) <- fieldSums.zip(fieldVGetters)) yield (key, getter(doc).map(_.asInstanceOf[JsNumber].value.toLong).getOrElse(0l))
             val groupDefinitions: Iterable[JsObject] = if (grpp.groupByMatch)
               ExtendedUnifiedHighlighter.highlightsToStrings(highlighter.highlight(ia.indexMetadata.contentField, q, Array(doc), Int.MaxValue - 1).head, true).asScala.map(amatch => baseGroupDefinition ++ JsObject(Seq("match" -> grpp.matchTransformer.map(ap => {
                 ap.getBinding.setProperty("match", amatch)
@@ -137,7 +137,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
     implicit val ia = iap(index)
     import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    val fieldSums = p.getOrElse("sumFields", Seq.empty)
+    val fieldSums = p.get("sumField").orElse(p.get("sumFields")).getOrElse(Seq.empty)
     val gatherTermFreqsPerDoc = p.get("termFreqs").exists(v => v.head=="" || v.head.toBoolean)
     implicit val qm = new QueryMetadata(Json.obj("termFreqs"->gatherTermFreqsPerDoc,"sumFields"->fieldSums))
     val gp = new GeneralParameters()
