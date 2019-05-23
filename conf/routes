@@ -15,18 +15,20 @@ GET		/:index/similarTerms			controllers.SimilarTermsController.similarTerms(inde
 
 GET		/:index/queryStats				controllers.QueryStatsController.queryStats(index)
 POST	/:index/queryStats				controllers.QueryStatsController.queryStats(index)
-
 GET		/:index/groupedQueryStats		controllers.QueryStatsController.queryStats(index)
 POST	/:index/groupedQueryStats		controllers.QueryStatsController.queryStats(index)
 
 GET		/:index/termVectors			    controllers.TermVectorsController.termVectors(index)
 POST	/:index/termVectors			    controllers.TermVectorsController.termVectors(index)
-
 GET		/:index/groupedTermVectors		controllers.TermVectorsController.termVectors(index)
 POST	/:index/groupedTermVectors		controllers.TermVectorsController.termVectors(index)
+GET		/:index/vocabulary		        controllers.TermVectorsController.termVectors(index)
+POST	/:index/vocabulary      		controllers.TermVectorsController.termVectors(index)
 
 GET		/:index/termVectorDiff			controllers.TermVectorDiffController.termVectorDiff(index)
 POST	/:index/termVectorDiff			controllers.TermVectorDiffController.termVectorDiff(index)
+GET		/:index/vocabularyDiff			controllers.TermVectorDiffController.termVectorDiff(index)
+POST	/:index/vocabularyDiff			controllers.TermVectorDiffController.termVectorDiff(index)
 
 GET		/:index/similarCollocations		controllers.SimilarCollocationsController.similarCollocations(index)
 POST	/:index/similarCollocations		controllers.SimilarCollocationsController.similarCollocations(index)
