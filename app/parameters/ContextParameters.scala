@@ -22,7 +22,7 @@ class ContextParameters(prefix: String = "", suffix: String = "")(implicit reque
   val endOffsetSearchType = p.get("endOffsetSearchType").map(v => OffsetSearchType.withName(v.head.toUpperCase)).getOrElse(contextLevel.defaultEndSearchType)
   val matchOffsetSearchType = p.get("matchOffsetSearchType").map(v => OffsetSearchType.withName(v.head.toUpperCase)).getOrElse(OffsetSearchType.EXACT)
 
-  def highlighter(is: IndexSearcher, analyzer: Analyzer): ExtendedUnifiedHighlighter = new ExtendedUnifiedHighlighter(is, analyzer) {
+  def highlighter(is: IndexSearcher, analyzer: Analyzer, matchFullSpans: Boolean = false): ExtendedUnifiedHighlighter = new ExtendedUnifiedHighlighter(is, analyzer,matchFullSpans) {
     override def getBreakIterator(field: String): BreakIterator = contextLevel(contextExpandLeft,contextExpandRight)
   }
   private val myJson = Json.obj(

@@ -78,7 +78,7 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
         var getters: Map[String,Int => Option[JsValue]] = _
 
         val da = Array(0)
-        val highlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField))
+        val highlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField),true)
         val sbi = srp.sortContextLevel(0,0)
 
 

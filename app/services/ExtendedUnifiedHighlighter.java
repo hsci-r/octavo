@@ -1,9 +1,8 @@
 package services;
 
 import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.index.*;
 import org.apache.lucene.index.FieldInfo;
-import org.apache.lucene.index.IndexOptions;
-import org.apache.lucene.index.Term;
 import org.apache.lucene.queryparser.complexPhrase.ComplexPhraseQueryParser;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
@@ -18,8 +17,22 @@ import java.util.*;
 import java.util.function.Predicate;
 
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource;
+import org.apache.lucene.search.uhighlight.UnifiedHighlighter.HighlightFlag;
 
 public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
+
+    public static final IndexSearcher EMPTY_INDEXSEARCHER;
+
+    static {
+        try {
+            IndexReader emptyReader = new MultiReader();
+            EMPTY_INDEXSEARCHER = new IndexSearcher(emptyReader);
+            EMPTY_INDEXSEARCHER.setQueryCache(null);
+        } catch (IOException bogus) {
+            throw new RuntimeException(bogus);
+        }
+    }
+
 
     public static class Passages {
         public final Passage[] passages;
@@ -32,8 +45,11 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
 
     }
 
-    public ExtendedUnifiedHighlighter(IndexSearcher indexSearcher, Analyzer indexAnalyzer) {
+    private final boolean matchFullSpans;
+
+    public ExtendedUnifiedHighlighter(IndexSearcher indexSearcher, Analyzer indexAnalyzer, boolean matchFullSpans) {
         super(indexSearcher, indexAnalyzer);
+        this.matchFullSpans = matchFullSpans;
         setFormatter(new PassageFormatter() {
             @Override
             public Object format(Passage[] passages, String content) {
@@ -62,6 +78,24 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
 
     public static String highlightToString(Passage pas, String content) {
         return defaultPassageFormatter.format(new Passage[] { pas }, content);
+    }
+
+    @Override
+    protected PhraseHelper getPhraseHelper(String field, Query query, Set<HighlightFlag> highlightFlags) {
+        boolean useWeightMatchesIter = highlightFlags.contains(HighlightFlag.WEIGHT_MATCHES);
+        if (useWeightMatchesIter) {
+            return PhraseHelper.NONE; // will be handled by Weight.matches which always considers phrases
+        }
+        boolean highlightPhrasesStrictly = highlightFlags.contains(HighlightFlag.PHRASES);
+        boolean handleMultiTermQuery = highlightFlags.contains(HighlightFlag.MULTI_TERM_QUERY);
+        return highlightPhrasesStrictly ?
+                new ExtendedPhraseHelper(query, field, getFieldMatcher(field),
+                        this::requiresRewrite,
+                        this::preSpanQueryRewrite,
+                        !handleMultiTermQuery,
+                        matchFullSpans
+                )
+                : PhraseHelper.NONE;
     }
 
     @Override
