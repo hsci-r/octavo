@@ -55,14 +55,13 @@ class ExpandingBreakIterator(protected val sub: BreakIterator, protected val exp
     sub.previous()
   }
   override def next(n: Int): Int = {
-    sub.next(n)
     val lastIndex = this.lastIndex
     (0 until expandRight).foreach(_ => sub.next()  match {
       case `lastIndex` => return lastIndex
       case BreakIterator.DONE => return BreakIterator.DONE
       case _ =>
     })
-    sub.current
+    sub.next(n)
   }
   override def following(offset: Int): Int = {
     if (sub.following(offset) == BreakIterator.DONE) return BreakIterator.DONE
@@ -88,91 +87,119 @@ class ExpandingBreakIterator(protected val sub: BreakIterator, protected val exp
 }
 
 class ExpandingWordBreakIterator(expandLeft: Int = 0, expandRight: Int = 0) extends ExpandingBreakIterator(BreakIterator.getWordInstance,expandLeft,expandRight) {
-  private def nextWord(): Int = {
-    var i = sub.next()
-    if (i == BreakIterator.DONE || i == lastIndex) return i
-    while (i != lastIndex) {
+
+  private def nextWordEnd(): Int = {
+    var i = sub.current()
+    if (i == BreakIterator.DONE) return BreakIterator.DONE
+    while (true) {
       var nextIndex = sub.next()
+      if (nextIndex == BreakIterator.DONE) return BreakIterator.DONE
       while (i != nextIndex) {
-        if (Character.isLetterOrDigit(text.codePointAt(i))) {
-          println("isLetterOrDigit: " + text.codePointAt(i))
-          return sub.current()
-        }
+        if (Character.isLetterOrDigit(text.codePointAt(i)))
+          return nextIndex
         i += 1
       }
     }
-    i
+    BreakIterator.DONE
+  }
+  def nextWordStart(): Int = {
+    var i = sub.next()
+    if (i == BreakIterator.DONE) return BreakIterator.DONE
+    while (true) {
+      var nextIndex = sub.next()
+      if (nextIndex == BreakIterator.DONE) return BreakIterator.DONE
+      while (i != nextIndex) {
+        if (Character.isLetterOrDigit(text.codePointAt(i)))
+          return sub.previous()
+        i += 1
+      }
+    }
+    BreakIterator.DONE
   }
   override def next(): Int = {
-    val lastIndex = this.lastIndex
-    (0 until expandRight).foreach(_ => this.nextWord() match {
-      case `lastIndex` => return lastIndex
+    (0 until expandRight).foreach(_ => this.nextWordEnd() match {
       case BreakIterator.DONE => return BreakIterator.DONE
       case _ =>
     })
-    sub.next()
+    nextWordEnd()
   }
-  private def previousWord(): Int = {
-    var i = sub.previous()
-    if (i == BreakIterator.DONE || i == firstIndex) return i
-    while (i != firstIndex) {
+  private def previousWordStart(): Int = {
+    var i = sub.current()
+    if (i == BreakIterator.DONE) return BreakIterator.DONE
+    i -= 1
+    while (true) {
       val prevIndex = sub.previous()
+      if (prevIndex == BreakIterator.DONE) return BreakIterator.DONE
+      while (i != prevIndex - 1) {
+        if (Character.isLetterOrDigit(text.codePointAt(i)))
+          return prevIndex
+        i -= 1
+      }
+    }
+    BreakIterator.DONE
+  }
+  override def previous(): Int = {
+    (0 until expandLeft).foreach(_ => this.previousWordStart() match {
+      case BreakIterator.DONE => return BreakIterator.DONE
+      case _ =>
+    })
+    previousWordStart()
+  }
+  override def next(n: Int): Int = {
+    (0 to n*expandRight).foreach(_ => this.nextWordEnd() match {
+      case BreakIterator.DONE => return BreakIterator.DONE
+      case _ =>
+    })
+    sub.current
+  }
+  def followingWordStart(offset: Int): Int = {
+    var i = sub.following(offset)
+    if (i == BreakIterator.DONE) return i
+    while (true) {
+      var nextIndex = sub.next()
+      if (nextIndex == BreakIterator.DONE) return BreakIterator.DONE
+      while (i != nextIndex) {
+        if (Character.isLetterOrDigit(text.codePointAt(i)))
+          return sub.previous()
+        i += 1
+      }
+    }
+    BreakIterator.DONE
+  }
+  override def following(offset: Int): Int = {
+    sub.following(offset)
+    (0 until expandRight).foreach(_ => this.nextWordEnd() match {
+      case BreakIterator.DONE => return BreakIterator.DONE
+      case _ =>
+    })
+    sub.current()
+  }
+  override def preceding(offset: Int): Int = {
+    sub.preceding(offset)
+    (0 until expandLeft).foreach(_ => this.previousWordStart() match {
+      case BreakIterator.DONE => return BreakIterator.DONE
+      case _ =>
+    })
+    sub.current()
+  }
+  def precedingWordStart(offset: Int): Int = {
+    var i = offset
+    if (i == BreakIterator.DONE) return BreakIterator.DONE
+    while (true) {
+      var prevIndex = sub.preceding(i)
+      if (prevIndex == BreakIterator.DONE) return BreakIterator.DONE
       while (i != prevIndex - 1) {
         if (Character.isLetterOrDigit(text.codePointAt(i))) {
+          (0 until expandLeft).foreach(_ => this.previousWordStart() match {
+            case BreakIterator.DONE => return BreakIterator.DONE
+            case _ =>
+          })
           return sub.current()
         }
         i -= 1
       }
     }
-    i
-  }
-  override def previous(): Int = {
-    val firstIndex = this.firstIndex
-    (0 until expandLeft).foreach(_ => this.previousWord() match {
-      case `firstIndex` => return firstIndex
-      case BreakIterator.DONE => return BreakIterator.DONE
-      case _ =>
-    })
-    sub.previous()
-  }
-  override def next(n: Int): Int = {
-    val lastIndex = this.lastIndex
-    (0 to n).foreach(_ => this.nextWord() match {
-      case `lastIndex` => return lastIndex
-      case BreakIterator.DONE => return BreakIterator.DONE
-      case _ =>
-    })
-    (0 until expandRight).foreach(_ => sub.next()  match {
-      case `lastIndex` => return lastIndex
-      case BreakIterator.DONE => return BreakIterator.DONE
-      case _ =>
-    })
-    sub.current
-  }
-  override def following(offset: Int): Int = {
-    val lastIndex = this.lastIndex
-    var i = sub.following(offset)
-    i match {
-      case `lastIndex` => return lastIndex
-      case BreakIterator.DONE => return BreakIterator.DONE
-      case _ =>
-    }
-    (0 until expandRight).foreach(_ => this.nextWord() match {
-      case `lastIndex` => return lastIndex
-      case BreakIterator.DONE => return BreakIterator.DONE
-      case _ =>
-    })
-    sub.current
-  }
-  override def preceding(offset: Int): Int = {
-    val firstIndex = this.firstIndex
-    var i = sub.preceding(offset)
-    (0 until expandLeft).foreach(_ => this.previousWord() match {
-      case `firstIndex` => return firstIndex
-      case BreakIterator.DONE => return BreakIterator.DONE
-      case _ =>
-    })
-    sub.current
+    BreakIterator.DONE
   }
 }
 
@@ -282,7 +309,7 @@ class PatternBreakIterator(pattern: String) extends BreakIterator {
 }
 
 class ParagraphBreakIterator extends PatternBreakIterator("\n\n")
-//class WordBreakIterator extends PatternBreakIterator("[\\p{Z}\\p{P}\\p{C}]+")
+class WordBreakIterator extends PatternBreakIterator("[\\p{Z}\\p{P}\\p{C}]+")
 class LineBreakIterator extends PatternBreakIterator("\n")
 
 sealed abstract class ContextLevel extends EnumEntry {

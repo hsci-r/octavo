@@ -30,6 +30,7 @@ import org.apache.lucene.index.Term;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.index.IndexReader.CacheHelper;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.MultiTermQuery;
 import org.apache.lucene.search.Query;
@@ -262,10 +263,10 @@ public class ExtendedPhraseHelper extends PhraseHelper {
                 SpanCollectedOffsetsEnum ends = tspanCollector.termToOffsetsEnums.get(tspanCollector.terms.get(tspanCollector.terms.size()-1));
                 int blen = 0;
                 for (BytesRef term : tspanCollector.terms) blen += term.length + 1;
-                BytesRef span = new BytesRef(new byte[blen],0,blen - 1);
+                BytesRef span = new BytesRef(new byte[blen], 0, blen - 1);
                 blen = 0;
                 for (BytesRef term : tspanCollector.terms) {
-                    System.arraycopy(term.bytes,term.offset,span.bytes,blen,term.length);
+                    System.arraycopy(term.bytes, term.offset, span.bytes, blen, term.length);
                     blen += term.length;
                     span.bytes[blen] = ' ';
                     blen += 1;
@@ -275,7 +276,8 @@ public class ExtendedPhraseHelper extends PhraseHelper {
                     offsetsEnum = new SpanCollectedOffsetsEnum(span, starts.startOffsets.length);
                     spanCollector.termToOffsetsEnums.put(span, offsetsEnum);
                 }
-                for (int i=0;i<starts.startOffsets.length;i++) offsetsEnum.add(starts.startOffsets[i],ends.endOffsets[i]);
+                for (int i = 0; i < starts.numPairs; i++)
+                    offsetsEnum.add(starts.startOffsets[i], ends.endOffsets[i]);
             }  else spans.collect(spanCollector);
 
             if (spans.nextStartPosition() == Spans.NO_MORE_POSITIONS) {

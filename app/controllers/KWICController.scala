@@ -105,23 +105,41 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
                 var endIndex = m._2
                 if (dindex < 0) {
                   var mdindex = dindex + 1
-                  startIndex = sbi.preceding(m._1)
+                  startIndex = sbi match {
+                    case wsbi: ExpandingWordBreakIterator => wsbi.precedingWordStart(m._1)
+                    case _ => sbi.preceding(m._1)
+                  }
+                  var same = false
                   while (mdindex<0) {
-                    startIndex = sbi.previous()
+                    val nStartIndex = sbi.previous()
+                    if (startIndex == nStartIndex) same = true
+                    else startIndex = nStartIndex
                     mdindex += 1
                   }
                   endIndex = sbi.next()
+                  if (same || endIndex > m._1 || startIndex == BreakIterator.DONE || endIndex == BreakIterator.DONE) {
+                    endIndex = 0
+                    startIndex = 0
+                  }
                 } else if (dindex>0) {
                   var mdindex = dindex - 1
-                  startIndex = sbi.following(m._2)
+                  startIndex = sbi match {
+                    case wsbi: ExpandingWordBreakIterator => wsbi.followingWordStart(m._2)
+                    case _ => sbi.following(m._2)
+                  }
                   while (mdindex>0) {
-                    startIndex = sbi.next()
+                    startIndex = sbi match {
+                      case wsbi: ExpandingWordBreakIterator => wsbi.nextWordStart()
+                      case _ => sbi.next()
+                    }
                     mdindex -= 1
                   }
                   endIndex = sbi.next()
+                  if (startIndex == BreakIterator.DONE || endIndex == BreakIterator.DONE) {
+                    startIndex = eoffset
+                    endIndex = eoffset
+                  }
                 }
-                if (startIndex == BreakIterator.DONE) startIndex = 0
-                if (endIndex == BreakIterator.DONE) endIndex = matchesInDoc.content.length
                 if (startIndex < soffset) soffset = startIndex
                 if (endIndex > eoffset) eoffset = endIndex
                 (pindex,startIndex,endIndex)
