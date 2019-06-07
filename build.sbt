@@ -29,7 +29,7 @@ lazy val mainSettings = Seq(
     "org.apache.lucene" % "lucene-codecs" % "8.0.0",
     "org.apache.lucene" % "lucene-analyzers-common" % "8.0.0",
     "fi.seco" %% "lucene-morphologicalanalyzer" % "1.2.1",
-    "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.3",
+    "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.4",
     "fi.seco" % "lexicalanalysis-resources-fi-core" % "1.5.16",
     "org.apache.lucene" % "lucene-queryparser" % "8.0.0",
     "org.apache.lucene" % "lucene-highlighter" % "8.0.0",
@@ -52,12 +52,20 @@ lazy val mainSettings = Seq(
   )
 )
 
+import com.typesafe.sbt.packager.docker._
+
 lazy val dockerSettings = Seq(
   maintainer := "Eetu Mäkelä <eetu.makela@iki.fi>",
   packageSummary := "octavo",
   packageDescription := "Octavo - Open API for Text and Metadata, built using the Play framework",
-  dockerBaseImage := "openjdk:alpine",
-  dockerExposedPorts in Docker := Seq(9000, 9443)
+  dockerBaseImage := "openjdk:13-alpine",
+  dockerExposedPorts := Seq(9000, 9443),
+  dockerEnvVars := Map("JAVA_OPTS"->"-Dindices.index=/opt/docker/index"),
+  dockerExposedVolumes := Seq("/opt/docker/logs","/opt/docker/index","/opt/docker/tmp"),
+  dockerUsername := Some("jiemakel"),
+  daemonUserUid in Docker := None,
+  daemonUser in Docker := "daemon",
+  dockerUpdateLatest := true
 )
 
 lazy val assemblySettings = Seq(

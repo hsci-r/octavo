@@ -249,12 +249,19 @@ object IndexAccess {
 }
 
 @Singleton
-class IndexAccessProvider @Inject() (config: Configuration,lifecycle: ApplicationLifecycle) {
+class IndexAccessProvider @Inject() (config: Configuration,lifecycle: ApplicationLifecycle) extends Logging {
   val indexAccesses = {
     val c = config.get[Configuration]("indices")
     c.keys.map(k => Future {
-      (k, new IndexAccess(c.get[String](k),lifecycle))
-    }(IndexAccess.shortTaskExecutionContext)).map(Await.result(_,Duration.Inf)).toMap
+      val p = c.get[String](k)
+      try {
+        Some((k, new IndexAccess(p,lifecycle)))
+      } catch {
+        case e: Exception =>
+          logger.warn("Couldn't initialise index "+k+" at "+p,e)
+          None
+      }
+    }(IndexAccess.shortTaskExecutionContext)).flatMap(Await.result(_,Duration.Inf)).toMap
   }
   def apply(id: String): IndexAccess = indexAccesses(id)
   def toJson: JsValue = Json.toJson(indexAccesses.mapValues(v => v.indexMetadata.indexName))
@@ -828,7 +835,7 @@ case class LevelMetadata(
                   case StoredFieldType.NUMERICDOCVALUES =>
                     val dv = lr.getNumericDocValues(name)
                     var values = 0
-                    while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
+                    if (dv!=null) while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
                       values += 1
                       histogram.add(dv.longValue)
                     }
@@ -836,7 +843,7 @@ case class LevelMetadata(
                   case StoredFieldType.SORTEDNUMERICDOCVALUES =>
                     val dv = lr.getSortedNumericDocValues(name)
                     var values = 0
-                    while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
+                    if (dv!=null) while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
                       values += 1
                       for (i <- 0 to dv.docValueCount)
                         histogram.add(dv.nextValue)
@@ -845,7 +852,7 @@ case class LevelMetadata(
                   case StoredFieldType.FLOATDOCVALUES =>
                     val dv = lr.getNumericDocValues(name)
                     var values = 0
-                    while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
+                    if (dv!=null) while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
                       values += 1
                       histogram.add(java.lang.Float.intBitsToFloat(dv.longValue.toInt))
                     }
@@ -853,7 +860,7 @@ case class LevelMetadata(
                   case StoredFieldType.DOUBLEDOCVALUES =>
                     val dv = lr.getNumericDocValues(name)
                     var values = 0
-                    while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
+                    if (dv!=null) while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
                       values += 1
                       histogram.add(java.lang.Double.longBitsToDouble(dv.longValue))
                     }
@@ -870,7 +877,7 @@ case class LevelMetadata(
                 val lathistogram = TDigest.createDigest(100)
                 val lonhistogram = TDigest.createDigest(100)
                 val dvs = DocValues.getSortedNumeric(lr, name)
-                while (dvs.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
+                if (dvs!=null) while (dvs.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
                   val value = dvs.nextValue
                   lathistogram.add(GeoEncodingUtils.decodeLatitude((value >> 32).toInt))
                   lonhistogram.add(GeoEncodingUtils.decodeLongitude((value & 0xFFFFFFFF).toInt))
