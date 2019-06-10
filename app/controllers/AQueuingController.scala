@@ -25,6 +25,16 @@ class QueryCache @Inject() (env: Environment, configuration: Configuration) exte
 
   final val version = configuration.get[String]("app.version")
 
+  final val auths = configuration.getOptional[Configuration]("auths").map(c => {
+    c.keys.map(k => k -> c.get[String](k)).toMap
+  }).getOrElse(Map.empty)
+
+  def checkAuth(index: String, request: Request[AnyContent]): Boolean = {
+    if (!auths.contains(index)) return true
+    val auth = auths(index)
+    request.headers.getAll("Authorization").filter(_.toLowerCase.startsWith("basic ")).exists(_.substring(6) == auth)
+  }
+
   private val mtmpDir = {
     val mtmpDir = env.getFile("tmp")
     for (i <- ('0' to '9') ++ ('a' to 'f');j <- ('0' to '9') ++ ('a' to 'f')) {
@@ -62,6 +72,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
   }
 
   protected def getOrCreateResult(method: String, index: IndexMetadata, parameters: QueryMetadata, force: Boolean, pretty: Boolean, estimate: () => Unit, call: () => Either[JsValue,Result])(implicit request: Request[AnyContent]): Result = {
+    if (!qc.checkAuth(index.indexId,request)) return Unauthorized.withHeaders("WWW-Authenticate" -> """Basic realm="Restricted"""")
     val callId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.toString
     val startTime = System.currentTimeMillis
     val name = DigestUtils.sha256Hex(callId)

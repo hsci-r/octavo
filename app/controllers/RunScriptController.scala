@@ -60,7 +60,7 @@ class RunScriptController @Inject() (iap: IndexAccessProvider) extends InjectedC
         }
       } catch {
         case e: Exception =>
-          BadRequest(e.getClass+": "+e.getMessage()+"\n"+e.getStackTrace.mkString("\n"))
+          BadRequest(e.getClass+": "+e.getMessage+"\n"+e.getStackTrace.mkString("\n"))
       }
     }
   } 

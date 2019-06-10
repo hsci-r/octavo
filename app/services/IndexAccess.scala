@@ -255,7 +255,7 @@ class IndexAccessProvider @Inject() (config: Configuration,lifecycle: Applicatio
     c.keys.map(k => Future {
       val p = c.get[String](k)
       try {
-        Some((k, new IndexAccess(p,lifecycle)))
+        Some((k, new IndexAccess(k,p,lifecycle)))
       } catch {
         case e: Exception =>
           logger.warn("Couldn't initialise index "+k+" at "+p,e)
@@ -910,6 +910,7 @@ object OffsetSearchType extends Enumeration {
 }
 
 case class IndexMetadata(
+  indexId: String,
   indexName: String,
   indexVersion: String,
   indexType: String,
@@ -974,7 +975,7 @@ case class IndexMetadata(
   )
 }
 
-class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging {
+class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) extends Logging {
   
   import IndexAccess._
  
@@ -998,7 +999,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging
       (c \ "fields").asOpt[Map[String,JsValue]].map(readFieldInfos).getOrElse(Map.empty) ++ commonFields
   )
   
-  def readIndexMetadata(c: JsValue) = IndexMetadata(
+  def readIndexMetadata(c: JsValue) = IndexMetadata(id,
     (c \ "name").as[String],
     (c \ "version").as[String],
     (c \ "indexType").asOpt[String].getOrElse("MMapDirectory"),
@@ -1013,13 +1014,7 @@ class IndexAccess(path: String, lifecycle: ApplicationLifecycle) extends Logging
     (c \ "offsetDataConverter").asOpt[String]
   )
 
-  val indexMetadata: IndexMetadata = try {
-    readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
-  } catch {
-    case e: Exception =>
-      logger.error("Encountered an exception reading "+path+"/indexmeta.json",e)
-      throw e
-  }
+  val indexMetadata: IndexMetadata = readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
 
   private val offsetDataEnv = if (indexMetadata.offsetDataConverterAsText.isDefined) Environments.newContextualInstance(path+"/offsetdata", new EnvironmentConfig().setEnvIsReadonly(true).setLogFileSize(Int.MaxValue+1l).setMemoryUsage(Math.min(1073741824l, Runtime.getRuntime.maxMemory/4)).setEnvCloseForcedly(true)) else null
   if (indexMetadata.offsetDataConverterAsText.isDefined && lifecycle != null) lifecycle.addStopHook{() => Future.successful(offsetDataEnv.close())}
