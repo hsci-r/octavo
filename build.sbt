@@ -66,7 +66,11 @@ lazy val dockerSettings = Seq(
   daemonUserUid in Docker := None,
   daemonUser in Docker := "daemon",
   dockerUpdateLatest := true,
-  dockerCommands := Seq(dockerCommands.value.head,Cmd("RUN","apk","update"),Cmd("RUN","apk","add","rsync","openssh")) ++ dockerCommands.value.tail
+  dockerCommands := {
+    val splitIndex = dockerCommands.value.lastIndexWhere{case Cmd("FROM",_) => true; case _ => false} + 1
+    val (head,tail) = dockerCommands.value.splitAt(splitIndex)
+    head ++ Seq(Cmd("RUN","apk","update"),Cmd("RUN","apk","add","rsync","openssh")) ++ tail
+  }
 )
 
 lazy val assemblySettings = Seq(
