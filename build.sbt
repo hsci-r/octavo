@@ -65,7 +65,8 @@ lazy val dockerSettings = Seq(
   dockerUsername := Some("jiemakel"),
   daemonUserUid in Docker := None,
   daemonUser in Docker := "daemon",
-  dockerUpdateLatest := true
+  dockerUpdateLatest := true,
+  dockerCommands := Seq(dockerCommands.value.head,Cmd("RUN","apk","update"),Cmd("RUN","apk","add","rsync","openssh")) ++ dockerCommands.value.tail
 )
 
 lazy val assemblySettings = Seq(
