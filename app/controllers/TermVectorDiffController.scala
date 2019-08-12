@@ -5,8 +5,8 @@ import java.util.function.LongConsumer
 import com.koloboke.collect.set.hash.HashLongSets
 import javax.inject.{Inject, Singleton}
 import parameters._
-import play.api.libs.json.{JsNull, Json}
-import services.{Distance, IndexAccessProvider, TermVectors, IndexAccess}
+import play.api.libs.json.{JsNull, JsObject, Json}
+import services.{Distance, IndexAccess, IndexAccessProvider, TermVectors}
 
 import scala.collection.mutable
 import scala.concurrent.duration.Duration
@@ -24,7 +24,8 @@ class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, qc:
     import ia._
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val meaningfulTerms: Int = p.get("meaningfulTerms").map(_.head.toInt).getOrElse(0)
-    implicit val qm = new QueryMetadata(Json.obj("meaningfulTerms"->meaningfulTerms))
+    val fullJson = Json.obj("meaningfulTerms"->meaningfulTerms)
+    implicit val qm = new QueryMetadata(JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined)), fullJson)
     val gp = new GeneralParameters()
     val grpp = new GroupingParameters()
     val tvq1 = new QueryParameters("t1_")

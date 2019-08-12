@@ -1,6 +1,6 @@
 package parameters
 
-import play.api.libs.json.Json
+import play.api.libs.json.{JsObject, Json}
 import play.api.mvc.{AnyContent, Request}
 import services.IndexAccess
 
@@ -25,12 +25,16 @@ class KWICParameters()(implicit request: Request[AnyContent], ia: IndexAccess, q
   val sortContextDistancesByDistance = sortContextDistances.zipWithIndex.sortBy(_._1._1).map(p => (p._1._1,p._2))
   /** how many results to skip */
   val offset: Int = p.get("offset").map(_.head.toInt).getOrElse(0)
-  private val myJson = Json.obj(
+  private val fullJson = Json.obj(
     "offset" -> offset,
     "sortContextLevel" -> sortContextLevel.entryName,
     "sortContextDistances" -> sortContextDistances,
     "fields"->fields
   )
-  override def toJson = super.toJson ++ myJson
-  queryMetadata.json = queryMetadata.json ++ myJson
+  queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1 match {
+    case "fields" => "field"
+    case "sortContextDistances" => "sortContextDistance"
+    case a => a
+  }).isDefined))
 }

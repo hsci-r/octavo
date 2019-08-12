@@ -3,7 +3,7 @@ package parameters
 import play.api.http.MimeTypes
 import play.api.libs.json.{JsObject, Json}
 
-class QueryMetadata(var json: JsObject = Json.obj(), mimeType: String = MimeTypes.JSON) {
+class QueryMetadata(var nonDefaultJson: JsObject = Json.obj(), var fullJson: JsObject = Json.obj(), mimeType: String = MimeTypes.JSON) {
   var longRunning: Boolean = false
   var key: Option[String] = None
   var estimatedDocumentsToProcess: Int = 0
@@ -13,5 +13,4 @@ class QueryMetadata(var json: JsObject = Json.obj(), mimeType: String = MimeType
   def elapsed: Long = System.currentTimeMillis - startTime
   def eta: Long = if (documentsProcessed == 0) -1 else (estimatedDocumentsToProcess - documentsProcessed) * elapsed / documentsProcessed
   def status: JsObject = Json.obj("startTime"->startTime, "estimatedNumberOfResults"->estimatedNumberOfResults,"elapsed"->elapsed, "estimatedDocumentsToProcess"->estimatedDocumentsToProcess,"documentsProcessed"->documentsProcessed,"eta"-> eta)
-  override def toString: String = json.toString
 }

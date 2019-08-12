@@ -7,8 +7,8 @@ import org.apache.lucene.index.Term
 import org.apache.lucene.search.BooleanClause.Occur
 import org.apache.lucene.search.{BooleanQuery, TermQuery, TotalHitCountCollector}
 import parameters._
-import play.api.libs.json.Json
-import services.{IndexAccessProvider, TermVectors, IndexAccess}
+import play.api.libs.json.{JsObject, Json}
+import services.{IndexAccess, IndexAccessProvider, TermVectors}
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -25,7 +25,8 @@ class TermVectorsController @Inject()(implicit iap: IndexAccessProvider, qc: Que
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     val termVectors = p.get("termVectors").exists(v => v.head=="" || v.head.toBoolean)
     val distances = p.get("distances").exists(v => v.head=="" || v.head.toBoolean)
-    implicit val qm = new QueryMetadata(Json.obj("distances"->distances,"termVectors"->termVectors))
+    val fullJson = Json.obj("distances"->distances,"termVectors"->termVectors)
+    implicit val qm = new QueryMetadata(JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined)), fullJson)
     val gp = new GeneralParameters()
     val grpp = new GroupingParameters()
     val termVectorQueryParameters = new QueryParameters()

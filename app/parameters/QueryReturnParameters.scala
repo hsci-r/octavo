@@ -1,6 +1,6 @@
 package parameters
 
-import play.api.libs.json.Json
+import play.api.libs.json.{JsObject, Json}
 import play.api.mvc.{AnyContent, Request}
 import services.IndexAccess
 
@@ -17,13 +17,15 @@ class QueryReturnParameters()(implicit protected val request: Request[AnyContent
   /** how many results to skip */
   val offset: Int = p.get("offset").map(_.head.toInt).getOrElse(0)
 
-  private val myJson = Json.obj(
+  private val fullJson = Json.obj(
     "snippetLimit" -> snippetLimit,
     "offset" -> offset,
     "sumScaling"->queryScoringString,
     "fields"->fields,
     "returnExplanations"->returnExplanations
   )
-  override def toJson = super.toJson ++ myJson
-  queryMetadata.json = queryMetadata.json ++ myJson
-}
+  queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1 match {
+    case "fields" => "field"
+    case a => a
+  }).isDefined))}

@@ -21,7 +21,7 @@ import jetbrains.exodus.util.LightOutputStream
 import org.apache.lucene.analysis.Analyzer.TokenStreamComponents
 import org.apache.lucene.analysis._
 import org.apache.lucene.analysis.core.{KeywordAnalyzer, WhitespaceAnalyzer, WhitespaceTokenizer}
-import org.apache.lucene.analysis.miscellaneous.{HyphenatedWordsFilter, LengthFilter, PerFieldAnalyzerWrapper}
+import org.apache.lucene.analysis.miscellaneous.{ASCIIFoldingFilter, HyphenatedWordsFilter, LengthFilter, PerFieldAnalyzerWrapper}
 import org.apache.lucene.analysis.pattern.PatternReplaceFilter
 import org.apache.lucene.analysis.standard.StandardAnalyzer
 import org.apache.lucene.document.{DoublePoint, FloatPoint, IntPoint, LatLonPoint, LongPoint}
@@ -944,8 +944,28 @@ case class IndexMetadata(
         new LowerCaseFilter(in)
       }
     }
+    case "NormalisingOctavoAnalyzer" => new Analyzer() {
+      override def createComponents(fieldName: String) = {
+        val src = new WhitespaceTokenizer()
+        var tok: TokenFilter = new HyphenatedWordsFilter(src)
+        tok = new PatternReplaceFilter(tok,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false)
+        tok = new ASCIIFoldingFilter(tok)
+        tok = new LowerCaseFilter(tok)
+        tok = new LengthFilter(tok, 1, Int.MaxValue)
+        new TokenStreamComponents(src,normalize(fieldName,tok))
+      }
+
+      override protected def normalize(fieldName: String, in: TokenStream): TokenStream = {
+        new LowerCaseFilter(new ASCIIFoldingFilter(in))
+      }
+    }
     case "StandardAnalyzer" => new StandardAnalyzer(CharArraySet.EMPTY_SET)
-    case a if a.startsWith("MorphologicalAnalyzer_") => new MorphologicalAnalyzer(new Locale(a.substring(23)))
+    case a if a.startsWith("MorphologicalAnalyzer_") => new MorphologicalAnalyzer(new Locale(a.substring(22)))
+    case a if a.startsWith("CustomAnalyzer") =>
+      val a2 = a.substring(15)
+      val ci = a.indexOf(':')
+      val ase = scriptEngineManager.getEngineByName(if (ci==0) "Groovy" else a.substring(0,ci))
+      ase.eval(a.substring(ci+1)).asInstanceOf[Analyzer]
     case any => throw new IllegalArgumentException("Unknown analyzer type " + any)
   }.withDefaultValue(new KeywordAnalyzer())
   val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap

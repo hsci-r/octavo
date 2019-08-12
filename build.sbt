@@ -3,7 +3,7 @@ import com.typesafe.config._
 lazy val conf = ConfigFactory.parseFile(new File("conf/application.conf")).resolve()
 
 lazy val commonSettings = Seq(
-  scalaVersion := "2.12.8",
+  scalaVersion := "2.12.9",
   resolvers += Resolver.mavenLocal,
   developers := List(Developer(id="jiemakel",name="Eetu Mäkelä",email="eetu.makela@iki.fi",url=url("http://iki.fi/eetu.makela"))),
   organization := "io.github.jiemakel",

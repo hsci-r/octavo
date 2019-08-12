@@ -8,6 +8,7 @@ class SamplingParameters(prefix: String = "", suffix: String = "")(implicit requ
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   /** maximum number of documents to process */
   val maxDocs: Int = p.get(prefix+"maxDocs"+suffix).map(_.head.toInt).getOrElse(50000)
-  def toJson: JsObject = Json.obj(prefix+"maxDocs"+suffix->maxDocs)
-  queryMetadata.json = queryMetadata.json ++ toJson
+  private val fullJson: JsObject = Json.obj(prefix+"maxDocs"+suffix->maxDocs)
+  queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
 }

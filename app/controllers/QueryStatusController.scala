@@ -22,7 +22,7 @@ class QueryStatusController @Inject()(qc: QueryCache) extends InjectedController
   def status(key: String) = Action {
     Option(qc.runningQueries.get(key)) match {
       case None => NotFound("<html><body><h1>Not Running</h1>Statistics could not be fetched because the query is not running. Maybe it is already finished with a <a href=\"../result/"+key+"\">result</a> available?</body></html>").as(HTML)
-      case Some((queryMetadata,_)) => Ok(Json.prettyPrint(Json.obj( "status"->queryMetadata.status, "queryMetadata"->queryMetadata.json))).as(JSON)
+      case Some((queryMetadata,_)) => Ok(Json.prettyPrint(Json.obj( "status"->queryMetadata.status, "parameters"->queryMetadata.nonDefaultJson,"fullParameters"->queryMetadata.fullJson))).as(JSON)
     }
   }
 }

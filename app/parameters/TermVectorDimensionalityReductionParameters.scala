@@ -17,10 +17,11 @@ class TermVectorDimensionalityReductionParameters(prefix: String = "", suffix: S
   val tsneUsePCA: Boolean = true
   val tsneTheta: Double = 0.5
 
-  override def toJson: JsObject = super.toJson ++
+  private val fullJson =
     Json.obj(
       prefix+"dimensions"+suffix->dimensions,
       prefix+"dimReduct"+suffix->(""+dimensionalityReduction)
     )
-  queryMetadata.json = queryMetadata.json ++ toJson
+  queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
 }

@@ -24,13 +24,18 @@ trait SortParameters extends WithToJson {
     case "s" | "sensitive" => false
   })
   val sorts = sortFields.zipAll(sortDirections,ia.indexMetadata.contentField,SortDirection.ASC).zipAll(sortCaseInsensitivities,null,false).map(p => (p._1._1,p._1._2,p._2))
-  private val myJson = Json.obj(
+  private val fullJson = Json.obj(
     "sorts"->sortFields,
     "sortDirections"->sortDirections,
     "sortCaseInsensitivities"->sortCaseInsensitivities,
   )
-  override def toJson = super.toJson ++ myJson
-  queryMetadata.json = queryMetadata.json ++ myJson
+  queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1 match {
+    case "fields" => "field"
+    case "sortCaseInsesitivities" => "sortCaseInsensitive"
+    case "sorts" => "sort"
+    case a => a
+  }).isDefined))
 
   def compare(xs: Seq[JsValue], ys: Seq[JsValue]): Int = xs.view.zip(ys).zip(sorts).map{
     case ((x,y),(_,d,ci)) => compare(x,y,d,ci)

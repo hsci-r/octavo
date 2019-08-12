@@ -21,10 +21,11 @@ class TermVectorDistanceCalculationParameters(prefix: String = "", suffix: Strin
   /** does distance calculation only operate on dimensions where both vectors have a value? (does not apply to DICE/JACCARD metrics)*/
   val filtering: Filtering = filteringOpt.getOrElse(Filtering.EITHER)
   
-  def toJson: JsObject = Json.obj(
+  private val fullJson = Json.obj(
     prefix+"distance"+suffix->distanceMetric.entryName,
     prefix+"filtering"+suffix->filtering.entryName,
     prefix+"normalization"+suffix->normalization.entryName
   )
-  queryMetadata.json = queryMetadata.json ++ toJson
+  queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
 }

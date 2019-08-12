@@ -1,6 +1,6 @@
 package parameters
 
-import play.api.libs.json.Json
+import play.api.libs.json.{JsObject, Json}
 import play.api.mvc.{AnyContent, Request}
 import services.IndexAccess
 
@@ -8,9 +8,9 @@ class LimitParameters(prefix: String = "", suffix: String = "")(implicit request
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   /** how many results to return at maximum */
   val limit: Int = p.get(prefix+"limit"+suffix).map(_.head.toInt).getOrElse(20)
-  private val myJson = Json.obj(
+  private val fullJson = Json.obj(
     prefix+"limit"+suffix->limit
   )
-  def toJson =  myJson
-  queryMetadata.json = queryMetadata.json ++ myJson
+  queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
 }

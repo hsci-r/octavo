@@ -7,7 +7,7 @@ import org.apache.lucene.search._
 import org.apache.lucene.util.automaton.CompiledAutomaton
 import org.apache.lucene.util.{AttributeSource, BytesRef}
 import parameters._
-import play.api.libs.json.Json
+import play.api.libs.json.{JsObject, Json}
 import services.IndexAccessProvider
 
 import scala.collection.JavaConverters._
@@ -116,13 +116,15 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
       case sd => SortDirection.withName(sd.toUpperCase)
     }
     val sort = SortBy.withName(sortS.toUpperCase)
-    implicit val qm = new QueryMetadata(Json.obj(
+    val fullJson = Json.obj(
       "query" -> query,
       "sort" -> sort,
       "sortDirection" -> sortDirection,
       "level" -> level,
       "offset"->offset,
-      "limit"->limit))
+      "limit"->limit)
+    val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    implicit val qm = new QueryMetadata(JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined)),fullJson)
     val gp = new GeneralParameters()
     implicit val ec = gp.executionContext
     getOrCreateResult("similarTerms", ia.indexMetadata, qm, gp.force, gp.pretty, () => {

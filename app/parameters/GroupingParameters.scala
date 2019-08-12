@@ -2,7 +2,7 @@ package parameters
 
 import controllers.RunScriptController
 import groovy.lang.GroovyShell
-import play.api.libs.json.Json
+import play.api.libs.json.{JsObject, Json}
 import play.api.mvc.{AnyContent, Request}
 import services.IndexAccess
 
@@ -18,9 +18,13 @@ class GroupingParameters(prefix: String = "", suffix: String = "")(implicit prot
   private val matchTransformerS = p.get("matchTransformer").map(_.head)
   val matchTransformer = matchTransformerS.map(apScript => new GroovyShell(RunScriptController.compilerConfiguration).parse(apScript))
   val matchLength = p.get("matchLength").map(_.head.toInt)
-  private val myJson = Json.obj(prefix+"fields"+suffix->fields,prefix+"fieldLengths"+suffix->fieldLengths,prefix+"fieldTransformer"+suffix->fieldTransformerS,prefix+"grouper"+suffix->grouperS,prefix+"groupByMatch"+suffix->groupByMatch,prefix+"matchTransformer"+suffix->matchTransformerS,prefix+"matchLength"+suffix->matchLength)
-  override def toJson = super.toJson ++ myJson
+  private val fullJson = Json.obj(prefix+"fields"+suffix->fields,prefix+"fieldLengths"+suffix->fieldLengths,prefix+"fieldTransformer"+suffix->fieldTransformerS,prefix+"grouper"+suffix->grouperS,prefix+"groupByMatch"+suffix->groupByMatch,prefix+"matchTransformer"+suffix->matchTransformerS,prefix+"matchLength"+suffix->matchLength)
   def isDefined = fields.nonEmpty || grouper.isDefined || groupByMatch
-  queryMetadata.json = queryMetadata.json ++ myJson
+  queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(prefix + (pa._1.drop(prefix.length).dropRight(suffix.length) match {
+    case "fields" => "field"
+    case "fieldLengths" => "fieldLength"
+    case a => a
+  }) + suffix).isDefined))
 }
 

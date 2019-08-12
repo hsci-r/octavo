@@ -4,7 +4,7 @@ import java.text.BreakIterator
 
 import org.apache.lucene.analysis.Analyzer
 import org.apache.lucene.search.IndexSearcher
-import play.api.libs.json.Json
+import play.api.libs.json.{JsObject, Json}
 import play.api.mvc.{AnyContent, Request}
 import services.{ExtendedUnifiedHighlighter, IndexAccess, OffsetSearchType}
 
@@ -25,7 +25,7 @@ class ContextParameters(prefix: String = "", suffix: String = "")(implicit reque
   def highlighter(is: IndexSearcher, analyzer: Analyzer, matchFullSpans: Boolean = false): ExtendedUnifiedHighlighter = new ExtendedUnifiedHighlighter(is, analyzer,matchFullSpans) {
     override def getBreakIterator(field: String): BreakIterator = contextLevel(contextExpandLeft,contextExpandRight)
   }
-  private val myJson = Json.obj(
+  private val fullJson = Json.obj(
     "contextLevel" -> contextLevel.entryName,
     "contextExpandLeft" -> contextExpandLeft,
     "contextExpandRight" -> contextExpandRight,
@@ -35,6 +35,8 @@ class ContextParameters(prefix: String = "", suffix: String = "")(implicit reque
     "matchOffsetSearchType" -> matchOffsetSearchType
   )
 
-  override def toJson = super.toJson ++ myJson
-  queryMetadata.json = queryMetadata.json ++ myJson
+  queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
+
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
+
 }

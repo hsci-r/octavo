@@ -3,7 +3,7 @@ package parameters
 import groovy.lang.{Binding, GroovyClassLoader, Script}
 import org.apache.lucene.index.TermsEnum
 import org.codehaus.groovy.runtime.InvokerHelper
-import play.api.libs.json.Json
+import play.api.libs.json.{JsObject, Json}
 import play.api.mvc.{AnyContent, Request}
 import services.IndexAccess
 
@@ -12,7 +12,7 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   private val minFreqInDocOpt = p.get(prefix+"minFreqInDoc"+suffix).map(_.head.toLong)
   /** minimum per document frequency of term to be added to the term vector */
-  val minFreqInDoc: Long = minFreqInDocOpt.getOrElse(1l)
+  val minFreqInDoc: Long = minFreqInDocOpt.getOrElse(1L)
   private val maxFreqInDocOpt = p.get(prefix+"maxFreqInDoc"+suffix).map(_.head.toLong)
   /** maximum per document frequency of term to be added to the term vector */
   val maxFreqInDoc: Long = maxFreqInDocOpt.getOrElse(Long.MaxValue)
@@ -76,7 +76,7 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
       s.getBinding.setProperty("freq", freq)
       s.run().asInstanceOf[Boolean]
     })
-  def toJson = Json.obj(
+  private val fullJson = Json.obj(
     prefix+"localScaling"+suffix->localScaling,
     prefix+"minTotalTermFreq"+suffix->minTotalTermFreq,
     prefix+"maxTotalTermFreq"+suffix->maxTotalTermFreq,
@@ -89,6 +89,7 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
     prefix+"termTransformer"+suffix->termTransformerAsStringOpt,
     prefix+"termFilter"+suffix->termFilterAsStringOpt
   )
-  queryMetadata.json = queryMetadata.json ++ toJson
+  queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
 }
 

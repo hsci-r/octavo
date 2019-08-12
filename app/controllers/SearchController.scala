@@ -4,7 +4,7 @@ import com.koloboke.collect.map.LongDoubleMap
 import com.koloboke.collect.map.hash.HashIntObjMaps
 import javax.inject._
 import org.apache.lucene.index.LeafReaderContext
-import org.apache.lucene.search.{Scorable, ScoreMode, Scorer, SimpleCollector, TotalHitCountCollector}
+import org.apache.lucene.search.{Scorable, ScoreMode, SimpleCollector, TotalHitCountCollector}
 import parameters._
 import play.api.libs.json._
 import play.api.mvc.{Action, AnyContent}
@@ -28,11 +28,12 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
     /** minimum query score (by default term match frequency) for doc to be included in query results */
     val minScore: Float = p.get("minScore").map(_.head.toFloat).getOrElse(0.0f)
     val maxScore: Float = p.get("maxScore").map(_.head.toFloat).getOrElse(-1.0f)
-    implicit val qm = new QueryMetadata(Json.obj(
+    val fullJson = Json.obj(
       "minScore"->minScore,
       "maxScore"->maxScore,
       "termVectors"->termVectors
-    ))
+    )
+    implicit val qm = new QueryMetadata(JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined)),fullJson)
     val qp = new QueryParameters()
     val gp = new GeneralParameters()
     val srp = new QueryReturnParameters()

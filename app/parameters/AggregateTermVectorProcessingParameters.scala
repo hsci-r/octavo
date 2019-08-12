@@ -23,11 +23,12 @@ class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: Strin
   final def matches(sumFreq: Int): Boolean = {
     (minSumFreq == 1 && maxSumFreq == Int.MaxValue) || (minSumFreq <= sumFreq && maxSumFreq >= sumFreq)
   }
-  def toJson: JsObject = Json.obj(
+  private val fullJson: JsObject = Json.obj(
     prefix+"smoothing"+suffix->smoothing,
     prefix+"sumScaling"+suffix->sumScalingString,
     prefix+"minSumFreq"+suffix->minSumFreq,
     prefix+"maxSumFreq"+suffix->maxSumFreq
   )
-  queryMetadata.json = queryMetadata.json ++ toJson
+  queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
 }

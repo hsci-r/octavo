@@ -2,7 +2,7 @@ package controllers
 
 import javax.inject.{Inject, Singleton}
 import parameters.{GeneralParameters, QueryMetadata, SortDirection}
-import play.api.libs.json.Json
+import play.api.libs.json.{JsObject, Json}
 import services.{IndexAccessProvider, MetadataOpts, TermSort}
 
 @Singleton
@@ -26,7 +26,7 @@ class IndexInfoController @Inject() (implicit iap: IndexAccessProvider, qc: Quer
       case sd => SortDirection.withName(sd.toUpperCase)
     }.getOrElse(SortDirection.ASC)
     val level = p.get("level").map(_.head)
-    implicit val qm = new QueryMetadata(Json.obj(
+    val fullJson = Json.obj(
       "stats"->stats,
       "quantiles"->quantiles,
       "histograms"->histograms,
@@ -36,7 +36,8 @@ class IndexInfoController @Inject() (implicit iap: IndexAccessProvider, qc: Quer
       "maxTermsToStat"->maxTermsToStat,
       "sortTermsBy"->sortTermsBy,
       "termSortDirection"->termSortDirection,
-      "level"->level))
+      "level"->level)
+    implicit val qm = new QueryMetadata(JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined)),fullJson)
     qm.longRunning = false
     val mo = MetadataOpts(stats,quantiles,histograms,from,to,by,maxTermsToStat,sortTermsBy,termSortDirection,byS.length-2)
     val gp = new GeneralParameters
