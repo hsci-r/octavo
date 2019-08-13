@@ -6,6 +6,7 @@ import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.queryparser.complexPhrase.ComplexPhraseQueryParser;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
+import org.apache.lucene.search.QueryVisitor;
 import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.search.highlight.WeightedSpanTerm;
 import org.apache.lucene.search.uhighlight.*;
@@ -101,26 +102,21 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
     @Override
     protected FieldHighlighter getFieldHighlighter(String field, Query query, Set<Term> allTerms, int maxPassages) {
         try {
-            searcher.createWeight(searcher.rewrite(query), ScoreMode.COMPLETE_NO_SCORES, 1.0f).extractTerms(allTerms); // needs to be redone here because superclass uses an empty indexsearcher, which doesn't work with complex phrase queries.
+            searcher.rewrite(query).visit(QueryVisitor.termCollector(allTerms)); // needs to be redone here because superclass uses an empty indexsearcher, which doesn't work with complex phrase queries.
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        Predicate<String> fieldMatcher = getFieldMatcher(field);
-        BytesRef[] terms = filterExtractedTerms(fieldMatcher, allTerms);
-        Set<HighlightFlag> highlightFlags = getFlags(field);
-        PhraseHelper phraseHelper = getPhraseHelper(field, query, highlightFlags);
-        CharacterRunAutomaton[] automata = getAutomata(field, query, highlightFlags);
-        OffsetSource offsetSource = getOptimizedOffsetSource(field, terms, phraseHelper, automata);
+        UHComponents components = getHighlightComponents(field, query, allTerms);
+        OffsetSource offsetSource = getOptimizedOffsetSource(components);
         if (offsetSource == OffsetSource.POSTINGS_WITH_TERM_VECTORS) {
-            if (automata.length > 0) offsetSource = OffsetSource.ANALYSIS;
+            if (components.getAutomata().length > 0) offsetSource = OffsetSource.ANALYSIS;
             else {
                 hack = true;
-                OffsetSource offsetSource2 = getOptimizedOffsetSource(field, terms, phraseHelper, automata);
+                OffsetSource offsetSource2 = getOptimizedOffsetSource(components);
                 hack = false;
                 if (offsetSource2 == OffsetSource.ANALYSIS) offsetSource = OffsetSource.ANALYSIS;
             }
         }
-        UHComponents components = new UHComponents(field, fieldMatcher, query, terms, phraseHelper, automata, highlightFlags);
         return new ExtendedFieldHighlighter(field,
                 getOffsetStrategy(offsetSource, components),
                 new SplittingBreakIterator(getBreakIterator(field), UnifiedHighlighter.MULTIVAL_SEP_CHAR),

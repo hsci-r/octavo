@@ -54,6 +54,21 @@ import scala.language.implicitConversions
 
 object IndexAccess {
 
+  val octavoAnalyzer = new Analyzer() {
+    override def createComponents(fieldName: String) = {
+      val src = new WhitespaceTokenizer()
+      var tok: TokenFilter = new HyphenatedWordsFilter(src)
+      tok = new PatternReplaceFilter(tok,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false)
+      tok = new LowerCaseFilter(tok)
+      tok = new LengthFilter(tok, 1, Int.MaxValue)
+      new TokenStreamComponents(src,normalize(fieldName,tok))
+    }
+
+    override protected def normalize(fieldName: String, in: TokenStream): TokenStream = {
+      new LowerCaseFilter(in)
+    }
+  }
+
   def docFreq(it: TermsEnum, term: Long): Int = {
     it.seekExact(term)
     it.docFreq
@@ -930,42 +945,14 @@ case class IndexMetadata(
     case any => throw new IllegalArgumentException("Unknown directory type "+any)
   }
   val indexingAnalyzers: Map[String,Analyzer] = indexingAnalyzersAsText.mapValues{
-    case "OctavoAnalyzer" => new Analyzer() {
-      override def createComponents(fieldName: String) = {
-        val src = new WhitespaceTokenizer()
-        var tok: TokenFilter = new HyphenatedWordsFilter(src)
-        tok = new PatternReplaceFilter(tok,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false)
-        tok = new LowerCaseFilter(tok)
-        tok = new LengthFilter(tok, 1, Int.MaxValue)
-        new TokenStreamComponents(src,normalize(fieldName,tok))
-      }
-
-      override protected def normalize(fieldName: String, in: TokenStream): TokenStream = {
-        new LowerCaseFilter(in)
-      }
-    }
-    case "NormalisingOctavoAnalyzer" => new Analyzer() {
-      override def createComponents(fieldName: String) = {
-        val src = new WhitespaceTokenizer()
-        var tok: TokenFilter = new HyphenatedWordsFilter(src)
-        tok = new PatternReplaceFilter(tok,Pattern.compile("^\\p{Punct}*(.*?)\\p{Punct}*$"),"$1", false)
-        tok = new ASCIIFoldingFilter(tok)
-        tok = new LowerCaseFilter(tok)
-        tok = new LengthFilter(tok, 1, Int.MaxValue)
-        new TokenStreamComponents(src,normalize(fieldName,tok))
-      }
-
-      override protected def normalize(fieldName: String, in: TokenStream): TokenStream = {
-        new LowerCaseFilter(new ASCIIFoldingFilter(in))
-      }
-    }
+    case "OctavoAnalyzer" => IndexAccess.octavoAnalyzer
     case "StandardAnalyzer" => new StandardAnalyzer(CharArraySet.EMPTY_SET)
     case a if a.startsWith("MorphologicalAnalyzer_") => new MorphologicalAnalyzer(new Locale(a.substring(22)))
     case a if a.startsWith("CustomAnalyzer") =>
       val a2 = a.substring(15)
-      val ci = a.indexOf(':')
-      val ase = scriptEngineManager.getEngineByName(if (ci==0) "Groovy" else a.substring(0,ci))
-      ase.eval(a.substring(ci+1)).asInstanceOf[Analyzer]
+      val ci = a2.indexOf(':')
+      val ase = scriptEngineManager.getEngineByName(a2.substring(0,ci))
+      ase.eval(a2.substring(ci+1)).asInstanceOf[Analyzer]
     case any => throw new IllegalArgumentException("Unknown analyzer type " + any)
   }.withDefaultValue(new KeywordAnalyzer())
   val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap
