@@ -19,9 +19,13 @@ import java.util.function.Predicate;
 
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource;
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter.HighlightFlag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import scala.runtime.AbstractFunction0;
 
 public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
 
+    private Logger logger = LoggerFactory.getLogger(ExtendedUnifiedHighlighter.class);
     public static final IndexSearcher EMPTY_INDEXSEARCHER;
 
     static {
@@ -107,6 +111,8 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
             throw new RuntimeException(e);
         }
         UHComponents components = getHighlightComponents(field, query, allTerms);
+        if (components.hasUnrecognizedQueryPart())
+            logger.warn(query+" has unrecognised query part(s)");
         OffsetSource offsetSource = getOptimizedOffsetSource(components);
         if (offsetSource == OffsetSource.POSTINGS_WITH_TERM_VECTORS) {
             if (components.getAutomata().length > 0) offsetSource = OffsetSource.ANALYSIS;
