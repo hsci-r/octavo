@@ -91,8 +91,8 @@ object IndexAccess {
 
   val scriptEngineManager = new ScriptEngineManager()
 
-  val numShortWorkers = sys.runtime.availableProcessors
-  val numLongWorkers = Math.max(sys.runtime.availableProcessors - 2, 1)
+  val numShortWorkers = Math.max(sys.runtime.availableProcessors,4)
+  val numLongWorkers = Math.max(sys.runtime.availableProcessors - 2, 2)
 
   val longTaskForkJoinPool = new ForkJoinPool(numLongWorkers, (pool: ForkJoinPool) => {
     val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
