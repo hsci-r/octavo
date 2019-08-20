@@ -5,7 +5,7 @@ import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.{FileSystems, Path}
 import java.util
-import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.{ForkJoinPool, ForkJoinWorkerThread}
 import java.util.regex.Pattern
 import java.util.{Collections, Locale}
 
@@ -49,7 +49,7 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.parallel.ForkJoinTaskSupport
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.{Await, BlockContext, CanAwait, ExecutionContext, Future}
 import scala.language.implicitConversions
 
 object IndexAccess {
@@ -91,11 +91,45 @@ object IndexAccess {
 
   val scriptEngineManager = new ScriptEngineManager()
 
-  val numShortWorkers = Math.max(sys.runtime.availableProcessors,4)
-  val numLongWorkers = Math.max(sys.runtime.availableProcessors - 2, 2)
+  val numShortWorkers = Math.max(sys.runtime.availableProcessors,2)
+  val numLongWorkers = Math.max(sys.runtime.availableProcessors - 2, 1)
+
+  private def createBlockingSupportingForkJoinWorkerThread(pool: ForkJoinPool): ForkJoinWorkerThread with BlockContext =
+    new ForkJoinWorkerThread(pool) with BlockContext {
+      private[this] var isBlocked: Boolean = false // This is only ever read & written if this thread is the current thread
+      final override def blockOn[T](thunk: =>T)(implicit permission: CanAwait): T =
+        if ((Thread.currentThread eq this) && !isBlocked) {
+          try {
+            isBlocked = true
+            val b: ForkJoinPool.ManagedBlocker with (() => T) =
+              new ForkJoinPool.ManagedBlocker with (() => T) {
+                private[this] var result: T = null.asInstanceOf[T]
+                private[this] var done: Boolean = false
+                final override def block(): Boolean = {
+                  try {
+                    if (!done)
+                      result = thunk
+                  } finally {
+                    done = true
+                  }
+
+                  true
+                }
+
+                final override def isReleasable = done
+
+                final override def apply(): T = result
+              }
+            ForkJoinPool.managedBlock(b)
+            b()
+          } finally {
+            isBlocked = false
+          }
+        } else thunk // Unmanaged blocking
+    }
 
   val longTaskForkJoinPool = new ForkJoinPool(numLongWorkers, (pool: ForkJoinPool) => {
-    val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
+    val worker = createBlockingSupportingForkJoinWorkerThread(pool)
     worker.setName("long-task-worker-" + worker.getPoolIndex)
     worker
   }, null, true)
@@ -104,7 +138,7 @@ object IndexAccess {
   val longTaskExecutionContext = ExecutionContext.fromExecutorService(longTaskForkJoinPool)
   
   val shortTaskForkJoinPool = new ForkJoinPool(numShortWorkers, (pool: ForkJoinPool) => {
-    val worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool)
+    val worker = createBlockingSupportingForkJoinWorkerThread(pool)
     worker.setName("short-task-worker-" + worker.getPoolIndex)
     worker
   }, null, true)
