@@ -59,7 +59,7 @@ lazy val dockerSettings = Seq(
   maintainer := "Eetu Mäkelä <eetu.makela@iki.fi>",
   packageSummary := "octavo",
   packageDescription := "Octavo - Open API for Text and Metadata, built using the Play framework",
-  dockerBaseImage := "openjdk:13-alpine",
+  dockerBaseImage := "adoptopenjdk/openjdk12-openj9:alpine-jre",
   dockerExposedPorts := Seq(9000, 9443),
   dockerEnvVars := Map("JAVA_OPTS"->"-Dindices.index=/opt/docker/index"),
   dockerExposedVolumes := Seq("/opt/docker/logs","/opt/docker/index","/opt/docker/tmp"),
