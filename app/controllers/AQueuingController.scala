@@ -78,7 +78,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
     val startTime = System.currentTimeMillis
     val name = DigestUtils.sha256Hex(fcallId)
     val remoteHost = InetAddresses.forString(request.remoteAddress).getCanonicalHostName
-    val qm = Json.obj("method" -> method, "parameters" -> parameters.nonDefaultJson, "index" -> Json.obj("name" -> index.indexName, "version" -> index.indexVersion), "octavoVersion" -> qc.version, "fullParameters" -> parameters.fullJson)
+    val qm = Json.obj("callId"->name, "method" -> method, "parameters" -> parameters.nonDefaultJson, "index" -> Json.obj("name" -> index.indexName, "version" -> index.indexVersion), "octavoVersion" -> qc.version, "fullParameters" -> parameters.fullJson)
     if (parameters.longRunning && !parameters.key.contains(name)) {
       try {
         estimate()
