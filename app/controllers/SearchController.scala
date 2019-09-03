@@ -78,7 +78,13 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       val it = termsEnums(queryLevel).get
       var total = 0
       var totalScore = 0.0
-      val mcompare : ((Int,Float,Seq[JsValue]),(Int,Float,Seq[JsValue])) => Int = if (srp.sorts.nonEmpty) (x,y) => srp.compare(x._3,y._3) else (x,y) => y._2.compare(x._2)
+      val mcompare : ((Int,Float,Seq[JsValue]),(Int,Float,Seq[JsValue])) => Int = if (srp.sorts.nonEmpty) (x,y) => srp.compare(x._3,y._3) match {
+        case 0 => x._1.compare(y._1)
+        case o => o
+      } else (x,y) => y._2.compare(x._2) match {
+        case 0 => x._1.compare(y._1)
+        case o => o
+      }
       var responseSizeHint = 0l
       val maxHeap = mutable.PriorityQueue.empty[(Int,Float,Seq[JsValue])]((x,y) => mcompare(x,y))
       val compareTermVector = if (ctv.query.isDefined)
