@@ -161,7 +161,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       val values = maxHeap.dequeueAll.reverse.drop(srp.offset)
       if (srp.limit!= -1) {
         val lr = ir.leaves.get(0)
-        val jsGetters = rfields.map(f => f -> ql.fields(f).jsGetter(lr.reader)).toMap
+        val jsGetters = rfields.map(f => f -> ql.fields.getOrElse(f, throw new IllegalArgumentException("Tried to request unknown field: " + f)).jsGetter(lr.reader)).toMap
         values.sortBy(_._1).foreach{p => // sort by id so that advanceExact works
           val doc = p._1 - lr.docBase
           val (cdocFields, cdocVectors) = processDocFields(lr, doc, jsGetters)
