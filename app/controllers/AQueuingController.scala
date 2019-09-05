@@ -77,7 +77,10 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
     val ndcallId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.nonDefaultJson.toString
     val startTime = System.currentTimeMillis
     val name = DigestUtils.sha256Hex(fcallId)
-    val remoteHost = InetAddresses.forString(request.remoteAddress).getCanonicalHostName
+    val remoteHost = InetAddresses.forString(request.headers.get("X-Forwarded-For").map(xf => {
+      val i = xf.indexOf(',')
+      if (i != -1) xf.substring(0,i) else xf
+    }).getOrElse(request.remoteAddress)).getCanonicalHostName
     val qm = Json.obj("callId"->name, "method" -> method, "parameters" -> parameters.nonDefaultJson, "index" -> Json.obj("name" -> index.indexName, "version" -> index.indexVersion), "octavoVersion" -> qc.version, "fullParameters" -> parameters.fullJson)
     if (parameters.longRunning && !parameters.key.contains(name)) {
       try {
@@ -133,9 +136,13 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
                   promise success BadRequest("Error in script: "+ccause.getMessage)
                 case ccause: ResponseTooBigException =>
                   promise success BadRequest(s"Maximum response size estimate (${ccause.limit/1024/1024}MB) exceeded. If you want this to succeed, you may try increasing the maxResponseSize parameter, up to ${GeneralParameters.maxMaxResponseSize} (MB).")
+                case ccause: IllegalArgumentException =>
+                  promise success BadRequest(s"Error in request: ${ccause.getMessage}")
                 case _ =>
+                  promise success InternalServerError(s"Error processing request: ${getStackTraceAsString(cause)}")
+/*                case _ =>
                   promise failure cause
-                  throw cause
+                  throw cause */
               }
           }
           promise.future
