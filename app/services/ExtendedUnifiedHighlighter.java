@@ -104,32 +104,39 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
     }
 
     @Override
-    protected FieldHighlighter getFieldHighlighter(String field, Query query, Set<Term> allTerms, int maxPassages) {
+    protected boolean hasUnrecognizedQuery(Predicate<String> fieldMatcher, Query query) {
+        if (query instanceof NumericDocValuesWeightedMatchAllDocsQuery) return false;
+        return super.hasUnrecognizedQuery(fieldMatcher, query);
+    }
+
+    @Override
+    protected FieldHighlighter getFieldHighlighter(String field, Query iquery, Set<Term> allTerms, int maxPassages) {
         try {
-            searcher.rewrite(query).visit(QueryVisitor.termCollector(allTerms)); // needs to be redone here because superclass uses an empty indexsearcher, which doesn't work with complex phrase queries.
+            Query query = searcher.rewrite(iquery);
+            query.visit(QueryVisitor.termCollector(allTerms)); // needs to be redone here because superclass uses an empty indexsearcher, which doesn't work with complex phrase queries.
+            UHComponents components = getHighlightComponents(field, query, allTerms);
+            if (components.hasUnrecognizedQueryPart())
+                logger.warn(query+" has unrecognised query part(s)");
+            OffsetSource offsetSource = getOptimizedOffsetSource(components);
+            if (offsetSource == OffsetSource.POSTINGS_WITH_TERM_VECTORS) {
+                if (components.getAutomata().length > 0) offsetSource = OffsetSource.ANALYSIS;
+                else {
+                    hack = true;
+                    OffsetSource offsetSource2 = getOptimizedOffsetSource(components);
+                    hack = false;
+                    if (offsetSource2 == OffsetSource.ANALYSIS) offsetSource = OffsetSource.ANALYSIS;
+                }
+            }
+            return new ExtendedFieldHighlighter(field,
+                    getOffsetStrategy(offsetSource, components),
+                    new SplittingBreakIterator(getBreakIterator(field), UnifiedHighlighter.MULTIVAL_SEP_CHAR),
+                    getScorer(field),
+                    maxPassages,
+                    getMaxNoHighlightPassages(field),
+                    getFormatter(field));
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        UHComponents components = getHighlightComponents(field, query, allTerms);
-        if (components.hasUnrecognizedQueryPart())
-            logger.warn(query+" has unrecognised query part(s)");
-        OffsetSource offsetSource = getOptimizedOffsetSource(components);
-        if (offsetSource == OffsetSource.POSTINGS_WITH_TERM_VECTORS) {
-            if (components.getAutomata().length > 0) offsetSource = OffsetSource.ANALYSIS;
-            else {
-                hack = true;
-                OffsetSource offsetSource2 = getOptimizedOffsetSource(components);
-                hack = false;
-                if (offsetSource2 == OffsetSource.ANALYSIS) offsetSource = OffsetSource.ANALYSIS;
-            }
-        }
-        return new ExtendedFieldHighlighter(field,
-                getOffsetStrategy(offsetSource, components),
-                new SplittingBreakIterator(getBreakIterator(field), UnifiedHighlighter.MULTIVAL_SEP_CHAR),
-                getScorer(field),
-                maxPassages,
-                getMaxNoHighlightPassages(field),
-                getFormatter(field));
     }
 
     private boolean hack = false;
