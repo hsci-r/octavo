@@ -68,9 +68,19 @@ lazy val dockerSettings = Seq(
   daemonUser in Docker := "daemon",
   dockerUpdateLatest := true,
   dockerCommands := {
-    val splitIndex = dockerCommands.value.lastIndexWhere{case Cmd("FROM",_) => true; case _ => false} + 1
-    val (head,tail) = dockerCommands.value.splitAt(splitIndex)
-    head ++ Seq(Cmd("RUN","apk","update"),Cmd("RUN","apk","add","rsync","openssh")) ++ tail
+    val s1 = dockerCommands.value.indexWhere{case Cmd("COPY",_) => true; case _ => false} + 1
+    val (h1,t1) = dockerCommands.value.splitAt(s1)
+    val s2 = t1.indexWhere{case Cmd("FROM",_) => true; case _ => false} + 1
+    val (h2,t2) = t1.splitAt(s2)
+    val s3 = t2.indexWhere{case Cmd("COPY",_) => true; case _ => false} + 1
+    val (h3,t3) = t2.splitAt(s3)
+    h1 ++
+      Seq(ExecCmd("RUN","rm","/opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-sans-externalized.jar","/opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-assets.jar")) ++
+      h2 ++
+      Seq(Cmd("RUN","apk","update"),Cmd("RUN","apk","add","rsync","openssh")) ++
+      h3 ++
+      Seq(Cmd("COPY","opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-sans-externalized.jar","opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-assets.jar","/opt/docker/lib/")) ++
+      t3
   }
 )
 
