@@ -1,6 +1,7 @@
 package controllers
 
 import java.io.{File, PrintWriter, StringWriter}
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 
 import com.google.common.net.InetAddresses
@@ -25,14 +26,21 @@ class QueryCache @Inject() (env: Environment, configuration: Configuration) exte
 
   final val version = configuration.get[String]("app.version")
 
-  final val auths = configuration.getOptional[Configuration]("auths").map(c => {
+  final val cauths = configuration.getOptional[Configuration]("auths").map(c => {
     c.keys.map(k => k -> c.get[String](k)).toMap
   }).getOrElse(Map.empty)
 
-  def checkAuth(index: String, request: Request[AnyContent]): Boolean = {
-    if (!auths.contains(index)) return true
-    val auth = auths(index)
-    request.headers.getAll("Authorization").filter(_.toLowerCase.startsWith("basic ")).exists(_.substring(6) == auth)
+  def checkAuth(index: IndexMetadata, request: Request[AnyContent]): Option[String] = {
+    if (!cauths.contains(index.indexId) && index.auths.isEmpty) return Some("?")
+    val cauth = cauths.get(index.indexId).map(s => new String(Base64.getDecoder.decode(s)))
+      .map(a => a.splitAt(a.indexOf(':')))
+    request.headers.getAll("Authorization")
+      .filter(a => a.toLowerCase.startsWith("basic "))
+      .map(_.substring(6))
+      .map(s => new String(Base64.getDecoder.decode(s)))
+      .map(a => a.splitAt(a.indexOf(':')))
+      .find(p => cauth.contains(p) || index.auths.get(p._1).contains(p._2.drop(1)))
+      .map(_._1)
   }
 
   private val mtmpDir = {
@@ -72,12 +80,13 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
   }
 
   protected def getOrCreateResult(method: String, index: IndexMetadata, parameters: QueryMetadata, force: Boolean, pretty: Boolean, estimate: () => Unit, call: () => Either[JsValue,Result])(implicit request: Request[AnyContent]): Result = {
-    if (!qc.checkAuth(index.indexId,request)) return Unauthorized.withHeaders("WWW-Authenticate" -> """Basic realm="Restricted"""")
+    val auth = qc.checkAuth(index,request)
+    if (auth.isEmpty) return Unauthorized.withHeaders("WWW-Authenticate" -> """Basic realm="Restricted"""")
     val fcallId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.fullJson.toString
     val ndcallId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.nonDefaultJson.toString
     val startTime = System.currentTimeMillis
     val name = DigestUtils.sha256Hex(fcallId)
-    val remoteHost = InetAddresses.forString(request.headers.get("X-Forwarded-For").map(xf => {
+    val remoteId = auth.get + "@" + InetAddresses.forString(request.headers.get("X-Forwarded-For").map(xf => {
       val i = xf.indexOf(',')
       if (i != -1) xf.substring(0,i) else xf
     }).getOrElse(request.remoteAddress)).getCanonicalHostName
@@ -88,7 +97,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
         Ok("<html><body>You are about to run the following query:<br /><pre>"+HtmlFormat.escape(Json.prettyPrint(qm))+"</pre><h1>Are you sure you want to do this? Our estimate is that you'll process some "+parameters.estimatedDocumentsToProcess+" documents and can get for example "+parameters.estimatedNumberOfResults+" results</h1>If you do wish to continue, add <pre>key="+name+"</pre> to your parameters.</pre> While running, the query status can be queried from <a href=\"../status/"+name+"\">here</a>.</body></html>").as(HTML).withHeaders("X-Octavo-Key" -> name)
       } catch {
         case cause: Throwable =>
-          logger.error(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Error processing estimate for " + ndcallId + "(" + fcallId + "): " + getStackTraceAsString(cause))
+          logger.error(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Error processing estimate for " + ndcallId + "(" + fcallId + "): " + getStackTraceAsString(cause))
           cause match {
             case tlcause: TimeLimitingCollector.TimeExceededException =>
               BadRequest(s"Query estimate timeout ${tlcause.getTimeAllowed / 1000}s exceeded. This is probably due to a bad query, but if you want still want to continue, increase the etimeout parameter.")
@@ -101,7 +110,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
       if (force) tf.delete()
       val future =
         if (tf.createNewFile()) {
-          logger.info(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Running call " + ndcallId + " ("+fcallId+", "+name+")")
+          logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Running call " + ndcallId + " ("+fcallId+", "+name+")")
           writeFile(pf, Json.prettyPrint(qm))
           val promise = Promise[Result]
           qc.runningQueries.put(name, (parameters, promise.future))
@@ -124,7 +133,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
             qc.runningQueries.remove(name)
           } catch {
             case cause: Throwable =>
-              logger.error(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Error processing " + ndcallId + " ("+fcallId+"): " + getStackTraceAsString(cause))
+              logger.error(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Error processing " + ndcallId + " ("+fcallId+"): " + getStackTraceAsString(cause))
               tf.delete()
               qc.runningQueries.remove(name)
               cause match {
@@ -149,19 +158,19 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
         } else
           Option(qc.runningQueries.get(name)) match {
             case Some(f) =>
-              logger.info(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Waiting for result from prior call for " + ndcallId + " ("+fcallId+", "+name+")")
+              logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Waiting for result from prior call for " + ndcallId + " ("+fcallId+", "+name+")")
               f._2
             case None =>
               import scala.concurrent.ExecutionContext.Implicits.global
               if (tf.exists()) {
-                logger.info(remoteHost + " % [" + name.substring(0,6).toUpperCase + "] - Reusing result from prior call for " + ndcallId + " ("+fcallId+", "+name+")")
+                logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Reusing result from prior call for " + ndcallId + " ("+fcallId+", "+name+")")
                 Future(Ok.sendFile(tf).as(JSON))
               } else Future(InternalServerError("\"An error has occurred, please try again.\""))
           }
       val result = Await.result(future, Duration.Inf)
       val endTime = System.currentTimeMillis
       val requestTime = endTime - startTime
-      logger.info(f"$remoteHost%s %% [${name.substring(0,6).toUpperCase}] - After $requestTime%,dms, returning ${result.body.contentLength.map(""+_).getOrElse("unknown")}%s bytes with status ${result.header.status}%s for call $ndcallId%s ($fcallId, $name%s).")
+      logger.info(f"$remoteId%s %% [${name.substring(0,6).toUpperCase}] - After $requestTime%,dms, returning ${result.body.contentLength.map(""+_).getOrElse("unknown")}%s bytes with status ${result.header.status}%s for call $ndcallId%s ($fcallId, $name%s).")
       result
     }
   }
