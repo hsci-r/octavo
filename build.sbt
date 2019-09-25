@@ -31,7 +31,7 @@ lazy val mainSettings = Seq(
     "fi.seco" %% "lucene-morphologicalanalyzer" % "1.2.1",
     "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.5",
     "fi.seco" % "lexicalanalysis-resources-fi-core" % "1.5.16",
-    "fi.hsci" %% "lucene-normalisinganalyzer" % "1.0.0",
+    "fi.hsci" %% "lucene-normalisinganalyzer" % "1.0.2",
     "org.apache.lucene" % "lucene-queryparser" % "8.2.0",
     "org.apache.lucene" % "lucene-highlighter" % "8.2.0",
     "com.koloboke" % "koloboke-api-jdk8" % "1.0.0",
@@ -49,7 +49,8 @@ lazy val mainSettings = Seq(
     "org.nd4j" % "nd4j-native-platform" % "0.8.0",
     "org.deeplearning4j" % "deeplearning4j-core" % "1.0.0-beta3",
     "com.jujutsu.tsne" % "tsne" % "2.3.0",
-    "org.jetbrains.xodus" % "xodus-environment" % "1.2.3" exclude("org.jetbrains","annotations")
+    "org.jetbrains.xodus" % "xodus-environment" % "1.2.3" exclude("org.jetbrains","annotations"),
+    "com.github.tototoshi" %% "scala-csv" % "1.3.6"
   )
 )
 
