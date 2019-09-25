@@ -17,6 +17,14 @@ class QueryReturnParameters()(implicit protected val request: Request[AnyContent
   /** how many results to skip */
   val offset: Int = p.get("offset").map(_.head.toInt).getOrElse(0)
 
+  /** desired response format */
+  val responseFormat = p.get("format").map(v => ResponseFormat.withName(v.head.toUpperCase)).getOrElse(ResponseFormat.JSON)
+  if (responseFormat==ResponseFormat.CSV) {
+    if (snippetLimit != 0) throw new IllegalArgumentException("Can't return snippets in CSV format")
+    if (returnExplanations) throw new IllegalArgumentException("Can't return explanations in CSV format")
+    queryMetadata.doNotCache = true
+  }
+
   private val fullJson = Json.obj(
     "snippetLimit" -> snippetLimit,
     "offset" -> offset,

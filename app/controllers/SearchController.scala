@@ -1,5 +1,8 @@
 package controllers
 
+import java.io.ByteArrayOutputStream
+
+import com.github.tototoshi.csv.CSVWriter
 import com.koloboke.collect.map.LongDoubleMap
 import com.koloboke.collect.map.hash.HashIntObjMaps
 import javax.inject._
@@ -85,7 +88,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         case 0 => x._1.compare(y._1)
         case o => o
       }
-      var responseSizeHint = 0l
+      var responseSizeHint = 0L
       val maxHeap = mutable.PriorityQueue.empty[(Int,Float,Seq[JsValue])]((x,y) => mcompare(x,y))
       val compareTermVector = if (ctv.query.isDefined)
         getAggregateContextVectorForQuery(is, it, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermBytesRefsFromQuery(query),ctvpa, ctvs.maxDocs) else null
@@ -179,49 +182,65 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         val highlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField))
         highlighter.highlight(indexMetadata.contentField, query, values.map(_._1).toArray, if (srp.snippetLimit == -1) Int.MaxValue - 1 else srp.snippetLimit)
       } else null
-      Left(Json.obj(
-        "final_query"->query.toString,
-        "total"->total,
-        "totalScore"->(if (srp.queryScoring != QueryScoring.TF) Json.toJson(totalScore) else Json.toJson(totalScore.toInt)),
-        "docs"->values.zipWithIndex.map{
-          case ((doc,score,_),i) =>
-            var df = docFields.get(doc)
-            if (cvs!=null) df = df ++ Map("termVector"->cvs(i))
-            if (srp.snippetLimit!=0) {
-              val g = ia.offsetDataGetter
-              df = df ++ Map("snippets" -> Json.toJson(Option(matchesByDocs(i)).map(hl =>
-                (if (srp.snippetLimit != -1) hl.passages.take(srp.snippetLimit) else hl.passages).map(p => {
-                  val matches = new mutable.HashMap[(Int, Int), ArrayBuffer[String]]
-                  var i = 0
-                  while (i < p.getNumMatches) {
-                    matches.getOrElseUpdate((p.getMatchStarts()(i), p.getMatchEnds()(i)), new ArrayBuffer[String]()) += p.getMatchTerms()(i).utf8ToString
-                    i += 1
-                  }
-                  val highlightedSnippet = ExtendedUnifiedHighlighter.highlightToString(p, hl.content)
-                  responseSizeHint += highlightedSnippet.length
-                  if (responseSizeHint>gp.maxResponseSize) throw new ResponseTooBigException(responseSizeHint)
-                  var md =
-                    Json.obj(
+      srp.responseFormat match {
+        case ResponseFormat.CSV =>
+          val baos = new ByteArrayOutputStream()
+          val w = CSVWriter.open(baos)
+          w.writeRow(Seq("score") ++ srp.fields)
+          for ((doc,score,_) <- values) {
+            val df = docFields.get(doc)
+            w.writeRow(Seq(""+(if (srp.queryScoring != QueryScoring.TF) score else score.toInt)) ++ srp.fields.map(df.get(_).map{
+              case JsString(s) => s
+              case o => o.toString
+            }.getOrElse("")))
+          }
+          w.close()
+          Right(Ok(baos.toByteArray).as(TEXT))
+        case ResponseFormat.JSON =>
+          Left(Json.obj(
+            "final_query"->query.toString,
+            "total"->total,
+            "totalScore"->(if (srp.queryScoring != QueryScoring.TF) Json.toJson(totalScore) else Json.toJson(totalScore.toInt)),
+            "docs"->values.zipWithIndex.map{
+              case ((doc,score,_),i) =>
+                var df = docFields.get(doc)
+                if (cvs!=null) df = df ++ Map("termVector"->cvs(i))
+                if (srp.snippetLimit!=0) {
+                  val g = ia.offsetDataGetter
+                  df = df ++ Map("snippets" -> Json.toJson(Option(matchesByDocs(i)).map(hl =>
+                    (if (srp.snippetLimit != -1) hl.passages.take(srp.snippetLimit) else hl.passages).map(p => {
+                      val matches = new mutable.HashMap[(Int, Int), ArrayBuffer[String]]
+                      var i = 0
+                      while (i < p.getNumMatches) {
+                        matches.getOrElseUpdate((p.getMatchStarts()(i), p.getMatchEnds()(i)), new ArrayBuffer[String]()) += p.getMatchTerms()(i).utf8ToString
+                        i += 1
+                      }
+                      val highlightedSnippet = ExtendedUnifiedHighlighter.highlightToString(p, hl.content)
+                      responseSizeHint += highlightedSnippet.length
+                      if (responseSizeHint>gp.maxResponseSize) throw new ResponseTooBigException(responseSizeHint)
+                      var md =
+                        Json.obj(
 
-                      "start" -> p.getStartOffset,
-                      "end" -> p.getEndOffset,
-                      "matches" -> matches.keys.map(k => {
-                        var m = Json.obj("text"->hl.content.substring(k._1,k._2),"start" -> k._1, "end" -> k._2, "terms" -> matches(k))
-                        if (srp.offsetData) m = m ++ Json.obj("data"-> g(doc,k._1,srp.matchOffsetSearchType))
-                        m
-                      }),
-                      "snippet" -> highlightedSnippet
-                    )
-                  if (srp.offsetData) md = md ++ Json.obj(
-                    "startData" -> g(doc, p.getStartOffset, srp.startOffsetSearchType),
-                    "endData" -> g(doc, p.getEndOffset, srp.endOffsetSearchType)
-                  )
-                  md
-                })
-              ).getOrElse(Array.empty)))
-            }
-            df ++ Map("score" -> (if (srp.queryScoring != QueryScoring.TF) Json.toJson(score) else Json.toJson(score.toInt)))
-        }))
+                          "start" -> p.getStartOffset,
+                          "end" -> p.getEndOffset,
+                          "matches" -> matches.keys.map(k => {
+                            var m = Json.obj("text"->hl.content.substring(k._1,k._2),"start" -> k._1, "end" -> k._2, "terms" -> matches(k))
+                            if (srp.offsetData) m = m ++ Json.obj("data"-> g(doc,k._1,srp.matchOffsetSearchType))
+                            m
+                          }),
+                          "snippet" -> highlightedSnippet
+                        )
+                      if (srp.offsetData) md = md ++ Json.obj(
+                        "startData" -> g(doc, p.getStartOffset, srp.startOffsetSearchType),
+                        "endData" -> g(doc, p.getEndOffset, srp.endOffsetSearchType)
+                      )
+                      md
+                    })
+                  ).getOrElse(Array.empty)))
+                }
+                df ++ Map("score" -> (if (srp.queryScoring != QueryScoring.TF) Json.toJson(score) else Json.toJson(score.toInt)))
+            }))
+      }
     })
   }
  

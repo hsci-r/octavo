@@ -9,6 +9,7 @@ class QueryMetadata(var nonDefaultJson: JsObject = Json.obj(), var fullJson: JsO
   var estimatedDocumentsToProcess: Int = 0
   var estimatedNumberOfResults: Int = 0
   var documentsProcessed: Int = 0
+  var doNotCache: Boolean = false
   val startTime: Long = System.currentTimeMillis
   def elapsed: Long = System.currentTimeMillis - startTime
   def eta: Long = if (documentsProcessed == 0) -1 else (estimatedDocumentsToProcess - documentsProcessed) * elapsed / documentsProcessed

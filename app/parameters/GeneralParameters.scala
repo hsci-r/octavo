@@ -17,7 +17,7 @@ class GeneralParameters()(implicit request: Request[AnyContent], queryMetadata: 
   val pretty: Boolean = p.get("pretty").exists(v => v.head=="" || v.head.toBoolean)
   private val timeout = p.get("timeout").map(_.head.toLong).map(t => if (t == -1l) Long.MaxValue else t*1000l).getOrElse(30000l)
   private val etimeout = p.get("etimeout").map(_.head.toLong).map(t => if (t == -1l) Long.MaxValue else t*1000l).getOrElse(30000l)
-  val longRunning: Boolean = timeout>60000l
+  val longRunning: Boolean = timeout>60000L
   val maxResponseSize = p.get("maxResponseSize").map(_.head.toLong).map(t => if (t == -1) Long.MaxValue else t).map(Math.min(_,GeneralParameters.maxMaxResponseSize)).getOrElse(100l)*1024l*1024l
   val numWorkers: Int = if (longRunning) numLongWorkers else numShortWorkers
   val forkJoinPool: ForkJoinPool = if (longRunning) longTaskForkJoinPool else shortTaskForkJoinPool
