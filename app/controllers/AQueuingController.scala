@@ -109,8 +109,9 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
       val (pf,tf) = qc.files(name)
       if (force) tf.delete()
       val future =
-        if (tf.createNewFile()) {
-          logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Running call " + ndcallId + " ("+fcallId+", "+name+")")
+        if (parameters.doNotCache || tf.createNewFile()) {
+          logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Running call " + ndcallId + " ("+name+")")
+          logger.debug(name+" - full parameters: "+fcallId)
           writeFile(pf, Json.prettyPrint(qm))
           val promise = Promise[Result]
           qc.runningQueries.put(name, (parameters, promise.future))
@@ -158,19 +159,21 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
         } else
           Option(qc.runningQueries.get(name)) match {
             case Some(f) =>
-              logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Waiting for result from prior call for " + ndcallId + " ("+fcallId+", "+name+")")
+              logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Waiting for result from prior call for " + ndcallId + " ("+name+")")
+              logger.debug(name+" - full parameters: "+fcallId)
               f._2
             case None =>
               import scala.concurrent.ExecutionContext.Implicits.global
               if (tf.exists()) {
-                logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Reusing result from prior call for " + ndcallId + " ("+fcallId+", "+name+")")
+                logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Reusing result from prior call for " + ndcallId + " ("+name+")")
+                logger.debug(name+" - full parameters: "+fcallId)
                 Future(Ok.sendFile(tf).as(JSON))
               } else Future(InternalServerError("\"An error has occurred, please try again.\""))
           }
       val result = Await.result(future, Duration.Inf)
       val endTime = System.currentTimeMillis
       val requestTime = endTime - startTime
-      logger.info(f"$remoteId%s %% [${name.substring(0,6).toUpperCase}] - After $requestTime%,dms, returning ${result.body.contentLength.map(""+_).getOrElse("unknown")}%s bytes with status ${result.header.status}%s for call $ndcallId%s ($fcallId, $name%s).")
+      logger.info(f"$remoteId%s %% [${name.substring(0,6).toUpperCase}] - After $requestTime%,dms, returning ${result.body.contentLength.map(""+_).getOrElse("unknown")}%s bytes with status ${result.header.status}%s for call $ndcallId%s ($name%s).")
       result
     }
   }
