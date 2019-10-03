@@ -1138,6 +1138,13 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
 
   private def newQueryParser(level: LevelMetadata) = {
     val qp = new ComplexPhraseQueryParser(indexMetadata.contentField,queryAnalyzers(level.id)) {
+
+      override def addClause(clauses: java.util.List[BooleanClause], conj: Int, mods: Int, q: Query): Unit = {
+        if (conj == 2 && mods == 11) // QueryParserBase.CON_OR QueryParserBase.MOD_REQ
+          clauses.add(newBooleanClause(q, Occur.FILTER))
+        else super.addClause(clauses, conj, mods, q)
+      }
+
       override def getWildcardQuery(field: String, term: String): Query = {
         if (term=="*") level.fields.get(field).map(_.indexedAs).getOrElse(IndexedFieldType.NONE) match {
           case IndexedFieldType.INTPOINT =>

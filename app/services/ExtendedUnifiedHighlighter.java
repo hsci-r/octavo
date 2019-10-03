@@ -4,10 +4,7 @@ import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.index.*;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.queryparser.complexPhrase.ComplexPhraseQueryParser;
-import org.apache.lucene.search.IndexSearcher;
-import org.apache.lucene.search.Query;
-import org.apache.lucene.search.QueryVisitor;
-import org.apache.lucene.search.ScoreMode;
+import org.apache.lucene.search.*;
 import org.apache.lucene.search.highlight.WeightedSpanTerm;
 import org.apache.lucene.search.uhighlight.*;
 import org.apache.lucene.util.BytesRef;
@@ -113,7 +110,20 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
     protected FieldHighlighter getFieldHighlighter(String field, Query iquery, Set<Term> allTerms, int maxPassages) {
         try {
             Query query = searcher.rewrite(iquery);
-            query.visit(QueryVisitor.termCollector(allTerms)); // needs to be redone here because superclass uses an empty indexsearcher, which doesn't work with complex phrase queries.
+            allTerms.clear();
+            query.visit(new QueryVisitor() {
+
+                public QueryVisitor getSubVisitor(BooleanClause.Occur occur, Query parent) {
+                    if (occur == BooleanClause.Occur.FILTER)
+                        return EMPTY_VISITOR;
+                    return super.getSubVisitor(occur, parent);
+                }
+
+                @Override
+                public void consumeTerms(Query query, Term... terms) {
+                    Collections.addAll(allTerms, terms);
+                }
+            }); // needs to be redone here because superclass uses an empty indexsearcher, which doesn't work with complex phrase queries. Also, we'll filter out FILTER parts of the query
             UHComponents components = getHighlightComponents(field, query, allTerms);
             if (components.hasUnrecognizedQueryPart())
                 logger.warn(query+" has unrecognised query part(s)");
