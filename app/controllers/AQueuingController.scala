@@ -111,7 +111,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
       val future =
         if (parameters.doNotCache || tf.createNewFile()) {
           logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Running call " + ndcallId + " ("+name+")")
-          logger.debug(name+" - full parameters: "+fcallId)
+          logger.debug(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - full parameters: "+fcallId + " ("+name+")")
           writeFile(pf, Json.prettyPrint(qm))
           val promise = Promise[Result]
           qc.runningQueries.put(name, (parameters, promise.future))
@@ -160,13 +160,13 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
           Option(qc.runningQueries.get(name)) match {
             case Some(f) =>
               logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Waiting for result from prior call for " + ndcallId + " ("+name+")")
-              logger.debug(name+" - full parameters: "+fcallId)
+              logger.debug(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - full parameters: "+fcallId + " ("+name+")")
               f._2
             case None =>
               import scala.concurrent.ExecutionContext.Implicits.global
               if (tf.exists()) {
                 logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Reusing result from prior call for " + ndcallId + " ("+name+")")
-                logger.debug(name+" - full parameters: "+fcallId)
+                logger.debug(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - full parameters: "+fcallId + " ("+name+")")
                 Future(Ok.sendFile(tf).as(JSON))
               } else Future(InternalServerError("\"An error has occurred, please try again.\""))
           }
