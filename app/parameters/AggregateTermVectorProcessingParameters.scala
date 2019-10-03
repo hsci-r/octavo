@@ -11,7 +11,7 @@ class AggregateTermVectorProcessingParameters(prefix: String = "", suffix: Strin
   /** Laplace smoothing to use */
   val smoothing = smoothingOpt.getOrElse(0.0)
   private val sumScalingStringOpt = p.get(prefix+"sumScaling"+suffix).map(v => v.head.toUpperCase)
-  private val sumScalingString = sumScalingStringOpt.getOrElse("TTF")
+  private val sumScalingString = sumScalingStringOpt.getOrElse("ABSOLUTE")
   /** sum scaling to use */
   def sumScaling(te: TermsEnum, queryDocFreq: Long, totalDocFreq: Long) = SumScaling.get(sumScalingString, te, smoothing, queryDocFreq, totalDocFreq)
   private val minSumFreqOpt = p.get(prefix+"minSumFreq"+suffix).map(_.head.toInt)

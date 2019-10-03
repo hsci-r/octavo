@@ -136,7 +136,7 @@ object TermVectors extends Logging {
         term = tvt.nextOrd()
       }
     }
-    scaleTermVector(cv, ctvpa, null, -1,-1)
+    scaleTermVector(cv, ctvpa, it, -1,-1)
   }
 
   private def getUnscaledAggregateContextVectorForQuery(is: IndexSearcher, it: TermsEnum, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[BytesRef], maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess, qm: QueryMetadata): (TermVectorQueryMetadata,LongIntMap) = {
