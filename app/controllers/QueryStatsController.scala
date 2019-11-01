@@ -4,12 +4,12 @@ import java.util
 
 import javax.inject.{Inject, Singleton}
 import org.apache.lucene.index.LeafReaderContext
-import org.apache.lucene.search._
-import parameters._
+import org.apache.lucene.search.{IndexSearcher, Query, Scorable, ScoreMode, SimpleCollector, TimeLimitingCollector, TotalHitCountCollector}
+import parameters.{GeneralParameters, GroupingParameters, QueryMetadata, QueryParameters, QueryScoring, SamplingParameters}
 import play.api.libs.json.{Json, _}
 import services.{ExtendedUnifiedHighlighter, IndexAccess, IndexAccessProvider, LevelMetadata}
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
@@ -20,8 +20,8 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
     val termFreqs = new ArrayBuffer[Int]
     val fieldSums = new scala.collection.mutable.HashMap[String, Long]
     val fieldGather = new scala.collection.mutable.HashMap[String, JsValue]
-    var totalTermFreq = 0l
-    var docFreq = 0l
+    var totalTermFreq = 0L
+    var docFreq = 0L
 
     def toJson = {
       val js = Json.obj("totalTermFreq" -> totalTermFreq, "docFreq" -> docFreq) ++ Json.toJsObject(fieldGather) ++ Json.toJsObject(fieldSums)
@@ -30,9 +30,10 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
     }
   }
   
-  private def getStats(level: LevelMetadata, is: IndexSearcher, q: Query, grpp: GroupingParameters, sp: SamplingParameters, fieldSums: Seq[String], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector], qm: QueryMetadata): JsValue = {
+  private def getStats(level: LevelMetadata, is: IndexSearcher, q: Query, grpp: GroupingParameters
+                       , sp: SamplingParameters, fieldSums: Seq[String], gatherTermFreqsPerDoc: Boolean)(implicit ia: IndexAccess, tlc: ThreadLocal[TimeLimitingCollector], qm: QueryMetadata): JsValue = {
     if (grpp.isDefined) {
-      val highlighter = if (grpp.groupByMatch) grpp.highlighter(is, ia.indexMetadata.indexingAnalyzers(ia.indexMetadata.contentField)) else null
+      val highlighter: ExtendedUnifiedHighlighter = if (grpp.groupByMatch) grpp.highlighter(is, ia.indexMetadata.indexingAnalyzers(ia.indexMetadata.contentField)) else null
       val globalStats = new Stats
       var count = 0
       grpp.grouper.foreach(_.invokeMethod("setParameters", Seq(level, is, q, grpp, gatherTermFreqsPerDoc, globalStats).toArray))
@@ -42,7 +43,7 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
       tlc.get.setCollector(new SimpleCollector() {
         override def scoreMode = ScoreMode.COMPLETE
 
-        override def setScorer(scorer: Scorable) { this.scorer = scorer }
+        override def setScorer(scorer: Scorable): Unit = { this.scorer = scorer }
 
         var scorer: Scorable = _
 
@@ -54,9 +55,9 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
               ap.invokeMethod("group", doc) match {
                 case jsObject: JsObject => jsObject
                 case gm: util.Map[_,_] =>
-                  JsObject(gm.asScala.map(p => {
+                  JsObject(gm.asScala.iterator.map(p => {
                     if (p._2.isInstanceOf[JsValue]) p else (p._1, JsString(p._2.toString))
-                  }).asInstanceOf[collection.Map[String, JsValue]])
+                  }).toSeq.asInstanceOf[Seq[(String, JsValue)]])
               }
             }).getOrElse(
               JsObject(grpp.fields.zip(
@@ -71,9 +72,9 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
                   if (p._2 == -1) JsString(value) else JsString(value.substring(0, Math.min(p._2, value.length)))
                 })))))
             val score = scorer.score().toInt
-            val fieldSumValues = for ((key, getter) <- fieldSums.zip(fieldVGetters)) yield (key, getter(doc).map(_.asInstanceOf[JsNumber].value.toLong).getOrElse(0l))
+            val fieldSumValues = for ((key, getter) <- fieldSums.zip(fieldVGetters)) yield (key, getter(doc).map(_.asInstanceOf[JsNumber].value.toLong).getOrElse(0L))
             val groupDefinitions: Iterable[JsObject] = if (grpp.groupByMatch)
-              ExtendedUnifiedHighlighter.highlightsToStrings(highlighter.highlight(ia.indexMetadata.contentField, q, Array(doc), Int.MaxValue - 1).head, true).asScala.map(amatch => baseGroupDefinition ++ JsObject(Seq("match" -> grpp.matchTransformer.map(ap => {
+              ExtendedUnifiedHighlighter.highlightsToStrings(highlighter.highlightAsPassages(ia.indexMetadata.contentField, q, Array(doc), Int.MaxValue - 1).head, true).asScala.map(amatch => baseGroupDefinition ++ JsObject(Seq("match" -> grpp.matchTransformer.map(ap => {
                 ap.getBinding.setProperty("match", amatch)
                 ap.run() match {
                   case v: JsValue => v
@@ -88,18 +89,18 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
                 s.termFreqs += score
               s.totalTermFreq += score
               for ((key, v) <- fieldSumValues)
-                s.fieldSums(key) = s.fieldSums.getOrElse(key, 0l) + v
+                s.fieldSums(key) = s.fieldSums.getOrElse(key, 0L) + v
             }
             if (gatherTermFreqsPerDoc)
               globalStats.termFreqs += score
             globalStats.docFreq += 1
             globalStats.totalTermFreq += score
             for ((key, v) <- fieldSumValues)
-              globalStats.fieldSums(key) = globalStats.fieldSums.getOrElse(key, 0l) + v
+              globalStats.fieldSums(key) = globalStats.fieldSums.getOrElse(key, 0L) + v
           }
         }
 
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           grpp.grouper.foreach(_.invokeMethod("setContext",context))
           fieldGetters = grpp.fields.map(level.fields(_).jsGetter(context.reader))
           fieldVGetters = fieldSums.map(level.fields(_).jsGetter(context.reader))
@@ -117,11 +118,11 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
       is.search(q, new SimpleCollector() {
         override def scoreMode = ScoreMode.COMPLETE
         
-        override def setScorer(scorer: Scorable) { this.scorer = scorer }
+        override def setScorer(scorer: Scorable): Unit = { this.scorer = scorer }
   
         var scorer: Scorable = _
   
-        override def collect(doc: Int) {
+        override def collect(doc: Int): Unit = {
           s.docFreq += 1
           val score = scorer.score().toInt
           if (gatherTermFreqsPerDoc) s.termFreqs += score

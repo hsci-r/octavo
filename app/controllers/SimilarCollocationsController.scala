@@ -65,7 +65,7 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
         val terms = new Array[BytesRef](collocations.size)
         var i = 0
         collocations.forEach(new LongDoubleConsumer {
-          override def accept(term: Long, freq: Double) {
+          override def accept(term: Long, freq: Double): Unit = {
             terms(i) = termOrdToBytesRef(it, term)
             i += 1
           }
@@ -141,11 +141,11 @@ class SimilarCollocationsController @Inject() (implicit iap: IndexAccessProvider
               "secondOrderCollocations" -> (scmd.toJson ++ Json.obj("size"->qm.secondOrderCollocations)),
               "thirdOrderCollocations" -> tcmd.toJson
              ),
-           "cosine" -> cmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2)),
-            "dice" -> dmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2)),
-            "jaccard"-> jmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2)),
-            "euclidean" -> emaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2)),
-            "manhattan" -> mmaxHeap.toSeq.sortBy(_._2).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2))
+           "cosine" -> cmaxHeap.toSeq.sortBy(_._2)(Ordering.Double.TotalOrdering).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2)),
+            "dice" -> dmaxHeap.toSeq.sortBy(_._2)(Ordering.Double.TotalOrdering).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2)),
+            "jaccard"-> jmaxHeap.toSeq.sortBy(_._2)(Ordering.Double.TotalOrdering).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2)),
+            "euclidean" -> emaxHeap.toSeq.sortBy(_._2)(Ordering.Double.TotalOrdering).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2)),
+            "manhattan" -> mmaxHeap.toSeq.sortBy(_._2)(Ordering.Double.TotalOrdering).map(p => Json.obj("term"->p._1.utf8ToString,"distance"->p._2))
           ))
         }
       }

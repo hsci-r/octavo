@@ -4,7 +4,6 @@ import java.io.{File, FileInputStream, FileOutputStream, RandomAccessFile}
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.{FileSystems, Path}
-import java.util
 import java.util.concurrent.{ForkJoinPool, ForkJoinWorkerThread}
 import java.util.regex.Pattern
 import java.util.{Collections, Locale}
@@ -21,10 +20,10 @@ import jetbrains.exodus.util.LightOutputStream
 import org.apache.lucene.analysis.Analyzer.TokenStreamComponents
 import org.apache.lucene.analysis._
 import org.apache.lucene.analysis.core.{KeywordAnalyzer, WhitespaceAnalyzer, WhitespaceTokenizer}
-import org.apache.lucene.analysis.miscellaneous.{ASCIIFoldingFilter, HyphenatedWordsFilter, LengthFilter, PerFieldAnalyzerWrapper}
+import org.apache.lucene.analysis.miscellaneous.{HyphenatedWordsFilter, LengthFilter, PerFieldAnalyzerWrapper}
 import org.apache.lucene.analysis.pattern.PatternReplaceFilter
 import org.apache.lucene.analysis.standard.StandardAnalyzer
-import org.apache.lucene.document.{DoublePoint, FloatPoint, IntPoint, LatLonPoint, LongPoint}
+import org.apache.lucene.document._
 import org.apache.lucene.geo.{GeoEncodingUtils, Polygon}
 import org.apache.lucene.index._
 import org.apache.lucene.queryparser.classic.QueryParser
@@ -41,15 +40,15 @@ import parameters.{QueryScoring, SortDirection}
 import play.api.inject.ApplicationLifecycle
 import play.api.libs.json.Reads._
 import play.api.libs.json.{Json, _}
-import play.api.{Configuration, Logging}
+import play.api.{Configuration, Logger, Logging}
 import services.IndexAccess.scriptEngineManager
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.parallel.ForkJoinTaskSupport
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, BlockContext, CanAwait, ExecutionContext, Future}
+import scala.concurrent._
 import scala.language.implicitConversions
 
 object IndexAccess {
@@ -313,7 +312,7 @@ class IndexAccessProvider @Inject() (config: Configuration,lifecycle: Applicatio
     }(IndexAccess.shortTaskExecutionContext)).flatMap(Await.result(_,Duration.Inf)).toMap
   }
   def apply(id: String): IndexAccess = indexAccesses(id)
-  def toJson: JsValue = Json.toJson(indexAccesses.mapValues(v => v.indexMetadata.indexName))
+  def toJson: JsValue = Json.toJson(indexAccesses.view.mapValues(v => v.indexMetadata.indexName))
 }
 
 sealed abstract class StoredFieldType extends EnumEntry {
@@ -339,12 +338,12 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
 
         var dv: SortedNumericDocValues = _
 
-        override def collect(doc: Int) {
+        override def collect(doc: Int): Unit = {
           if (this.dv.advanceExact(doc))
             ret += this.dv.nextValue()
         }
 
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           this.dv = DocValues.getSortedNumeric(context.reader, field)
         }
       })
@@ -366,12 +365,12 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
 
         var dv: NumericDocValues = _
 
-        override def collect(doc: Int) {
+        override def collect(doc: Int): Unit = {
           if (this.dv.advanceExact(doc))
             ret += this.dv.longValue()
         }
 
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           this.dv = DocValues.getNumeric(context.reader, field)
         }
       })
@@ -381,7 +380,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
     }
   }
   case object FLOATDOCVALUES extends StoredFieldType {
-    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] = {
       val dvs = DocValues.getNumeric(lr, field)
       doc: Int => if (dvs.advanceExact(doc)) {
         Some(JsNumber(BigDecimal(java.lang.Float.intBitsToFloat(dvs.longValue.toInt).toDouble))) } else None
@@ -394,12 +393,12 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
 
         var dv: NumericDocValues = _
 
-        override def collect(doc: Int) {
+        override def collect(doc: Int): Unit = {
           if (this.dv.advanceExact(doc))
             ret += java.lang.Float.intBitsToFloat(this.dv.longValue.toInt)
         }
 
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           this.dv = DocValues.getNumeric(context.reader, field)
         }
       })
@@ -409,7 +408,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
     }
   }
   case object DOUBLEDOCVALUES extends StoredFieldType {
-    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] = {
       val dvs = DocValues.getNumeric(lr, field)
       doc: Int => if (dvs.advanceExact(doc)) Some(JsNumber(BigDecimal(java.lang.Double.longBitsToDouble(dvs.longValue)))) else None
     }
@@ -421,12 +420,12 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
 
         var dv: NumericDocValues = _
 
-        override def collect(doc: Int) {
+        override def collect(doc: Int): Unit = {
           if (this.dv.advanceExact(doc))
             ret += java.lang.Double.longBitsToDouble(this.dv.longValue)
         }
 
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           this.dv = DocValues.getNumeric(context.reader, field)
         }
       })
@@ -436,7 +435,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
     }
   }
   case object SORTEDDOCVALUES extends StoredFieldType {
-    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] = {
       val dvs = DocValues.getSorted(lr, field)
       if (containsJson)
         (doc: Int) => if (dvs.advanceExact(doc)) Some(Json.parse(dvs.binaryValue.utf8ToString())) else None
@@ -451,12 +450,12 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
         
         var dv: SortedDocValues = _
   
-        override def collect(doc: Int) {
+        override def collect(doc: Int): Unit = {
           if (this.dv.advanceExact(doc))
             ret += BytesRef.deepCopyOf(this.dv.binaryValue())
         }
         
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           this.dv = DocValues.getSorted(context.reader, field)
         }
       })
@@ -466,7 +465,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
     }
   }    
   case object SORTEDNUMERICDOCVALUES extends StoredFieldType {
-    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] = {
       val dvs = DocValues.getSortedNumeric(lr, field)
       doc: Int => if (dvs.advanceExact(doc)) Some({
         val values = new Array[JsValue](dvs.docValueCount)
@@ -486,7 +485,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
         
         var dv: SortedNumericDocValues = _
   
-        override def collect(doc: Int) {
+        override def collect(doc: Int): Unit = {
           if (this.dv.advanceExact(doc)) {
             var i = 0
             while (i<values.length) {
@@ -496,7 +495,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
           }
         }
         
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           this.dv = DocValues.getSortedNumeric(context.reader, field)
         }
       })
@@ -506,7 +505,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
     }        
   }
   case object SORTEDSETDOCVALUES extends StoredFieldType {
-    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] = {
       val dvs = DocValues.getSortedSet(lr, field)
       if (containsJson)
         (doc: Int) => if (dvs.advanceExact(doc)) Some({
@@ -538,7 +537,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
         
         var dv: SortedSetDocValues = _
   
-        override def collect(doc: Int) {
+        override def collect(doc: Int): Unit = {
           if (this.dv.advanceExact(doc)) {
             var ord = this.dv.nextOrd
             while (ord != SortedSetDocValues.NO_MORE_ORDS) {
@@ -548,7 +547,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
           }
         }
         
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           this.dv = DocValues.getSortedSet(context.reader, field)
         }
       })
@@ -558,7 +557,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
     }    
   }
   case object SINGULARSTOREDFIELD extends StoredFieldType {
-    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] = {
       val fieldS = Collections.singleton(field)
       if (containsJson)
         (doc: Int) => Option(lr.document(doc,fieldS).get(field)).map(Json.parse)
@@ -574,12 +573,12 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
         
         var r: LeafReader = _
   
-        override def collect(doc: Int) {
+        override def collect(doc: Int): Unit = {
           val fv = r.document(doc, fieldS).getBinaryValue(field)
           if (fv != null) ret += BytesRef.deepCopyOf(fv)
         }
         
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           this.r = context.reader
         }
       })
@@ -589,7 +588,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
     }    
   }
   case object MULTIPLESTOREDFIELDS extends StoredFieldType {
-    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] = {
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] = {
       val fieldS = Collections.singleton(field)
       if (containsJson)
         (doc: Int) => {
@@ -611,11 +610,11 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
         
         var r: LeafReader = _
   
-        override def collect(doc: Int) {
+        override def collect(doc: Int): Unit = {
           for (fv <- r.document(doc, fieldS).getBinaryValues(field)) ret += BytesRef.deepCopyOf(fv)
         }
         
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           this.r = context.reader
         }
       })
@@ -626,7 +625,7 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
   }
   case object TERMVECTOR extends StoredFieldType {
     import IndexAccess._
-    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): (Int) => Option[JsValue] =
+    def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] =
       if (containsJson)
         (doc: Int) => {
           val values = lr.getTermVector(doc, field).asBytesRefIterable.map(br => Json.parse(br.utf8ToString)).toSeq
@@ -645,11 +644,11 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
         
         var r: LeafReader = _
   
-        override def collect(doc: Int) {
+        override def collect(doc: Int): Unit = {
           r.getTermVector(doc, field).asBytesRefIterable.foreach(ret += BytesRef.deepCopyOf(_))
         }
         
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           this.r = context.reader
         }
       })
@@ -752,6 +751,7 @@ case class FieldInfo(
             case IndexedFieldType.FLOATPOINT => Json.obj("min" -> FloatPoint.decodeDimension(pv.getMinPackedValue, 0), "max" -> FloatPoint.decodeDimension(pv.getMaxPackedValue, 0))
             case IndexedFieldType.DOUBLEPOINT => Json.obj("min" -> DoublePoint.decodeDimension(pv.getMinPackedValue, 0), "max" -> DoublePoint.decodeDimension(pv.getMaxPackedValue, 0))
             case IndexedFieldType.LATLONPOINT => Json.obj("min" -> Json.obj("lat" -> GeoEncodingUtils.decodeLatitude(pv.getMinPackedValue, 0), "lon" -> GeoEncodingUtils.decodeLongitude(pv.getMinPackedValue, Integer.BYTES)), "max" -> Json.obj("lat" -> GeoEncodingUtils.decodeLatitude(pv.getMaxPackedValue, 0), "lon" -> GeoEncodingUtils.decodeLongitude(pv.getMaxPackedValue, Integer.BYTES)))
+            case _ => throw new IllegalStateException("There should be a guard above this to prevent us from ever reaching here")
           })
       case IndexedFieldType.NONE => Json.obj()
     }
@@ -840,12 +840,13 @@ case class LevelMetadata(
   val idFieldAsTerm = new Term(idField,"")
   val idFieldInfo: FieldInfo = fields(idField)
   val fieldStats = new mutable.HashMap[String,(TDigest,TDigest)]
-  def ensureFieldStats(path: String, lr: LeafReader): Unit =
+  def ensureFieldStats(path: String, lr: LeafReader, logger: Logger): Unit =
     for ((name, info) <- fields) {
       new File(path+"/stats/"+id).mkdirs()
       if (!new File(path+"/stats/"+id).exists) throw new IllegalArgumentException("Could not create directory "+path+"/stats/"+id)
       val fname = path + "/stats/" + id + "/" + name + ".stats"
       if (new File(fname).exists) {
+        logger.info(f"Stats for $fname not found. Calculating.")
         val f = new RandomAccessFile(fname, "r")
         val inChannel = f.getChannel
         val buffer = inChannel.map(FileChannel.MapMode.READ_ONLY, 0, inChannel.size)
@@ -854,6 +855,7 @@ case class LevelMetadata(
         fieldStats.put(name, (d1, d2))
         inChannel.close()
         f.close()
+        logger.info(f"Finished calculating stats for $fname.")
       } else
         info.indexedAs match {
           case IndexedFieldType.TEXT | IndexedFieldType.STRING =>
@@ -894,7 +896,7 @@ case class LevelMetadata(
                     var values = 0
                     if (dv!=null) while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
                       values += 1
-                      for (i <- 0 to dv.docValueCount)
+                      for (_ <- 0 to dv.docValueCount)
                         histogram.add(dv.nextValue)
                     }
                     histogram.add(0,lr.numDocs-values)
@@ -914,6 +916,7 @@ case class LevelMetadata(
                       histogram.add(java.lang.Double.longBitsToDouble(dv.longValue))
                     }
                     histogram.add(0,lr.numDocs-values)
+                  case _ => throw new IllegalStateException("There should be a guard above this to prevent us from ever reaching here")
                 }
                 val bb = ByteBuffer.allocateDirect(histogram.smallByteSize)
                 histogram.asSmallBytes(bb)
@@ -949,7 +952,7 @@ case class LevelMetadata(
     "indices"->indices,
     "preload"->preload,
     "documents"->ia.reader(id).maxDoc(),
-    "fields"->fields.filter(p => metadataOpts.stats || metadataOpts.histograms || metadataOpts.quantiles || !commonFields.contains(p._2)).mapValues(_.toJson(ia.reader(id).leaves.get(0).reader,fieldStats,metadataOpts))
+    "fields"->fields.filter(p => metadataOpts.stats || metadataOpts.histograms || metadataOpts.quantiles || !commonFields.contains(p._2)).view.mapValues(_.toJson(ia.reader(id).leaves.get(0).reader,fieldStats,metadataOpts)).toMap[String,JsValue]
   )
   def getMatchingValues(is: IndexSearcher, q: Query)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[_] = fields(idField).getMatchingValues(is, q)
 }
@@ -979,7 +982,7 @@ case class IndexMetadata(
     case "NIOFSDirectory" => new NIOFSDirectory(path)
     case any => throw new IllegalArgumentException("Unknown directory type "+any)
   }
-  val indexingAnalyzers: Map[String,Analyzer] = indexingAnalyzersAsText.mapValues{
+  val indexingAnalyzers: Map[String,Analyzer] = indexingAnalyzersAsText.view.mapValues{
     case "OctavoAnalyzer" => IndexAccess.octavoAnalyzer
     case "StandardAnalyzer" => new StandardAnalyzer(CharArraySet.EMPTY_SET)
     case a if a.startsWith("MorphologicalAnalyzer_") => new MorphologicalAnalyzer(new Locale(a.substring(22)))
@@ -989,7 +992,7 @@ case class IndexMetadata(
       val ase = scriptEngineManager.getEngineByName(a2.substring(0,ci))
       ase.eval(a2.substring(ci+1)).asInstanceOf[Analyzer]
     case any => throw new IllegalArgumentException("Unknown analyzer type " + any)
-  }.withDefaultValue(new KeywordAnalyzer())
+  }.toMap.withDefaultValue(new KeywordAnalyzer())
   val levelOrder: Map[String,Int] = levels.map(_.id).zipWithIndex.toMap
   val levelMap: Map[String,LevelMetadata] = levels.map(l => (l.id,l)).toMap
   val defaultLevel: LevelMetadata = defaultLevelS.map(levelMap(_)).getOrElse(levels.last)
@@ -1013,7 +1016,7 @@ case class IndexMetadata(
     "levels"->levels.map(_.toJson(ia,metadataOpts,commonFields.values.toSet)),
     "defaultLevel"->defaultLevel.id,
     "indexingAnalyzers"->indexingAnalyzersAsText,
-    "commonFields"->commonFields.mapValues(_.toJson(ia.reader(defaultLevel.id).leaves.get(0).reader,defaultLevel.fieldStats,metadataOpts))
+    "commonFields"->commonFields.view.mapValues(_.toJson(ia.reader(defaultLevel.id).leaves.get(0).reader,defaultLevel.fieldStats,metadataOpts)).toMap[String,JsValue]
   )
 }
 
@@ -1059,7 +1062,7 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
 
   val indexMetadata: IndexMetadata = readIndexMetadata(Json.parse(new FileInputStream(new File(path+"/indexmeta.json"))))
 
-  private val offsetDataEnv = if (indexMetadata.offsetDataConverterAsText.isDefined) Environments.newContextualInstance(path+"/offsetdata", new EnvironmentConfig().setEnvIsReadonly(true).setLogFileSize(Int.MaxValue+1l).setMemoryUsage(Math.min(1073741824l, Runtime.getRuntime.maxMemory/4)).setEnvCloseForcedly(true)) else null
+  private val offsetDataEnv = if (indexMetadata.offsetDataConverterAsText.isDefined) Environments.newContextualInstance(path+"/offsetdata", new EnvironmentConfig().setEnvIsReadonly(true).setLogFileSize(Int.MaxValue+1L).setMemoryUsage(Math.min(1073741824L, Runtime.getRuntime.maxMemory/4)).setEnvCloseForcedly(true)) else null
   if (indexMetadata.offsetDataConverterAsText.isDefined && lifecycle != null) lifecycle.addStopHook{() => Future.successful(offsetDataEnv.close())}
   private val offsetDataCursor: ThreadLocal[Cursor] = ThreadLocal.withInitial(() => {
     offsetDataEnv.beginReadonlyTransaction()
@@ -1084,7 +1087,7 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
         ret
       })
       val reader = if (mreaders.length == 1) mreaders.head else new ParallelCompositeReader(mreaders:_*)
-      level.ensureFieldStats(path,reader.leaves.get(0).reader)
+      level.ensureFieldStats(path,reader.leaves.get(0).reader,logger)
       for (field <- level.fields) {
         if (!seenFields.contains(field._1)) logger.warn("Documented field "+ field._1 + " not found in "+path+"/["+level.indices.mkString(", ")+"]")
       }
@@ -1107,7 +1110,7 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
   }
 
   def offsetDataGetter: (Int,Int,OffsetSearchType.Value) => JsValue = {
-    if (indexMetadata.offsetDataConverterAsText.isEmpty) return (doc: Int, offset: Int, searchType: OffsetSearchType.Value) => JsNull
+    if (indexMetadata.offsetDataConverterAsText.isEmpty) return (_: Int, _: Int, _: OffsetSearchType.Value) => JsNull
     val cursor = offsetDataCursor.get
     val klos = new LightOutputStream()
     (doc: Int, offset: Int, searchType: OffsetSearchType.Value) => {
@@ -1140,9 +1143,12 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
     val qp = new ComplexPhraseQueryParser(indexMetadata.contentField,queryAnalyzers(level.id)) {
 
       override def addClause(clauses: java.util.List[BooleanClause], conj: Int, mods: Int, q: Query): Unit = {
-        if (conj == 2 && mods == 11) // QueryParserBase.CON_OR QueryParserBase.MOD_REQ
-          clauses.add(newBooleanClause(q, Occur.FILTER))
-        else super.addClause(clauses, conj, mods, q)
+        super.addClause(clauses, conj, mods, q)
+        if (mods == 11) {// QueryParserBase.MOD_REQ
+          val c = clauses.get(clauses.size - 1)
+          if (!c.isProhibited)
+            clauses.set(clauses.size() - 1, new BooleanClause(c.getQuery, Occur.FILTER))
+        }
       }
 
       override def getWildcardQuery(field: String, term: String): Query = {
@@ -1326,7 +1332,7 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
             new ExtractingTermInSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Float]].map(v => new BytesRef(v.toString)).asJava)
           case StoredFieldType.DOUBLEDOCVALUES =>
             new ExtractingTermInSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Double]].map(v => new BytesRef(v.toString)).asJava)
-          case any => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
+          case _ => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
         }
       case IndexedFieldType.INTPOINT =>
         inField.storedAs match {
@@ -1338,7 +1344,7 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
             IntPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Float]].view.map(_.toInt).toSeq:_*)
           case StoredFieldType.DOUBLEDOCVALUES =>
             IntPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Double]].view.map(_.toInt).toSeq:_*)
-          case any => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
+          case _ => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
         }
       case IndexedFieldType.LONGPOINT =>
         inField.storedAs match {
@@ -1350,7 +1356,7 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
             LongPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Float]].view.map(_.toLong).toSeq:_*)
           case StoredFieldType.DOUBLEDOCVALUES =>
             LongPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Double]].view.map(_.toLong).toSeq:_*)
-          case any => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
+          case _ => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
         }
       case IndexedFieldType.FLOATPOINT =>
         inField.storedAs match {
@@ -1362,7 +1368,7 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
             FloatPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Float]].toSeq:_*)
           case StoredFieldType.DOUBLEDOCVALUES =>
             FloatPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Double]].view.map(_.toFloat).toSeq:_*)
-          case any => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
+          case _ => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
         }
       case IndexedFieldType.DOUBLEPOINT =>
         inField.storedAs match {
@@ -1374,13 +1380,13 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
             DoublePoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Float]].view.map(_.toDouble).toSeq:_*)
           case StoredFieldType.DOUBLEDOCVALUES =>
             DoublePoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Double]].toSeq:_*)
-          case any => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
+          case _ => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
         }
       case IndexedFieldType.LATLONPOINT =>
         inField.storedAs match {
           case StoredFieldType.LATLONDOCVALUES =>
             LongPoint.newSetQuery(outField.id, inField.getMatchingValues(is, query).asInstanceOf[scala.collection.Set[Long]].toSeq:_*)
-          case any => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
+          case _ => throw new UnsupportedOperationException("Unsupported field type combo "+inField+" => "+outField)
         }
       case any => throw new UnsupportedOperationException("Unsupported indexed field type "+any)
     }

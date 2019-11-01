@@ -49,7 +49,7 @@ class QueryCache @Inject() (env: Environment, configuration: Configuration) exte
       val tmpDir = new File(mtmpDir.getPath + '/'+i+'/'+j)
       tmpDir.mkdirs()
       for (tf <- tmpDir.listFiles()) // clean up calls that were aborted when the application shut down/crashed
-        if (tf.isFile && tf.getName.startsWith("result-") && tf.getName.endsWith(".json") && tf.length == 0) {
+        if (tf.isFile && tf.getName.endsWith(".result") && tf.length == 0) {
           logger.warn("Cleaning up aborted call "+tf)
           tf.delete()
         }
@@ -57,7 +57,7 @@ class QueryCache @Inject() (env: Environment, configuration: Configuration) exte
     mtmpDir.getPath
   }
 
-  def files(key: String): (File,File) = (new File(tmpDir(key) + "/result-"+key+".parameters"), new File(tmpDir(key) + "/result-"+key+".json"))
+  def files(key: String): (File,File) = (new File(tmpDir(key) + "/"+key+".parameters"), new File(tmpDir(key) + "/"+key+".result"))
 
   private def tmpDir(key: String): String = mtmpDir + '/' + key.charAt(0) + '/' + key.charAt(1)
 
@@ -73,7 +73,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
     sw.toString
   }
 
-  private def writeFile(file: File, content: String) {
+  private def writeFile(file: File, content: String) = {
     val pw = new PrintWriter(file)
     pw.write(content)
     pw.close()
@@ -82,7 +82,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
   protected def getOrCreateResult(method: String, index: IndexMetadata, parameters: QueryMetadata, force: Boolean, pretty: Boolean, estimate: () => Unit, call: () => Either[JsValue,Result])(implicit request: Request[AnyContent]): Result = {
     val auth = qc.checkAuth(index,request)
     if (auth.isEmpty) return Unauthorized.withHeaders("WWW-Authenticate" -> """Basic realm="Restricted"""")
-    val fcallId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.fullJson.toString
+    val fcallId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.fullJson.toString + ':' + parameters.mimeType
     val ndcallId = method + ":" + index.indexName + ':' + index.indexVersion + ':' + parameters.nonDefaultJson.toString
     val startTime = System.currentTimeMillis
     val name = DigestUtils.sha256Hex(fcallId)
@@ -109,7 +109,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
       val (pf,tf) = qc.files(name)
       if (force) tf.delete()
       val future =
-        if (parameters.doNotCache || tf.createNewFile()) {
+        if (tf.createNewFile()) {
           logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Running call " + ndcallId + " ("+name+")")
           logger.debug(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - full parameters: "+fcallId + " ("+name+")")
           writeFile(pf, Json.prettyPrint(qm))
@@ -167,13 +167,13 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
               if (tf.exists()) {
                 logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Reusing result from prior call for " + ndcallId + " ("+name+")")
                 logger.debug(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - full parameters: "+fcallId + " ("+name+")")
-                Future(Ok.sendFile(tf).as(JSON))
+                Future(Ok.sendFile(tf).as(parameters.mimeType))
               } else Future(InternalServerError("\"An error has occurred, please try again.\""))
           }
       val result = Await.result(future, Duration.Inf)
       val endTime = System.currentTimeMillis
       val requestTime = endTime - startTime
-      logger.info(f"$remoteId%s %% [${name.substring(0,6).toUpperCase}] - After $requestTime%,dms, returning ${result.body.contentLength.map(""+_).getOrElse("unknown")}%s bytes with status ${result.header.status}%s for call $ndcallId%s ($name%s).")
+      logger.info(f"$remoteId%s %% [${name.substring(0,6).toUpperCase}] - After $requestTime%,dms, returning ${result.body.contentLength.getOrElse(-1L)}%,d bytes in ${parameters.mimeType}%s with status ${result.header.status}%s for call $ndcallId%s ($name%s).")
       result
     }
   }

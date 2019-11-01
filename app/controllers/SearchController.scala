@@ -112,7 +112,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
           fields += ("distance" -> Json.toJson(ctvdp.distance(cv, compareTermVector._2)))
         if (srp.returnExplanations)
           fields += ("explanation" -> Json.toJson(we.explain(context, doc).toString))
-        if (termVectors && rtvdr.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedStringSeq(it, limitTermVector(cv, rtvl)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
+        if (termVectors && rtvdr.dimensions == 0) fields += ("termVector" -> Json.toJson(termOrdMapToOrderedStringIterable(it, limitTermVector(cv, rtvl)).map(p => Json.obj("term" -> p._1, "weight" -> p._2))))
         (fields, if (rtvdr.dimensions >0) cv else null)
       }
       val docFields = HashIntObjMaps.getDefaultFactory[collection.Map[String,JsValue]]().withKeysDomain(0, Int.MaxValue).newUpdatableMap[collection.Map[String,JsValue]]
@@ -126,9 +126,9 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         var getters: Map[String,Int => Option[JsValue]] = _
         var sortGetters: Seq[Int => Option[JsValue]] = Seq.empty
 
-        override def setScorer(scorer: Scorable) {this.scorer=scorer}
+        override def setScorer(scorer: Scorable): Unit = {this.scorer=scorer}
 
-        override def collect(ldoc: Int) {
+        override def collect(ldoc: Int): Unit = {
           qm.documentsProcessed += 1
           val doc = context.docBase + ldoc
           if (scorer.score >= minScore && (maxScore == -1.0f || scorer.score<=maxScore)) {
@@ -151,12 +151,12 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
           }
         }
 
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           this.context = context
           if (srp.limit == -1)
             this.getters = rfields.map(f => f -> ql.fields(f).jsGetter(context.reader)).toMap
           else if (srp.sorts.nonEmpty)
-            this.sortGetters = srp.sorts.map(f => if (f._1 == "score") (doc: Int) => Some(JsNumber(BigDecimal.decimal(scorer.score))) else ql.fields(f._1).jsGetter(context.reader))
+            this.sortGetters = srp.sorts.map(f => if (f._1 == "score") (_: Int) => Some(JsNumber(BigDecimal.decimal(scorer.score))) else ql.fields(f._1).jsGetter(context.reader))
         }
       }
       tlc.get.setCollector(collector)
@@ -179,8 +179,8 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         values.indices.map(i => originalIndicesToMDSValueIndices.get(i).map(vi => Json.toJson(mdsValues(vi))).getOrElse(JsNull))
       } else null
       val matchesByDocs: Array[Passages] = if (srp.snippetLimit!=0) {
-        val highlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField))
-        highlighter.highlight(indexMetadata.contentField, query, values.map(_._1).toArray, if (srp.snippetLimit == -1) Int.MaxValue - 1 else srp.snippetLimit)
+        val highlighter: ExtendedUnifiedHighlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField))
+        highlighter.highlightAsPassages(indexMetadata.contentField, query, values.map(_._1).toArray, if (srp.snippetLimit == -1) Int.MaxValue - 1 else srp.snippetLimit)
       } else null
       srp.responseFormat match {
         case ResponseFormat.CSV =>
@@ -198,7 +198,10 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
           Right(Ok(baos.toByteArray).as(TEXT))
         case ResponseFormat.JSON =>
           Left(Json.obj(
-            "final_query"->query.toString,
+            "final_query"->{
+              val qs = query.toString
+              if (qs.length <= 500) qs else qs.substring(0,497) + "..."
+            },
             "total"->total,
             "totalScore"->(if (srp.queryScoring != QueryScoring.TF) Json.toJson(totalScore) else Json.toJson(totalScore.toInt)),
             "docs"->values.zipWithIndex.map{

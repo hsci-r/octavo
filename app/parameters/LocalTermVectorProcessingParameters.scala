@@ -22,7 +22,7 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
   val localScaling: LocalTermVectorScaling.Value = localScalingOpt.getOrElse(LocalTermVectorScaling.ABSOLUTE)
   private val minTotalTermFreqOpt = p.get(prefix+"minTotalTermFreq"+suffix).map(_.head.toLong)
   /** minimum total term frequency of term to be added to the term vector */
-  val minTotalTermFreq: Long = minTotalTermFreqOpt.getOrElse(1l)
+  val minTotalTermFreq: Long = minTotalTermFreqOpt.getOrElse(1L)
   private val maxTotalTermFreqOpt = p.get(prefix+"maxTotalTermFreq"+suffix).map(_.head.toLong)
   /** maximum total term frequency of term to be added to the term vector */
   val maxTotalTermFreq: Long = maxTotalTermFreqOpt.getOrElse(Long.MaxValue)

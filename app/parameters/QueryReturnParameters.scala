@@ -19,10 +19,10 @@ class QueryReturnParameters()(implicit protected val request: Request[AnyContent
 
   /** desired response format */
   val responseFormat = p.get("format").map(v => ResponseFormat.withName(v.head.toUpperCase)).getOrElse(ResponseFormat.JSON)
+  queryMetadata.mimeType = responseFormat.mimeType
   if (responseFormat==ResponseFormat.CSV) {
     if (snippetLimit != 0) throw new IllegalArgumentException("Can't return snippets in CSV format")
     if (returnExplanations) throw new IllegalArgumentException("Can't return explanations in CSV format")
-    queryMetadata.doNotCache = true
   }
 
   private val fullJson = Json.obj(
@@ -30,7 +30,8 @@ class QueryReturnParameters()(implicit protected val request: Request[AnyContent
     "offset" -> offset,
     "sumScaling"->queryScoringString,
     "fields"->fields,
-    "returnExplanations"->returnExplanations
+    "returnExplanations"->returnExplanations,
+    "responseFormat"->responseFormat.entryName
   )
   queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
   queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1 match {

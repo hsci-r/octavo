@@ -51,7 +51,7 @@ class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, qc:
               val distance = tvdd.distance(tvm1(key).cv,tvm2(key).cv)
               if (distance.isNaN) JsNull else Json.toJson(distance)
             }), 
-            "df1"->Json.toJson(tvm1.get(key).map(_.docFreq).getOrElse(0l)),"df2"->Json.toJson(tvm2.get(key).map(_.docFreq).getOrElse(0l)),"tf1"->Json.toJson(tvm1.get(key).map(_.totalTermFreq).getOrElse(0l)),"tf2"->Json.toJson(tvm2.get(key).map(_.totalTermFreq).getOrElse(0l)))
+            "df1"->Json.toJson(tvm1.get(key).map(_.docFreq).getOrElse(0L)),"df2"->Json.toJson(tvm2.get(key).map(_.docFreq).getOrElse(0L)),"tf1"->Json.toJson(tvm1.get(key).map(_.totalTermFreq).getOrElse(0L)),"tf2"->Json.toJson(tvm2.get(key).map(_.totalTermFreq).getOrElse(0L)))
         if (tvm1.contains(key) && tvm2.contains(key) && meaningfulTerms!=0) {
           val tv1 = tvm1(key).cv
           val tv2 = tvm2(key).cv

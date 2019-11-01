@@ -3,17 +3,18 @@ package controllers
 import javax.inject.{Inject, Singleton}
 import org.apache.lucene.analysis.tokenattributes.{CharTermAttribute, PositionIncrementAttribute}
 import org.apache.lucene.index.{PostingsEnum, Term, Terms}
-import org.apache.lucene.search._
+import org.apache.lucene.search.{AutomatonQuery, BooleanQuery, FuzzyQuery, FuzzyTermsEnum, MultiPhraseQuery, Query, ScoreMode, SimpleCollector, TermInSetQuery, TermQuery}
 import org.apache.lucene.util.automaton.CompiledAutomaton
 import org.apache.lucene.util.{AttributeSource, BytesRef}
-import parameters._
 import play.api.libs.json.{JsObject, Json}
 import services.IndexAccessProvider
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
+import parameters.{GeneralParameters, QueryMetadata, QueryScoring, SortDirection}
+
 import scala.collection.Searching.Found
 import scala.collection.mutable.ArrayBuffer
-import scala.collection.{Searching, mutable}
+import scala.collection.mutable
 
 object SortBy extends Enumeration {
   val TERM, TTF, TDF = Value
@@ -22,26 +23,26 @@ object SortBy extends Enumeration {
 @Singleton
 class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
   
-  private def permutations[A](a: Iterable[A]*): Iterator[Seq[A]] = a.foldLeft(Iterator(Seq.empty[A])) {
+  /*private def permutations[A](a: Iterable[A]*): Iterator[Seq[A]] = a.foldLeft(Iterator(Seq.empty[A])) {
     (acc: Iterator[Seq[A]], next: Iterable[A]) => acc.flatMap { combo: Seq[A] => next.map { num => combo :+ num } }
-  }
+  }*/
 
   class Stats(var df: Long = 0,var ttf: Long = 0) {}
 
   class StatsCollector(val termMap: mutable.HashMap[String, Stats], val apostings: ArrayBuffer[(Int,ArrayBuffer[(String,PostingsEnum)])]) extends SimpleCollector {
 
-    var tdf = 0l
-    var tttf = 0l
+    var tdf = 0L
+    var tttf = 0L
 
     override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
 
     val docMatches = new mutable.HashMap[String,Stats]()
 
-    def check(sterm: String, position: Int, rPositions: Seq[(Int,ArrayBuffer[(String,ArrayBuffer[Int])])]): Unit = {
+    def check(sterm: String, position: Int, rPositions: Iterable[(Int,ArrayBuffer[(String,ArrayBuffer[Int])])]): Unit = {
       val tail = rPositions.tail
       val (pi,termPositions) = rPositions.head
       for ((term,positions)<-termPositions) {
-        Searching.search(positions).search(position + pi) match {
+        positions.search(position + pi) match {
           case Found(_) =>
             val cterm = sterm + ("? " * (pi + -1)) + " " + term
             if (tail.nonEmpty) check(cterm, position + pi, tail) else {
@@ -55,7 +56,7 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
       }
     }
 
-    override def collect(doc: Int) = {
+    override def collect(doc: Int): Unit = {
       docMatches.clear()
       val aFilteredPositions = new ArrayBuffer[(Int,ArrayBuffer[(String,ArrayBuffer[Int])])]
       for ((pi,ppostings) <- apostings) {
@@ -81,7 +82,7 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
     }
   }
 
-  val ExtendedFuzzyQuery = "([^\\|]*)~([12]):([0-9]*):?(.*)".r
+  val ExtendedFuzzyQuery = "([^|]*)~([12]):([0-9]*):?(.*)".r
 
   import services.IndexAccess._
 
@@ -141,8 +142,8 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
       ts.close()
       val qp = ia.termVectorQueryParsers(level).get
       val terms = reader(level).leaves.get(0).reader.terms(indexMetadata.contentField)
-      var tdf = 0l
-      var tttf = 0l
+      var tdf = 0L
+      var tttf = 0L
       val termMap = new mutable.HashMap[String, Stats]()
       if (parts.length == 1) {
         val qt = parts(0)._2

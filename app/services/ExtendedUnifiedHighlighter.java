@@ -3,22 +3,15 @@ package services;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.index.*;
 import org.apache.lucene.index.FieldInfo;
-import org.apache.lucene.queryparser.complexPhrase.ComplexPhraseQueryParser;
 import org.apache.lucene.search.*;
-import org.apache.lucene.search.highlight.WeightedSpanTerm;
 import org.apache.lucene.search.uhighlight.*;
-import org.apache.lucene.util.BytesRef;
-import org.apache.lucene.util.automaton.CharacterRunAutomaton;
 
 import java.io.IOException;
 import java.util.*;
 import java.util.function.Predicate;
 
-import org.apache.lucene.search.uhighlight.UnifiedHighlighter.OffsetSource;
-import org.apache.lucene.search.uhighlight.UnifiedHighlighter.HighlightFlag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import scala.runtime.AbstractFunction0;
 
 public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
 
@@ -34,7 +27,6 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
             throw new RuntimeException(bogus);
         }
     }
-
 
     public static class Passages {
         public final Passage[] passages;
@@ -63,14 +55,18 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
 
     public static final DefaultPassageFormatter defaultPassageFormatter = new DefaultPassageFormatter();
 
-    public Passages[] highlight(String field, Query query, int[] docIds, int maxPassages) throws IOException  {
-        Object[] ret = highlightFieldsAsObjects(new String[]{field}, query, docIds, new int[]{maxPassages}).get(field);
-        return Arrays.copyOf(ret, ret.length, Passages[].class);
+    public Passages[] highlightAsPassages(String field, Query query, int[] docIds, int maxPassages) {
+        try {
+            Object[] ret = highlightFieldsAsObjects(new String[]{field}, query, docIds, new int[]{maxPassages}).get(field);
+            return Arrays.copyOf(ret, ret.length, Passages[].class);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public static List<String> highlightsToStrings(Passages p, boolean removeNonMatches) {
         Passage[] single = new Passage[1];
-        List<String> ret = new ArrayList<String>(p.passages.length);
+        List<String> ret = new ArrayList<>(p.passages.length);
         for (Passage pas: p.passages) if (!removeNonMatches || pas.getNumMatches()>0) {
             single[0] = pas;
             ret.add(defaultPassageFormatter.format(single, p.content));

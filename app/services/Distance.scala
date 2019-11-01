@@ -18,7 +18,7 @@ object Filtering extends Enum[Filtering] {
       val (x,y) = if (xo.size < yo.size) (xo,yo) else (yo,xo)
       val ret = HashLongSets.newUpdatableSet(x.size)
       x.forEach(new LongConsumer() {
-        override def accept(key: Long) { if (y.contains(key)) ret.add(key) }
+        override def accept(key: Long): Unit = { if (y.contains(key)) ret.add(key) }
       })
       ret
     }
@@ -67,7 +67,7 @@ object Distance {
     var denom = 0.0
     val keys = HashLongSets.newImmutableSet(x.keySet, y.keySet)
     keys.forEach(new LongConsumer() {
-      override def accept(key: Long) {
+      override def accept(key: Long): Unit = {
         nom+=math.min(x.getOrDefault(key,0.0),y.getOrDefault(key,0.0))
         denom+=math.max(x.getOrDefault(key,0.0),y.getOrDefault(key,0.0))
       }
@@ -80,7 +80,7 @@ object Distance {
     var denom = 0.0
     val keys = HashLongSets.newImmutableSet(x.keySet, y.keySet)
     keys.forEach(new LongConsumer() {
-      override def accept(key: Long) {
+      override def accept(key: Long): Unit = {
         nom+=math.min(x.getOrDefault(key,0.0),y.getOrDefault(key,0.0))
         denom+=x.getOrDefault(key,0.0)+y.getOrDefault(key,0.0)
       }
@@ -92,7 +92,7 @@ object Distance {
     if (x.size == 0) return
     var sum = 0.0
     x.values.forEach(new DoubleConsumer() {
-      override def accept(freq: Double) {
+      override def accept(freq: Double): Unit = {
         sum += freq
       }
     })
@@ -106,7 +106,7 @@ object Distance {
     if (x.size == 0) return
     var sum = 0.0
     x.values.forEach(new DoubleConsumer() {
-      override def accept(freq: Double) {
+      override def accept(freq: Double): Unit = {
         sum += freq*freq
       }
     })
@@ -122,7 +122,7 @@ object Distance {
     val keys = filtering(x.keySet, y.keySet)
     var sum = 0.0
     keys.forEach(new LongConsumer {
-      override def accept(key: Long) {
+      override def accept(key: Long): Unit = {
         val f1 = x.getOrDefault(key, 0.0)
         val f2 = y.getOrDefault(key, 0.0)
         val diff = f1 - f2
@@ -138,7 +138,7 @@ object Distance {
     val keys = filtering(x.keySet, y.keySet)
     var sum = 0.0
     keys.forEach(new LongConsumer {
-      override def accept(key: Long) {
+      override def accept(key: Long): Unit = {
         val f1 = x.getOrDefault(key, 0.0)
         val f2 = y.getOrDefault(key, 0.0)
         sum += math.abs(f1 - f2)
@@ -151,7 +151,7 @@ object Distance {
     val keys = filtering(x.keySet, y.keySet)
     var s1,s2,s3 = 0.0
     keys.forEach(new LongConsumer {
-      override def accept(key: Long) {
+      override def accept(key: Long): Unit = {
         val f1 = x.getOrDefault(key, 0.0)
         val f2 = y.getOrDefault(key, 0.0)
         s1 += f1 * f2

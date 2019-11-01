@@ -3,7 +3,11 @@ import com.typesafe.config._
 lazy val conf = ConfigFactory.parseFile(new File("conf/application.conf")).resolve()
 
 lazy val commonSettings = Seq(
-  scalaVersion := "2.12.9",
+  turbo := true,
+  useCoursier := true,
+  scalaVersion := "2.13.1",
+  scalacOptions += "-target:9",
+  javacOptions ++= Seq("-source","9","-target","9"),
   resolvers += Resolver.mavenLocal,
   developers := List(Developer(id="jiemakel",name="Eetu Mäkelä",email="eetu.makela@iki.fi",url=url("http://iki.fi/eetu.makela"))),
   organization := "io.github.jiemakel",
@@ -17,13 +21,14 @@ lazy val commonSettings = Seq(
     )
   ),
   version := conf.getString("app.version"),
-  resolvers ++= Seq("ImageJ" at "http://maven.imagej.net/content/repositories/releases/", "betadriven" at "https://nexus.bedatadriven.com/content/groups/public/")
+  resolvers ++= Seq("ImageJ" at "https://maven.imagej.net/content/repositories/releases/", "betadriven" at "https://nexus.bedatadriven.com/content/groups/public/")
 )
 
 lazy val mainSettings = Seq(
   name := "octavo",
   libraryDependencies ++= Seq(
     guice,
+    "org.scala-lang.modules" %% "scala-parallel-collections" % "0.2.0",
     "commons-codec" % "commons-codec" % "1.11",
     "org.apache.lucene" % "lucene-core" % "8.2.0",
     "org.apache.lucene" % "lucene-codecs" % "8.2.0",
@@ -36,8 +41,8 @@ lazy val mainSettings = Seq(
     "org.apache.lucene" % "lucene-highlighter" % "8.2.0",
     "com.koloboke" % "koloboke-api-jdk8" % "1.0.0",
     "com.koloboke" % "koloboke-impl-jdk8" % "1.0.0",
-    "com.beachape" %% "enumeratum" % "1.5.12",
-    "com.bizo" %% "mighty-csv" % "0.2",
+    "com.beachape" %% "enumeratum" % "1.5.13",
+//    "com.bizo" %% "mighty-csv" % "0.2",
     "com.tdunning" % "t-digest" % "3.1",
     "org.codehaus.groovy" % "groovy-jsr223" % "2.4.11",
     "org.scijava" % "scripting-jython" % "0.4.1" % "runtime",
@@ -46,9 +51,9 @@ lazy val mainSettings = Seq(
     "org.jetbrains.kotlin" % "kotlin-script-util" % "1.2.60" % "runtime" exclude("org.jetbrains.kotlin","kotlin-daemon-client"),
     "org.jetbrains.kotlin" % "kotlin-stdlib" % "1.2.60" % "runtime" exclude("org.jetbrains","annotations"),
     "mdsj" % "mdsj" % "0.2",
-    "org.nd4j" % "nd4j-native-platform" % "0.8.0",
-    "org.deeplearning4j" % "deeplearning4j-core" % "1.0.0-beta3",
-    "com.jujutsu.tsne" % "tsne" % "2.3.0",
+//    "org.nd4j" % "nd4j-native-platform" % "1.0.0-beta4",
+    "org.deeplearning4j" % "deeplearning4j-core" % "1.0.0-beta4",
+    "com.jujutsu.tsne" % "tsne" % "2.5.0",
     "org.jetbrains.xodus" % "xodus-environment" % "1.2.3" exclude("org.jetbrains","annotations"),
     "com.github.tototoshi" %% "scala-csv" % "1.3.6"
   )
@@ -76,11 +81,14 @@ lazy val dockerSettings = Seq(
     val s3 = t2.indexWhere{case Cmd("COPY",_) => true; case _ => false} + 1
     val (h3,t3) = t2.splitAt(s3)
     h1 ++
-      Seq(ExecCmd("RUN","rm","/opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-sans-externalized.jar","/opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-assets.jar")) ++
+      Seq(ExecCmd("RUN","rm","/opt/docker/conf/application.conf","/opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-sans-externalized.jar","/opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-assets.jar")) ++
       h2 ++
       Seq(Cmd("RUN","apk","update"),Cmd("RUN","apk","add","rsync","openssh")) ++
       h3 ++
-      Seq(Cmd("COPY","opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-sans-externalized.jar","opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-assets.jar","/opt/docker/lib/")) ++
+      Seq(
+        Cmd("COPY","opt/docker/conf/application.conf","/opt/docker/conf/application.conf"),
+        Cmd("COPY","opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-sans-externalized.jar","opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-assets.jar","/opt/docker/lib/")
+      ) ++
       t3
   }
 )

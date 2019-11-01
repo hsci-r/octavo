@@ -1,21 +1,12 @@
-import org.junit.Test
-import org.junit.Assert._
-import org.hamcrest.CoreMatchers._
-import fi.seco.lucene.MorphologicalAnalyzer
-import java.util.Locale
-import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
-import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute
-import org.apache.lucene.analysis.tokenattributes.OffsetAttribute
-import services.Distance
 import com.koloboke.collect.map.hash.HashLongDoubleMaps
-import org.junit.runner.RunWith
-import com.novocode.junit.JUnitRunner
-import services.Filtering
+import org.junit.Assert._
+import org.junit.Test
+import services.{Distance, Filtering}
 
 class TestDistances {
   
   @Test
-  def testCosineDistance {
+  def testCosineDistance: Unit = {
     val x = HashLongDoubleMaps.newMutableMapOf(1, 3.0, 2, 1.0, 3, 2.0, 4, 2.0, 5, 1.0)
     val y = HashLongDoubleMaps.newMutableMapOf(1, 3.0,         3, 2.0, 4, 1.0,         6, 1.0, 7, 5.0)
     val z = HashLongDoubleMaps.newMutableMapOf(6, 1.0, 7, 5.0)

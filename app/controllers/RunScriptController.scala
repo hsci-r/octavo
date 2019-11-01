@@ -9,7 +9,7 @@ import play.api.libs.json.{JsArray, JsString, JsValue}
 import play.api.mvc.InjectedController
 import services.IndexAccessProvider
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 import scala.collection.mutable
 
 @Singleton
@@ -37,7 +37,7 @@ class RunScriptController @Inject() (iap: IndexAccessProvider) extends InjectedC
     } else {
       val engine = scriptEngineManager.getEngineByName(p.get("language").map(_.head).getOrElse("Groovy"))
       val bindings = p.get("bindings").map(bid => {
-        val timeout = p.get("timeout").map(t => System.currentTimeMillis+(t.head.toLong*1000)).getOrElse(60000l)
+        val timeout = p.get("timeout").map(t => System.currentTimeMillis+(t.head.toLong*1000)).getOrElse(60000L)
         val bi = bindingInfos.get(bid.head)
         if (bi.isDefined) {
           val rbi = bi.get
@@ -60,7 +60,7 @@ class RunScriptController @Inject() (iap: IndexAccessProvider) extends InjectedC
         }
       } catch {
         case e: Exception =>
-          BadRequest(e.getClass+": "+e.getMessage+"\n"+e.getStackTrace.mkString("\n"))
+          BadRequest(e.getClass.toString+": "+e.getMessage+"\n"+e.getStackTrace.mkString("\n"))
       }
     }
   } 

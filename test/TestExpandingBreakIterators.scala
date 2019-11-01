@@ -5,7 +5,7 @@ import parameters.{ContextLevel, ExpandingWordBreakIterator}
 class TestExpandingBreakIterators {
 
     @Test
-    def testExpandingBreakIterator {
+    def testExpandingBreakIterator: Unit = {
         var str = "0 2.!.6 8 A C E"
         var bi = ContextLevel.CHARACTER(0,0)
         bi.setText(str)

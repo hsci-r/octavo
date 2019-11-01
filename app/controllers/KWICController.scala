@@ -18,7 +18,7 @@ import scala.collection.mutable.ArrayBuffer
 @Singleton
 class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends AQueuingController(qc) {
 
-  case class KWICMatch(context: String, docId: Int, startOffset: Int, endOffset: Int, matchStartIndex: Int, matchEndIndex: Int, terms: Seq[String], sortIndices: Seq[(Int,Int)]) {
+  case class KWICMatch(context: String, docId: Int, startOffset: Int, endOffset: Int, matchStartIndex: Int, matchEndIndex: Int, terms: Iterable[String], sortIndices: Iterable[(Int,Int)]) {
     def compare(that: KWICMatch, sd: Seq[SortDirection.Value], cs: Seq[Boolean]): Int = {
       for ((((msi,osi),csd),ccs) <- sortIndices.view.zip(that.sortIndices).zip(sd).zip(cs)) {
         var s1 = context.substring(msi._1-startOffset,msi._2-startOffset)
@@ -40,7 +40,7 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
   def search(index: String): Action[AnyContent] = Action { implicit request =>
     implicit val ia = iap(index)
     import ia._
-    val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
+    //val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
     implicit val qm = new QueryMetadata()
     val qp = new QueryParameters()
     val gp = new GeneralParameters()
@@ -63,7 +63,7 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
       val ir = is.getIndexReader
       var total = 0
       val maxHeap = mutable.PriorityQueue.empty[KWICMatch]((x: KWICMatch, y: KWICMatch) => x.compare(y,srp.sortContextDirections,srp.sortContextCaseSensitivities))
-      val processDocFields = (context: LeafReaderContext, doc: Int, getters: Map[String,Int => Option[JsValue]]) => {
+      val processDocFields = (_: LeafReaderContext, doc: Int, getters: Map[String,Int => Option[JsValue]]) => {
         val fields = new mutable.HashMap[String, JsValue]
         for (field <- srp.fields;
              value <- getters(field)(doc)) fields += (field -> value)
@@ -78,16 +78,16 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
         var getters: Map[String,Int => Option[JsValue]] = _
 
         val da = Array(0)
-        val highlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField),true)
+        val highlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField), matchFullSpans = true)
         val sbi = srp.sortContextLevel(0,0)
 
 
-        override def collect(ldoc: Int) {
+        override def collect(ldoc: Int): Unit = {
           qm.documentsProcessed += 1
           val doc = context.docBase + ldoc
           da(0) = doc
           for (
-            matchesInDoc <- highlighter.highlight(indexMetadata.contentField, query, da, Int.MaxValue - 1);
+            matchesInDoc <- highlighter.highlightAsPassages(indexMetadata.contentField, query, da, Int.MaxValue - 1);
             p <- matchesInDoc.passages
           ) {
             val matches = new mutable.HashMap[(Int, Int), ArrayBuffer[String]]
@@ -159,7 +159,7 @@ class KWICController @Inject()(iap: IndexAccessProvider, qc: QueryCache) extends
             docFields.put(doc, processDocFields(context, doc, getters))
         }
 
-        override def doSetNextReader(context: LeafReaderContext) {
+        override def doSetNextReader(context: LeafReaderContext): Unit = {
           this.context = context
           if (srp.limit == -1)
             this.getters = srp.fields.map(f => f -> ql.fields(f).jsGetter(context.reader)).toMap

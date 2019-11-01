@@ -5,8 +5,6 @@ import java.text.{BreakIterator, CharacterIterator, StringCharacterIterator}
 import enumeratum.{Enum, EnumEntry}
 import services.OffsetSearchType
 
-import scala.collection.Searching
-
 class ExpandingBreakIterator(protected val sub: BreakIterator, protected val expandLeft: Int = 0, protected val expandRight: Int = 0) extends BreakIterator {
 
   protected var text: String = _
@@ -92,7 +90,7 @@ class ExpandingWordBreakIterator(expandLeft: Int = 0, expandRight: Int = 0) exte
     var i = sub.current()
     if (i == BreakIterator.DONE) return BreakIterator.DONE
     while (true) {
-      var nextIndex = sub.next()
+      val nextIndex = sub.next()
       if (nextIndex == BreakIterator.DONE) return BreakIterator.DONE
       while (i != nextIndex) {
         if (Character.isLetterOrDigit(text.codePointAt(i)))
@@ -106,7 +104,7 @@ class ExpandingWordBreakIterator(expandLeft: Int = 0, expandRight: Int = 0) exte
     var i = sub.next()
     if (i == BreakIterator.DONE) return BreakIterator.DONE
     while (true) {
-      var nextIndex = sub.next()
+      val nextIndex = sub.next()
       if (nextIndex == BreakIterator.DONE) return BreakIterator.DONE
       while (i != nextIndex) {
         if (Character.isLetterOrDigit(text.codePointAt(i)))
@@ -156,7 +154,7 @@ class ExpandingWordBreakIterator(expandLeft: Int = 0, expandRight: Int = 0) exte
     var i = sub.following(offset)
     if (i == BreakIterator.DONE) return i
     while (true) {
-      var nextIndex = sub.next()
+      val nextIndex = sub.next()
       if (nextIndex == BreakIterator.DONE) return BreakIterator.DONE
       while (i != nextIndex) {
         if (Character.isLetterOrDigit(text.codePointAt(i)))
@@ -186,7 +184,7 @@ class ExpandingWordBreakIterator(expandLeft: Int = 0, expandRight: Int = 0) exte
     var i = offset
     if (i == BreakIterator.DONE) return BreakIterator.DONE
     while (true) {
-      var prevIndex = sub.preceding(i)
+      val prevIndex = sub.preceding(i)
       if (prevIndex == BreakIterator.DONE) return BreakIterator.DONE
       while (i != prevIndex - 1) {
         if (Character.isLetterOrDigit(text.codePointAt(i))) {
@@ -295,7 +293,7 @@ class PatternBreakIterator(pattern: String) extends BreakIterator {
       currentB = breakIndices.length - 1
       return BreakIterator.DONE
     }
-    currentB = Searching.search(breakIndices).search(offset + 1).insertionPoint
+    currentB = breakIndices.search(offset + 1).insertionPoint
     breakIndices(currentB)
   }
   override def preceding(offset: Int): Int = {
@@ -303,7 +301,7 @@ class PatternBreakIterator(pattern: String) extends BreakIterator {
       currentB = 0
       return BreakIterator.DONE
     }
-    currentB = Searching.search(breakIndices).search(offset).insertionPoint - 1
+    currentB = breakIndices.search(offset).insertionPoint - 1
     breakIndices(currentB)
   }
 }

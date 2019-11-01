@@ -19,7 +19,8 @@ import parameters._
 import play.api.Logging
 import play.api.libs.json.{JsString, JsValue, Json}
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
+import scala.collection.parallel.CollectionConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.parallel.{ParIterable, ParSeq, TaskSupport}
@@ -34,7 +35,7 @@ object TermVectors extends Logging {
     par
   }
 
-  def toParallel[T](i: Traversable[T])(implicit ts: TaskSupport): ParIterable[T] = {
+  def toParallel[T](i: Iterable[T])(implicit ts: TaskSupport): ParIterable[T] = {
     val par = i.par
     par.tasksupport = ts
     par
@@ -61,14 +62,14 @@ object TermVectors extends Logging {
       ctvp: LocalTermVectorProcessingParameters, 
       minScalingTerms: Seq[BytesRef],
       maxDocs: Int,
-      contextSetter: (LeafReaderContext) => Unit, 
-      docCollector: (Int) => Unit, 
+      contextSetter: LeafReaderContext => Unit,
+      docCollector: Int => Unit,
       termCollector: (Long,Int) => Unit)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess, qm: QueryMetadata): TermVectorQueryMetadata = {
-    var processedDocs = 0l
-    var contributingDocs = 0l
-    var processedTerms = 0l
-    var acceptedTerms = 0l
-    var totalAcceptedTermFreq = 0l
+    var processedDocs = 0L
+    var contributingDocs = 0L
+    var processedTerms = 0L
+    var acceptedTerms = 0L
+    var totalAcceptedTermFreq = 0L
     val termTransformer = ctvp.termTransformer.map(_.get)
     termTransformer.foreach(_.getBinding.invokeMethod("setIndexAccess", ia))
     val totalHits = getHitCountForQuery(is, q)
@@ -78,7 +79,7 @@ object TermVectors extends Logging {
       override def scoreMode = ScoreMode.COMPLETE_NO_SCORES
       var context: LeafReaderContext = _
 
-      override def collect(doc: Int) {
+      override def collect(doc: Int): Unit = {
         qm.documentsProcessed += 1
         if (maxDocs == -1 || sampleProbability == 1.0 || Math.random() < sampleProbability) {
           processedDocs+=1          
@@ -90,7 +91,7 @@ object TermVectors extends Logging {
             val min = if (ctvp.localScaling!=LocalTermVectorScaling.MIN) 0 else if (minScalingTerms.isEmpty) Int.MaxValue else minScalingTerms.foldLeft(0)((f,term) => if (tvt.seekExact(term)) f+tvt.totalTermFreq.toInt else f)
             var term = tvt.nextOrd()
             var anyMatches = false
-            while (term != -1l) {
+            while (term != -1L) {
               processedTerms += 1
               term = termTransformer.map(s => {
                 s.getBinding.setProperty("term", term)
@@ -113,7 +114,7 @@ object TermVectors extends Logging {
           }
         }
       }
-      override def doSetNextReader(context: LeafReaderContext) {
+      override def doSetNextReader(context: LeafReaderContext): Unit = {
         this.context = context
         termTransformer.foreach(_.getBinding.invokeMethod("setContext", context))
         contextSetter(context)
@@ -130,7 +131,7 @@ object TermVectors extends Logging {
     if (tv != null) {
       val tvt = tv.iterator.asInstanceOf[TVTermsEnum]
       var term = tvt.nextOrd()
-      while (term != -1l) {
+      while (term != -1L) {
         if (ctvpl.matches(it, term, tvt.totalTermFreq))
           cv.addValue(term, tvt.totalTermFreq.toInt)
         term = tvt.nextOrd()
@@ -141,7 +142,7 @@ object TermVectors extends Logging {
 
   private def getUnscaledAggregateContextVectorForQuery(is: IndexSearcher, it: TermsEnum, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[BytesRef], maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess, qm: QueryMetadata): (TermVectorQueryMetadata,LongIntMap) = {
      val cv = HashLongIntMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()     
-     val md = runTermVectorQuery(is, it, q, ctvp, minScalingTerms, maxDocs, (_: LeafReaderContext) => Unit, (_: Int) => Unit, (term: Long, freq: Int) => cv.addValue(term, freq))
+     val md = runTermVectorQuery(is, it, q, ctvp, minScalingTerms, maxDocs, (_: LeafReaderContext) => (), (_: Int) => (), (term: Long, freq: Int) => cv.addValue(term, freq))
      (md,cv)
   }
   
@@ -156,7 +157,7 @@ object TermVectors extends Logging {
     val m = HashLongDoubleMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
     val ss = ctvp.sumScaling(te,queryDocFreq,totalDocFreq)
     cv.forEach(new LongIntConsumer {
-       override def accept(k: Long, v: Int) {
+       override def accept(k: Long, v: Int): Unit = {
          if (ctvp.matches(v)) m.put(k, ss(k, v))
        }
     })
@@ -169,15 +170,15 @@ object TermVectors extends Logging {
   }
   
   private final class UnscaledVectorInfo {
-    var docFreq = 0l
-    var totalTermFreq = 0l
+    var docFreq = 0L
+    var totalTermFreq = 0L
     val cv: LongIntMap = HashLongIntMaps.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableMap()
   }
   
   private def getGroupedUnscaledAggregateContextVectorsForQuery(level: LevelMetadata, is: IndexSearcher, it: TermsEnum, q: Query, ctvp: LocalTermVectorProcessingParameters, minScalingTerms: Seq[BytesRef], grpp: GroupingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess, qm: QueryMetadata): (TermVectorQueryMetadata,collection.Map[Seq[JsValue], UnscaledVectorInfo]) = {
     val cvm = new mutable.HashMap[Seq[JsValue],UnscaledVectorInfo]
     var cv: UnscaledVectorInfo = null
-    var fieldGetters: Seq[(Int) => JsValue] = null
+    var fieldGetters: Seq[Int => JsValue] = null
     var anyMatches = false
     val tvm = runTermVectorQuery(is, it, q, ctvp, minScalingTerms, maxDocs, (nlrc: LeafReaderContext) => {
       fieldGetters = grpp.fields.map(level.fields(_).jsGetter(nlrc.reader).andThen(_.iterator.next))
@@ -213,7 +214,7 @@ object TermVectors extends Logging {
   
   def getContextTermsForQuery(is: IndexSearcher, it: TermsEnum, q: Query, ctvp: LocalTermVectorProcessingParameters, maxDocs: Int)(implicit tlc: ThreadLocal[TimeLimitingCollector], ia: IndexAccess, qm: QueryMetadata): (TermVectorQueryMetadata,LongSet) = {
      val cv = HashLongSets.getDefaultFactory.withKeysDomain(0, Long.MaxValue).newUpdatableSet()
-     val md = runTermVectorQuery(is, it, q, ctvp, Seq.empty, maxDocs, (_: LeafReaderContext) => Unit, (_: Int) => Unit, (term: Long, _) => cv.add(term))
+     val md = runTermVectorQuery(is, it, q, ctvp, Seq.empty, maxDocs, (_: LeafReaderContext) => (), (_: Int) => (), (term: Long, _) => cv.add(term))
      (md,cv)
   }  
   
@@ -221,7 +222,7 @@ object TermVectors extends Logging {
     val maxHeap = mutable.PriorityQueue.empty[(Long,Double)]((x: (Long, Double), y: (Long, Double)) => y._2 compare x._2)
     var total = 0
     cv.forEach(new LongDoubleConsumer {
-      override def accept(term: Long, score: Double) {
+      override def accept(term: Long, score: Double): Unit = {
         total+=1
         if (limit == -1 || total<=limit) 
           maxHeap += ((term,score))
@@ -258,7 +259,7 @@ object TermVectors extends Logging {
       val itvm = tvms(i)
       val row = matrix(i)
       keys.forEach(new LongConsumer {
-        override def accept(term: Long) {
+        override def accept(term: Long): Unit = {
           row(j) = itvm.getOrDefault(term, 0.0)
           j += 1
         }
@@ -307,65 +308,61 @@ object TermVectors extends Logging {
   def termOrdMapToStringMap(it: TermsEnum, m: LongDoubleMap)(implicit ia: IndexAccess): collection.Map[String,Double] = {
     val rm = new mutable.HashMap[String,Double]
     m.forEach(new LongDoubleConsumer {
-      override def accept(term: Long, freq: Double) {
+      override def accept(term: Long, freq: Double): Unit = {
         rm.put(termOrdToString(it, term),freq)
       }
     })
     rm
   }
   
-  def termOrdMapToOrderedStringSeq(it: TermsEnum, m: LongDoubleMap)(implicit ia: IndexAccess): Seq[(String,Double)] = {
+  def termOrdMapToOrderedStringIterable(it: TermsEnum, m: LongDoubleMap)(implicit ia: IndexAccess): Iterable[(String,Double)] = {
     val rm = new ArrayBuffer[(String,Double)]
     m.forEach(new LongDoubleConsumer {
-      override def accept(term: Long, freq: Double) {
+      override def accept(term: Long, freq: Double): Unit = {
         rm += ((termOrdToString(it, term),freq))
       }
     })
-    rm.sortBy(-_._2)
+    rm.sortBy(-_._2)(Ordering.Double.TotalOrdering)
   }
   
-  def termOrdsToStrings(it: TermsEnum, m: LongSet)(implicit ia: IndexAccess): Traversable[String] = {
-    new Traversable[String] {
-      override def foreach[U](f: String => U): Unit = {
-        m.forEach(new LongConsumer {
-          override def accept(term: Long) {
-            f(termOrdToString(it, term))
-          }
-        })
+  def termOrdsToStrings(it: TermsEnum, m: LongSet)(implicit ia: IndexAccess): Iterable[String] = {
+    val ret = new ArrayBuffer[String](m.size())
+    m.forEach(new LongConsumer {
+      override def accept(term: Long): Unit = {
+        ret += termOrdToString(it, term)
       }
-    }
+    })
+    ret
   }
 
   def termOrdMapToBytesRefMap(it: TermsEnum, m: LongDoubleMap)(implicit ia: IndexAccess): collection.Map[BytesRef,Double] = {
     val rm = new mutable.HashMap[BytesRef,Double]
     m.forEach(new LongDoubleConsumer {
-      override def accept(term: Long, freq: Double) {
+      override def accept(term: Long, freq: Double): Unit = {
         rm.put(termOrdToBytesRef(it, term),freq)
       }
     })
     rm
   }
 
-  def termOrdMapToOrderedBytesRefSeq(it: TermsEnum, m: LongDoubleMap)(implicit ia: IndexAccess): Seq[(BytesRef,Double)] = {
+  def termOrdMapToOrderedBytesRefSeq(it: TermsEnum, m: LongDoubleMap)(implicit ia: IndexAccess): Iterable[(BytesRef,Double)] = {
     val rm = new ArrayBuffer[(BytesRef,Double)]
     m.forEach(new LongDoubleConsumer {
-      override def accept(term: Long, freq: Double) {
+      override def accept(term: Long, freq: Double): Unit = {
         rm += ((termOrdToBytesRef(it, term),freq))
       }
     })
-    rm.sortBy(-_._2)
+    rm.sortBy(-_._2)(Ordering.Double.TotalOrdering)
   }
 
-  def termOrdsToBytesRefs(it: TermsEnum, m: LongSet)(implicit ia: IndexAccess): Traversable[BytesRef] = {
-    new Traversable[BytesRef] {
-      override def foreach[U](f: BytesRef => U): Unit = {
-        m.forEach(new LongConsumer {
-          override def accept(term: Long) {
-            f(termOrdToBytesRef(it, term))
-          }
-        })
+  def termOrdsToBytesRefs(it: TermsEnum, m: LongSet)(implicit ia: IndexAccess): Iterable[BytesRef] = {
+    val ret = new ArrayBuffer[BytesRef]
+    m.forEach(new LongConsumer {
+      override def accept(term: Long): Unit = {
+        ret += termOrdToBytesRef(it, term)
       }
-    }
+    })
+    ret
   }
 
 }
