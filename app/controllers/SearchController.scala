@@ -8,6 +8,7 @@ import com.koloboke.collect.map.hash.HashIntObjMaps
 import javax.inject._
 import org.apache.lucene.index.LeafReaderContext
 import org.apache.lucene.search.{Scorable, ScoreMode, SimpleCollector, TotalHitCountCollector}
+import org.apache.lucene.util.PriorityQueue
 import parameters._
 import play.api.libs.json._
 import play.api.mvc.{Action, AnyContent}
@@ -89,7 +90,10 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         case o => o
       }
       var responseSizeHint = 0L
-      val maxHeap = mutable.PriorityQueue.empty[(Int,Float,Seq[JsValue])]((x,y) => mcompare(x,y))
+      val nlc = if (srp.limit == -1) new ArrayBuffer[(Int,Float,Seq[JsValue])] else null
+      val maxHeap: PriorityQueue[(Int, Float, Seq[JsValue])] = if (srp.limit == -1) null else new PriorityQueue[(Int,Float,Seq[JsValue])](srp.offset + srp.limit) {
+        override def lessThan(a: (Int, Float, Seq[JsValue]), b: (Int, Float, Seq[JsValue])): Boolean = mcompare(a,b)<0
+      }//mutable.PriorityQueue.empty[(Int,Float,Seq[JsValue])]((x,y) => mcompare(x,y))
       val compareTermVector = if (ctv.query.isDefined)
         getAggregateContextVectorForQuery(is, it, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermBytesRefsFromQuery(query),ctvpa, ctvs.maxDocs) else null
       val we = if (srp.returnExplanations)
@@ -138,16 +142,17 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
               val (cdocFields, cdocVectors) = processDocFields(context, doc, getters)
               docFields.put(doc, cdocFields)
               if (cdocVectors != null) docVectorsForMDS.put(doc, cdocVectors)
-              maxHeap += ((doc, scorer.score, srp.sorts.map(p => if (p._1 == "score") JsNumber(BigDecimal.decimal(scorer.score)) else cdocFields(p._1))))
-            } else if (total<=srp.offset + srp.limit)
+              nlc += ((doc, scorer.score, srp.sorts.map(p => if (p._1 == "score") JsNumber(BigDecimal.decimal(scorer.score)) else cdocFields(p._1))))
+            } else maxHeap.insertWithOverflow((doc, scorer.score, sortGetters.map(sg => sg(doc).orNull))) /*if (total<=srp.offset + srp.limit)
               maxHeap += ((doc, scorer.score, sortGetters.map(sg => sg(doc).orNull)))
             else {
+              maxHeap
               val entry = (doc, scorer.score, sortGetters.map(sg => sg(doc).orNull))
               if (mcompare(maxHeap.head,entry)>0) {
                 maxHeap.dequeue()
                 maxHeap += entry
               }
-            }
+            }*/
           }
         }
 
@@ -161,7 +166,11 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       }
       tlc.get.setCollector(collector)
       is.search(query, gp.tlc.get)
-      val values = maxHeap.dequeueAll.reverse.drop(srp.offset)
+      val values: mutable.Seq[(Int,Float,Seq[JsValue])] = if (srp.limit == -1) nlc.sortInPlace()((a,b) => -mcompare(a,b)).drop(srp.offset) else {
+        val v = new Array[(Int,Float,Seq[JsValue])](math.min(maxHeap.size,srp.limit))
+        for (i <- v.indices) v(i)=maxHeap.pop()
+        v
+      }
       if (srp.limit!= -1) {
         val lr = ir.leaves.get(0)
         val jsGetters = rfields.map(f => f -> ql.fields.getOrElse(f, throw new IllegalArgumentException("Tried to request unknown field: " + f)).jsGetter(lr.reader)).toMap
