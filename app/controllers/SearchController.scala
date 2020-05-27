@@ -92,7 +92,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       var responseSizeHint = 0L
       val nlc = if (srp.limit == -1) new ArrayBuffer[(Int,Float,Seq[JsValue])] else null
       val maxHeap: PriorityQueue[(Int, Float, Seq[JsValue])] = if (srp.limit == -1) null else new PriorityQueue[(Int,Float,Seq[JsValue])](srp.offset + srp.limit) {
-        override def lessThan(a: (Int, Float, Seq[JsValue]), b: (Int, Float, Seq[JsValue])): Boolean = mcompare(a,b)<0
+        override def lessThan(a: (Int, Float, Seq[JsValue]), b: (Int, Float, Seq[JsValue])): Boolean = mcompare(b,a)<0
       }//mutable.PriorityQueue.empty[(Int,Float,Seq[JsValue])]((x,y) => mcompare(x,y))
       val compareTermVector = if (ctv.query.isDefined)
         getAggregateContextVectorForQuery(is, it, buildFinalQueryRunningSubQueries(exactCounts = false, ctv.query.get)._2,ctvpl, extractContentTermBytesRefsFromQuery(query),ctvpa, ctvs.maxDocs) else null
@@ -166,9 +166,9 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       }
       tlc.get.setCollector(collector)
       is.search(query, gp.tlc.get)
-      val values: mutable.Seq[(Int,Float,Seq[JsValue])] = if (srp.limit == -1) nlc.sortInPlace()((a,b) => -mcompare(a,b)).drop(srp.offset) else {
+      val values: mutable.Seq[(Int,Float,Seq[JsValue])] = if (srp.limit == -1) nlc.sortInPlace()((a,b) => mcompare(a,b)).drop(srp.offset) else {
         val v = new Array[(Int,Float,Seq[JsValue])](math.min(maxHeap.size,srp.limit))
-        for (i <- v.indices) v(i)=maxHeap.pop()
+        for (i <- v.indices.reverse) v(i)=maxHeap.pop()
         v
       }
       if (srp.limit!= -1) {

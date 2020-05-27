@@ -846,7 +846,6 @@ case class LevelMetadata(
       if (!new File(path+"/stats/"+id).exists) throw new IllegalArgumentException("Could not create directory "+path+"/stats/"+id)
       val fname = path + "/stats/" + id + "/" + name + ".stats"
       if (new File(fname).exists) {
-        logger.info(f"Stats for $fname not found. Calculating.")
         val f = new RandomAccessFile(fname, "r")
         val inChannel = f.getChannel
         val buffer = inChannel.map(FileChannel.MapMode.READ_ONLY, 0, inChannel.size)
@@ -855,10 +854,10 @@ case class LevelMetadata(
         fieldStats.put(name, (d1, d2))
         inChannel.close()
         f.close()
-        logger.info(f"Finished calculating stats for $fname.")
-      } else
+      } else {
         info.indexedAs match {
           case IndexedFieldType.TEXT | IndexedFieldType.STRING =>
+            logger.info(f"Stats for $fname of type ${info.indexedAs} not found. Calculating.")
             val dft = TDigest.createMergingDigest(100)
             val ttft = TDigest.createMergingDigest(100)
             import IndexAccess._
@@ -876,11 +875,13 @@ case class LevelMetadata(
               out.getChannel.write(bb)
               out.close()
               fieldStats.put(name, (dft, ttft))
+              logger.info(f"Finished calculating stats for $fname.")
             }
           case _ =>
             info.storedAs match {
               case StoredFieldType.NONE | StoredFieldType.SORTEDDOCVALUES | StoredFieldType.SINGULARSTOREDFIELD | StoredFieldType.MULTIPLESTOREDFIELDS | StoredFieldType.TERMVECTOR | StoredFieldType.SORTEDSETDOCVALUES =>
               case StoredFieldType.NUMERICDOCVALUES | StoredFieldType.SORTEDNUMERICDOCVALUES | StoredFieldType.DOUBLEDOCVALUES | StoredFieldType.FLOATDOCVALUES =>
+                logger.info(f"Stats for $fname of type ${info.storedAs} not found. Calculating.")
                 val histogram = TDigest.createMergingDigest(100)
                 info.storedAs match {
                   case StoredFieldType.NUMERICDOCVALUES =>
@@ -925,7 +926,9 @@ case class LevelMetadata(
                 out.getChannel.write(bb)
                 out.close()
                 fieldStats.put(name,(histogram,null))
+                logger.info(f"Finished calculating stats for $fname.")
               case StoredFieldType.LATLONDOCVALUES =>
+                logger.info(f"Stats for $fname of type ${info.storedAs} not found. Calculating.")
                 val lathistogram = TDigest.createDigest(100)
                 val lonhistogram = TDigest.createDigest(100)
                 val dvs = DocValues.getSortedNumeric(lr, name)
@@ -942,8 +945,10 @@ case class LevelMetadata(
                 out.getChannel.write(bb)
                 out.close()
                 fieldStats.put(name,(lathistogram,lonhistogram))
+                logger.info(f"Finished calculating stats for $fname.")
             }
         }
+      }
     }
   def toJson(ia: IndexAccess, metadataOpts: MetadataOpts, commonFields: Set[FieldInfo]): JsValue = Json.obj(
     "id"->id,
@@ -1079,18 +1084,15 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
         val directory = indexMetadata.directoryCreator(FileSystems.getDefault.getPath(path+"/"+index))
         if (level.preload && directory.isInstanceOf[MMapDirectory]) directory.asInstanceOf[MMapDirectory].setPreload(true)
         val ret = DirectoryReader.open(directory)
-        for (fi <- ret.leaves().get(0).reader().getFieldInfos.iterator.asScala) {
-          fi.getDocValuesType
+        for (fi <- ret.leaves().get(0).reader().getFieldInfos.iterator.asScala)
           if (!level.fields.contains(fi.name)) logger.warn(s"Encountered undocumented field ${fi.name} in ${path + "/" + index}. Won't know how to handle/publicise it.")
           else seenFields += fi.name
-        }
         ret
       })
       val reader = if (mreaders.length == 1) mreaders.head else new ParallelCompositeReader(mreaders:_*)
       level.ensureFieldStats(path,reader.leaves.get(0).reader,logger)
-      for (field <- level.fields) {
+      for (field <- level.fields)
         if (!seenFields.contains(field._1)) logger.warn("Documented field "+ field._1 + " not found in "+path+"/["+level.indices.mkString(", ")+"]")
-      }
       readers.put(level.id, reader)
       val tfSearcher = new IndexSearcher(reader)
       tfSearcher.setSimilarity(termFrequencySimilarity)
