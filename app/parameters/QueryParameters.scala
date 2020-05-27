@@ -15,6 +15,6 @@ class QueryParameters(prefix: String = "", suffix: String = "")(implicit request
     prefix+"level"+suffix->defaultLevel
   )
   queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
-  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.contains(pa._1)))
 
 }

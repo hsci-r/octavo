@@ -21,10 +21,10 @@ class GroupingParameters(prefix: String = "", suffix: String = "")(implicit prot
   private val fullJson = Json.obj(prefix+"fields"+suffix->fields,prefix+"fieldLengths"+suffix->fieldLengths,prefix+"fieldTransformer"+suffix->fieldTransformerS,prefix+"grouper"+suffix->grouperS,prefix+"groupByMatch"+suffix->groupByMatch,prefix+"matchTransformer"+suffix->matchTransformerS,prefix+"matchLength"+suffix->matchLength)
   def isDefined = fields.nonEmpty || grouper.isDefined || groupByMatch
   queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
-  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(prefix + (pa._1.drop(prefix.length).dropRight(suffix.length) match {
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.contains(prefix + (pa._1.drop(prefix.length).dropRight(suffix.length) match {
     case "fields" => "field"
     case "fieldLengths" => "fieldLength"
     case a => a
-  }) + suffix).isDefined))
+  }) + suffix)))
 }
 

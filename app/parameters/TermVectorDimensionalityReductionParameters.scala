@@ -23,5 +23,5 @@ class TermVectorDimensionalityReductionParameters(prefix: String = "", suffix: S
       prefix+"dimReduct"+suffix->(""+dimensionalityReduction)
     )
   queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
-  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.contains(pa._1)))
 }

@@ -37,7 +37,7 @@ class GeneralParameters()(implicit request: Request[AnyContent], queryMetadata: 
   val force: Boolean  = p.get("force").exists(v => v.head=="" || v.head.toBoolean)
   private val fullJson = Json.obj("pretty"->pretty)
   queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
-  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.contains(pa._1)))
   queryMetadata.longRunning = longRunning
   queryMetadata.key = key
 }

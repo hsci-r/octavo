@@ -4,7 +4,7 @@ import play.api.libs.json.{JsObject, Json}
 import play.api.mvc.{AnyContent, Request}
 import services.IndexAccess
 
-class QueryReturnParameters()(implicit protected val request: Request[AnyContent], protected val ia: IndexAccess, protected val queryMetadata: QueryMetadata) extends ContextParameters with SortParameters {
+class QueryReturnParameters()(implicit protected val request: Request[AnyContent], protected val ia: IndexAccess, protected val queryMetadata: QueryMetadata) extends ContextParameters with SortParameters with ResponseFormatParametersT {
   private val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
   val fields: Seq[String] = p.getOrElse("field", Seq.empty)
   /** return explanations for matches in search */
@@ -17,9 +17,6 @@ class QueryReturnParameters()(implicit protected val request: Request[AnyContent
   /** how many results to skip */
   val offset: Int = p.get("offset").map(_.head.toInt).getOrElse(0)
 
-  /** desired response format */
-  val responseFormat = p.get("format").map(v => ResponseFormat.withName(v.head.toUpperCase)).getOrElse(ResponseFormat.JSON)
-  queryMetadata.mimeType = responseFormat.mimeType
   if (responseFormat==ResponseFormat.CSV) {
     if (snippetLimit != 0) throw new IllegalArgumentException("Can't return snippets in CSV format")
     if (returnExplanations) throw new IllegalArgumentException("Can't return explanations in CSV format")
@@ -30,11 +27,10 @@ class QueryReturnParameters()(implicit protected val request: Request[AnyContent
     "offset" -> offset,
     "sumScaling"->queryScoringString,
     "fields"->fields,
-    "returnExplanations"->returnExplanations,
-    "responseFormat"->responseFormat.entryName
+    "returnExplanations"->returnExplanations
   )
   queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
-  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1 match {
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.contains(pa._1 match {
     case "fields" => "field"
     case a => a
-  }).isDefined))}
+  })))}

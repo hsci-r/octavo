@@ -27,5 +27,5 @@ class TermVectorDistanceCalculationParameters(prefix: String = "", suffix: Strin
     prefix+"normalization"+suffix->normalization.entryName
   )
   queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
-  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.contains(pa._1)))
 }

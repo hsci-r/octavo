@@ -30,12 +30,12 @@ trait SortParameters extends WithToJson {
     "sortCaseInsensitivities"->sortCaseInsensitivities,
   )
   queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
-  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1 match {
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.contains(pa._1 match {
     case "fields" => "field"
     case "sortCaseInsesitivities" => "sortCaseInsensitive"
     case "sorts" => "sort"
     case a => a
-  }).isDefined))
+  })))
 
   def compare(xs: Seq[JsValue], ys: Seq[JsValue]): Int = xs.view.zip(ys).zip(sorts).map{
     case ((x,y),(_,d,ci)) => compare(x,y,d,ci)

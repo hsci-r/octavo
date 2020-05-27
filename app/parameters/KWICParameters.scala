@@ -32,9 +32,9 @@ class KWICParameters()(implicit request: Request[AnyContent], ia: IndexAccess, q
     "fields"->fields
   )
   queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
-  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1 match {
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.contains(pa._1 match {
     case "fields" => "field"
     case "sortContextDistances" => "sortContextDistance"
     case a => a
-  }).isDefined))
+  })))
 }

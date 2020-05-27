@@ -90,6 +90,6 @@ class LocalTermVectorProcessingParameters(prefix: String = "", suffix: String = 
     prefix+"termFilter"+suffix->termFilterAsStringOpt
   )
   queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
-  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.contains(pa._1)))
 }
 

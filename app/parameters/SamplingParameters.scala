@@ -10,5 +10,5 @@ class SamplingParameters(prefix: String = "", suffix: String = "")(implicit requ
   val maxDocs: Int = p.get(prefix+"maxDocs"+suffix).map(_.head.toInt).getOrElse(50000)
   private val fullJson: JsObject = Json.obj(prefix+"maxDocs"+suffix->maxDocs)
   queryMetadata.fullJson = queryMetadata.fullJson ++ fullJson
-  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined))
+  queryMetadata.nonDefaultJson = queryMetadata.nonDefaultJson ++ JsObject(fullJson.fields.filter(pa => p.contains(pa._1)))
 }
