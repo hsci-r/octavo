@@ -10,14 +10,14 @@ lazy val commonSettings = Seq(
   javacOptions ++= Seq("-source","9","-target","9"),
   resolvers += Resolver.mavenLocal,
   developers := List(Developer(id="jiemakel",name="Eetu Mäkelä",email="eetu.makela@iki.fi",url=url("http://iki.fi/eetu.makela"))),
-  organization := "io.github.jiemakel",
+  organization := "io.github.hsci-r",
   description := "Octavo - Open API for Text and Metadata, built using the Play framework",
   licenses := List("MIT" -> new URL("https://opensource.org/licenses/MIT")),
-  homepage := Some(url("https://github.com/jiemakel/octavo/")),
+  homepage := Some(url("https://github.com/hsci-r/octavo/")),
   scmInfo := Some(
     ScmInfo(
-      url("https://github.com/jiemakel/octavo"),
-      "scm:git@github.com:jiemakel/octavo.git"
+      url("https://github.com/hsci-r/octavo"),
+      "scm:git@github.com:hsci-r/octavo.git"
     )
   ),
   version := conf.getString("app.version"),
@@ -69,7 +69,7 @@ lazy val dockerSettings = Seq(
   dockerExposedPorts := Seq(9000, 9443),
   dockerEnvVars := Map("JAVA_OPTS"->"-Dindices.index=/opt/docker/index"),
   dockerExposedVolumes := Seq("/opt/docker/logs","/opt/docker/index","/opt/docker/tmp"),
-  dockerUsername := Some("jiemakel"),
+  dockerUsername := Some("hsci"),
   daemonUserUid in Docker := None,
   daemonUser in Docker := "daemon",
   dockerUpdateLatest := true,
