@@ -103,7 +103,6 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
       col.iterator
     case query: FuzzyQuery =>
       new FuzzyTermsEnum(terms, new AttributeSource(), query.getTerm, query.getMaxEdits, query.getPrefixLength,query.getTranspositions).asBytesRefAndDocFreqAndTotalTermFreqIterator
-      new FuzzyTermsEnum(terms, new AttributeSource(), query.getTerm, query.getMaxEdits, query.getPrefixLength,query.getTranspositions).asBytesRefAndDocFreqAndTotalTermFreqIterator
   }
   
   // get terms lexically similar to a query term - used in topic definition to get past OCR errors
@@ -125,7 +124,7 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
       "offset"->offset,
       "limit"->limit)
     val p = request.body.asFormUrlEncoded.getOrElse(request.queryString)
-    implicit val qm = new QueryMetadata(JsObject(fullJson.fields.filter(pa => p.get(pa._1).isDefined)),fullJson)
+    implicit val qm = new QueryMetadata(JsObject(fullJson.fields.filter(pa => p.contains(pa._1))),fullJson)
     val gp = new GeneralParameters()
     implicit val ec = gp.executionContext
     getOrCreateResult("similarTerms", ia.indexMetadata, qm, gp.force, gp.pretty, () => {

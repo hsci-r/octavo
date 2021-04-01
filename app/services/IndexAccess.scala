@@ -43,12 +43,12 @@ import play.api.libs.json.{Json, _}
 import play.api.{Configuration, Logger, Logging}
 import services.IndexAccess.scriptEngineManager
 
-import scala.jdk.CollectionConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.parallel.ForkJoinTaskSupport
-import scala.concurrent.duration.Duration
 import scala.concurrent._
+import scala.concurrent.duration.Duration
+import scala.jdk.CollectionConverters._
 import scala.language.implicitConversions
 
 object IndexAccess {
@@ -1141,12 +1141,12 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
   val queryAnalyzers = indexMetadata.levels.map(level => (level.id, new PerFieldAnalyzerWrapper(new KeywordAnalyzer(),
       level.fields.values.filter(_.indexedAs == IndexedFieldType.TEXT).map(_.id).map((_,whitespaceAnalyzer)).toMap[String,Analyzer].asJava))).toMap
 
-  private def newQueryParser(level: LevelMetadata) = {
+  private def newQueryParser(level: LevelMetadata): QueryParser = {
     val qp = new ComplexPhraseQueryParser(indexMetadata.contentField,queryAnalyzers(level.id)) {
 
       override def addClause(clauses: java.util.List[BooleanClause], conj: Int, mods: Int, q: Query): Unit = {
         super.addClause(clauses, conj, mods, q)
-        if (mods == 11) {// QueryParserBase.MOD_REQ
+        if (mods == 11) {// QueryParserBase.MOD_REQ. Here, we're changing "AND +" into a FILTER, so it doesn't increase score
           val c = clauses.get(clauses.size - 1)
           if (!c.isProhibited)
             clauses.set(clauses.size() - 1, new BooleanClause(c.getQuery, Occur.FILTER))
@@ -1223,13 +1223,28 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
                   exts.length match {
                     case 2 =>
                       new ExtractingTermInSetQuery(rfield,infls.map(indexMetadata.indexingAnalyzers(rfield).normalize(rfield,_)).asJava)
+/*                    case 3 if exts(2)=="~1" || exts(2)=="~2" =>
+                      val editDistance =  if (exts(2)=="~1") 1 else 2
+                      val bqb = new BooleanQuery.Builder()
+                      val a = new java.util.ArrayList[Automaton](10000)
+                      for (infl <- infls) {
+                        a.add(FuzzyTermsEnum.buildAutomaton(infl,0,false,editDistance))
+                        if (a.size==10000) {
+                          bqb.add(new AutomatonQuery(new Term(rfield,exts(1)),Operations.union(a),Int.MaxValue),Occur.SHOULD)
+                          a.clear()
+                        }
+                      }
+                      bqb.add(new AutomatonQuery(new Term(rfield,exts(1)),Operations.union(a),Int.MaxValue),Occur.SHOULD)
+                      bqb.build() */
                     case 3 =>
                       val bqb = new BooleanQuery.Builder()
-                      for (infl <- infls) bqb.add(parse(indexMetadata.indexingAnalyzers(rfield).normalize(rfield,infl).utf8ToString+exts(2)),Occur.SHOULD)
+                      val sqp = newQueryParser(level)
+                      for (infl <- infls) bqb.add(sqp.parse(indexMetadata.indexingAnalyzers(rfield).normalize(rfield,infl).utf8ToString+exts(2)),Occur.SHOULD)
                       bqb.build()
                     case 4 =>
                       val bqb = new BooleanQuery.Builder()
-                      for (infl <- infls) bqb.add(parse(exts(2)+indexMetadata.indexingAnalyzers(rfield).normalize(rfield,infl).utf8ToString+exts(3)),Occur.SHOULD)
+                      val sqp = newQueryParser(level)
+                      for (infl <- infls) bqb.add(sqp.parse(exts(2)+indexMetadata.indexingAnalyzers(rfield).normalize(rfield,infl).utf8ToString+exts(3)),Occur.SHOULD)
                       bqb.build()
                   }
               }
