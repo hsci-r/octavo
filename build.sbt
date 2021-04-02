@@ -5,7 +5,7 @@ lazy val conf = ConfigFactory.parseFile(new File("conf/application.conf")).resol
 lazy val commonSettings = Seq(
   turbo := true,
   useCoursier := true,
-  scalaVersion := "2.13.1",
+  scalaVersion := "2.13.5",
   scalacOptions += "-target:9",
   javacOptions ++= Seq("-source","9","-target","9"),
   resolvers += Resolver.mavenLocal,
@@ -28,17 +28,17 @@ lazy val mainSettings = Seq(
   name := "octavo",
   libraryDependencies ++= Seq(
     guice,
-    "org.scala-lang.modules" %% "scala-parallel-collections" % "0.2.0",
+    "org.scala-lang.modules" %% "scala-parallel-collections" % "1.0.2",
     "commons-codec" % "commons-codec" % "1.11",
-    "org.apache.lucene" % "lucene-core" % "8.2.0",
-    "org.apache.lucene" % "lucene-codecs" % "8.2.0",
-    "org.apache.lucene" % "lucene-analyzers-common" % "8.2.0",
+    "org.apache.lucene" % "lucene-core" % "8.8.1",
+    "org.apache.lucene" % "lucene-codecs" % "8.8.1",
+    "org.apache.lucene" % "lucene-analyzers-common" % "8.8.1",
     "fi.seco" %% "lucene-morphologicalanalyzer" % "1.2.1",
-    "fi.seco" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.1.5",
+    "fi.hsci" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.2.1",
     "fi.seco" % "lexicalanalysis-resources-fi-core" % "1.5.16",
     "fi.hsci" %% "lucene-normalisinganalyzer" % "1.0.2",
-    "org.apache.lucene" % "lucene-queryparser" % "8.2.0",
-    "org.apache.lucene" % "lucene-highlighter" % "8.2.0",
+    "org.apache.lucene" % "lucene-queryparser" % "8.8.1",
+    "org.apache.lucene" % "lucene-highlighter" % "8.8.1",
     "com.koloboke" % "koloboke-api-jdk8" % "1.0.0",
     "com.koloboke" % "koloboke-impl-jdk8" % "1.0.0",
     "com.beachape" %% "enumeratum" % "1.5.13",
@@ -55,7 +55,9 @@ lazy val mainSettings = Seq(
     "org.deeplearning4j" % "deeplearning4j-core" % "1.0.0-beta4",
     "com.jujutsu.tsne" % "tsne" % "2.5.0",
     "org.jetbrains.xodus" % "xodus-environment" % "1.2.3" exclude("org.jetbrains","annotations"),
-    "com.github.tototoshi" %% "scala-csv" % "1.3.6"
+    "com.github.tototoshi" %% "scala-csv" % "1.3.6",
+  "ch.qos.logback" % "logback-classic" % "1.2.3"
+
   )
 )
 

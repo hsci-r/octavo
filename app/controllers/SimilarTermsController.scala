@@ -102,7 +102,7 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
       for (c <- query.clauses.asScala; i <- toIterator(terms, c.getQuery)) col += ((BytesRef.deepCopyOf(i._1),i._2,i._3))
       col.iterator
     case query: FuzzyQuery =>
-      new FuzzyTermsEnum(terms, new AttributeSource(), query.getTerm, query.getMaxEdits, query.getPrefixLength,query.getTranspositions).asBytesRefAndDocFreqAndTotalTermFreqIterator
+      new FuzzyTermsEnum(terms, query.getTerm, query.getMaxEdits, query.getPrefixLength,query.getTranspositions).asBytesRefAndDocFreqAndTotalTermFreqIterator
   }
   
   // get terms lexically similar to a query term - used in topic definition to get past OCR errors
@@ -147,7 +147,7 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
       if (parts.length == 1) {
         val qt = parts(0)._2
         for ((br, docFreq, termFreq) <- qt match {
-          case ExtendedFuzzyQuery(rqt,maxEdits,prefixLength,transpositions) => new FuzzyTermsEnum(terms, new AttributeSource(), new Term(indexMetadata.contentField, rqt), maxEdits.toInt, if (prefixLength=="") 0 else prefixLength.toInt, transpositions != "" && transpositions.toBoolean ).asBytesRefAndDocFreqAndTotalTermFreqIterator
+          case ExtendedFuzzyQuery(rqt,maxEdits,prefixLength,transpositions) => new FuzzyTermsEnum(terms, new Term(indexMetadata.contentField, rqt), maxEdits.toInt, if (prefixLength=="") 0 else prefixLength.toInt, transpositions != "" && transpositions.toBoolean ).asBytesRefAndDocFreqAndTotalTermFreqIterator
           case _ => toIterator(terms, qp.parse(qt)) }
         ) {
           tdf += docFreq
@@ -163,7 +163,7 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
           val ppostings = new ArrayBuffer[(String,PostingsEnum)]()
           token match {
             case ExtendedFuzzyQuery(rqt,maxEdits,prefixLength,transpositions) =>
-              val fterms = new FuzzyTermsEnum(terms, new AttributeSource(), new Term(indexMetadata.contentField, rqt), maxEdits.toInt, if (prefixLength=="") 0 else prefixLength.toInt, transpositions != "" && transpositions.toBoolean )
+              val fterms = new FuzzyTermsEnum(terms, new Term(indexMetadata.contentField, rqt), maxEdits.toInt, if (prefixLength=="") 0 else prefixLength.toInt, transpositions != "" && transpositions.toBoolean )
               var br: BytesRef = fterms.next()
               while (br != null) {
                 ppostings += ((br.utf8ToString,fterms.postings(null, PostingsEnum.POSITIONS)))
@@ -178,7 +178,7 @@ class SimilarTermsController  @Inject() (implicit iap: IndexAccessProvider, qc: 
                   br = fterms.next()
                 }
               case query: FuzzyQuery =>
-                val fterms = new FuzzyTermsEnum(terms, new AttributeSource(), query.getTerm, query.getMaxEdits, query.getPrefixLength,query.getTranspositions)
+                val fterms = new FuzzyTermsEnum(terms, query.getTerm, query.getMaxEdits, query.getPrefixLength,query.getTranspositions)
                 var br: BytesRef = fterms.next()
                 while (br != null) {
                   ppostings += ((br.utf8ToString,fterms.postings(null, PostingsEnum.POSITIONS)))
