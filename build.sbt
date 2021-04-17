@@ -1,4 +1,5 @@
 import com.typesafe.config._
+import com.typesafe.sbt.packager.docker.Cmd
 
 lazy val conf = ConfigFactory.parseFile(new File("conf/application.conf")).resolve()
 
@@ -6,8 +7,8 @@ lazy val commonSettings = Seq(
   turbo := true,
   useCoursier := true,
   scalaVersion := "2.13.5",
-  scalacOptions += "-target:9",
-  javacOptions ++= Seq("-source","9","-target","9"),
+//  scalacOptions += "-target:9",
+//  javacOptions ++= Seq("-source","9","-target","9"),
   resolvers += Resolver.mavenLocal,
   developers := List(Developer(id="jiemakel",name="Eetu Mäkelä",email="eetu.makela@iki.fi",url=url("http://iki.fi/eetu.makela"))),
   organization := "io.github.hsci-r",
@@ -29,52 +30,53 @@ lazy val mainSettings = Seq(
   libraryDependencies ++= Seq(
     guice,
     "org.scala-lang.modules" %% "scala-parallel-collections" % "1.0.2",
-    "commons-codec" % "commons-codec" % "1.11",
-    "org.apache.lucene" % "lucene-core" % "8.8.1",
-    "org.apache.lucene" % "lucene-codecs" % "8.8.1",
-    "org.apache.lucene" % "lucene-analyzers-common" % "8.8.1",
+    "commons-codec" % "commons-codec" % "1.15",
+    "org.apache.lucene" % "lucene-core" % "8.8.2",
+    "org.apache.lucene" % "lucene-codecs" % "8.8.2",
+    "org.apache.lucene" % "lucene-analyzers-common" % "8.8.2",
     "fi.seco" %% "lucene-morphologicalanalyzer" % "1.2.1",
     "fi.hsci" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.2.1",
     "fi.seco" % "lexicalanalysis-resources-fi-core" % "1.5.16",
     "fi.hsci" %% "lucene-normalisinganalyzer" % "1.0.2",
-    "org.apache.lucene" % "lucene-queryparser" % "8.8.1",
-    "org.apache.lucene" % "lucene-highlighter" % "8.8.1",
+    "org.apache.lucene" % "lucene-queryparser" % "8.8.2",
+    "org.apache.lucene" % "lucene-highlighter" % "8.8.2",
     "com.koloboke" % "koloboke-api-jdk8" % "1.0.0",
     "com.koloboke" % "koloboke-impl-jdk8" % "1.0.0",
-    "com.beachape" %% "enumeratum" % "1.5.13",
+    "com.beachape" %% "enumeratum" % "1.6.1",
 //    "com.bizo" %% "mighty-csv" % "0.2",
-    "com.tdunning" % "t-digest" % "3.1",
-    "org.codehaus.groovy" % "groovy-jsr223" % "2.4.11",
-    "org.scijava" % "scripting-jython" % "0.4.1" % "runtime",
-    "org.jetbrains.kotlin" % "kotlin-compiler-embeddable" % "1.2.60" % "runtime" exclude("org.jetbrains","annotations"),
-    "org.jetbrains.kotlin" % "kotlin-script-runtime" % "1.2.60" % "runtime" exclude("org.jetbrains","annotations"),
-    "org.jetbrains.kotlin" % "kotlin-script-util" % "1.2.60" % "runtime" exclude("org.jetbrains.kotlin","kotlin-daemon-client"),
-    "org.jetbrains.kotlin" % "kotlin-stdlib" % "1.2.60" % "runtime" exclude("org.jetbrains","annotations"),
+    "com.tdunning" % "t-digest" % "3.2",
+    "org.codehaus.groovy" % "groovy-jsr223" % "3.0.7",
+    "org.scijava" % "scripting-jython" % "1.0.0",
+    "org.jetbrains.kotlin" % "kotlin-compiler-embeddable" % "1.4.32",
+    "org.jetbrains.kotlin" % "kotlin-script-runtime" % "1.4.32",
+    "org.jetbrains.kotlin" % "kotlin-script-util" % "1.4.32",
+    "org.jetbrains.kotlin" % "kotlin-stdlib" % "1.4.32",
     "mdsj" % "mdsj" % "0.2",
 //    "org.nd4j" % "nd4j-native-platform" % "1.0.0-beta4",
     "org.deeplearning4j" % "deeplearning4j-core" % "1.0.0-beta4",
     "com.jujutsu.tsne" % "tsne" % "2.5.0",
-    "org.jetbrains.xodus" % "xodus-environment" % "1.2.3" exclude("org.jetbrains","annotations"),
-    "com.github.tototoshi" %% "scala-csv" % "1.3.6",
+    "org.jetbrains.xodus" % "xodus-environment" % "1.3.232" exclude("org.jetbrains","annotations"),
+    "com.github.tototoshi" %% "scala-csv" % "1.3.7",
   "ch.qos.logback" % "logback-classic" % "1.2.3"
 
   )
 )
 
-import com.typesafe.sbt.packager.docker._
-
 lazy val dockerSettings = Seq(
   maintainer := "Eetu Mäkelä <eetu.makela@iki.fi>",
   packageSummary := "octavo",
   packageDescription := "Octavo - Open API for Text and Metadata, built using the Play framework",
-  dockerBaseImage := "adoptopenjdk/openjdk12-openj9:alpine-jre",
+  dockerBaseImage := "adoptopenjdk/openjdk15-openj9",
   dockerExposedPorts := Seq(9000, 9443),
   dockerEnvVars := Map("JAVA_OPTS"->"-Dindices.index=/opt/docker/index"),
   dockerExposedVolumes := Seq("/opt/docker/logs","/opt/docker/index","/opt/docker/tmp"),
+  dockerRepository := Some("quay.io"),
   dockerUsername := Some("hsci"),
   daemonUserUid in Docker := None,
   daemonUser in Docker := "daemon",
   dockerUpdateLatest := true,
+  dockerCommands := dockerCommands.value ++ Seq(Cmd("USER","root"),Cmd("RUN","apt-get","-y","update"),Cmd("RUN","apt-get","-y","install","rsync"),Cmd("RUN","chmod","a+rwx","/opt/docker/tmp","/opt/docker/logs"),Cmd("USER","65536"))
+  /*,
   dockerCommands := {
     val s1 = dockerCommands.value.indexWhere{case Cmd("COPY",_) => true; case _ => false} + 1
     val (h1,t1) = dockerCommands.value.splitAt(s1)
@@ -85,14 +87,14 @@ lazy val dockerSettings = Seq(
     h1 ++
       Seq(ExecCmd("RUN","rm","/opt/docker/conf/application.conf","/opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-sans-externalized.jar","/opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-assets.jar")) ++
       h2 ++
-      Seq(Cmd("RUN","apk","update"),Cmd("RUN","apk","add","rsync","openssh")) ++
+      Seq(Cmd("RUN","apt","update"),Cmd("RUN","apt","install","rsync","openssh")) ++
       h3 ++
       Seq(
         Cmd("COPY","opt/docker/conf/application.conf","/opt/docker/conf/application.conf"),
         Cmd("COPY","opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-sans-externalized.jar","opt/docker/lib/"+organization.value+"."+name.value+"-"+version.value+"-assets.jar","/opt/docker/lib/")
       ) ++
       t3
-  }
+  }*/
 )
 
 lazy val assemblySettings = Seq(
