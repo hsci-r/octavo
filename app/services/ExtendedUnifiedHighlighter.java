@@ -133,7 +133,7 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
                     if (offsetSource2 == OffsetSource.ANALYSIS) offsetSource = OffsetSource.ANALYSIS;
                 }
             }
-            return new ExtendedFieldHighlighter(field,
+            return new FieldHighlighter(field,
                     getOffsetStrategy(offsetSource, components),
                     new SplittingBreakIterator(getBreakIterator(field), UnifiedHighlighter.MULTIVAL_SEP_CHAR),
                     getScorer(field),
