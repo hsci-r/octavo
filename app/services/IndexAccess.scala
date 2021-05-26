@@ -1172,6 +1172,11 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
       override def getFieldQuery(field: String, content: String, slop: Int): Query =
         level.fields.get(field).map(_.indexedAs).getOrElse(IndexedFieldType.NONE) match {
           case IndexedFieldType.STRING if slop == 0 => getFieldQuery(field,content,quoted = true)
+          case _ if slop <0 =>
+            super.setInOrder(false)
+            val q = super.getFieldQuery(field,content,-slop - 1)
+            super.setInOrder(true)
+            q
           case _ => super.getFieldQuery(field,content,slop)
         }
       override def getFieldQuery(field: String, content: String, quoted: Boolean): Query = {
