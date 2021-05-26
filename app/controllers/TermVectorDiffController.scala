@@ -94,8 +94,8 @@ class TermVectorDiffController @Inject() (implicit iap: IndexAccessProvider, qc:
           })
           val it = termsEnums(qlevel1).get
           map = map + ("mostDifferentTerms"->Json.toJson(maxHeap.map(p => (termOrdToString(it, p._1),p._2)).toMap))
-          map = map + ("mostDistinctiveTermsForTerm1"->Json.toJson(maxHeap1.map(p => (termOrdToString(it, p._1),p._2)).toMap))
-          map = map + ("mostDistinctiveTermsForTerm2"->Json.toJson(maxHeap2.map(p => (termOrdToString(it, p._1),p._2)).toMap))
+          map = map + ("mostDistinctiveTermsForQuery1"->Json.toJson(maxHeap1.map(p => (termOrdToString(it, p._1),p._2)).toMap))
+          map = map + ("mostDistinctiveTermsForQuery2"->Json.toJson(maxHeap2.map(p => (termOrdToString(it, p._1),p._2)).toMap))
           map = map + ("mostSimilarTerms"->Json.toJson(minHeap.map(p => (termOrdToString(it, p._1),p._2)).toMap))
         }
         map
