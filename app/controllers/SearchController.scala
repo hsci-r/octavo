@@ -73,8 +73,9 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
     }, () => {
       val (queryLevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, qp.requiredQuery)
       val ql = ia.indexMetadata.levelMap(queryLevel)
+      var fieldsIncludeOffsetData = srp.fields.contains("offsetData")
       val rfields = {
-        val f =  srp.fields ++ srp.sorts.filter(p => p._1 != "score" && !srp.fields.contains(p._1)).map(_._1)
+        val f =  srp.fields.filter(p => p != "offsetData") ++ srp.sorts.filter(p => p._1 != "score" && p._1 != "offsetData" && !srp.fields.contains(p._1)).map(_._1)
         if (srp.offsetData && ql.fields.contains("startOffset") && !f.contains("startOffset")) f :+ "startOffset" else f
       }
       val is = searcher(queryLevel,srp.queryScoring)
@@ -112,6 +113,8 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
           fields += (field -> value)
         }
         val cv = if (termVectors || ctv.query.isDefined) getTermVectorForDocument(ir, it, doc, rtvpl, rtvpa) else null
+        if (fieldsIncludeOffsetData)
+          fields += ("offsetData" -> Json.toJson(ia.offsetDataIterator(doc).toArray))
         if (ctv.query.isDefined)
           fields += ("distance" -> Json.toJson(ctvdp.distance(cv, compareTermVector._2)))
         if (srp.returnExplanations)

@@ -168,7 +168,7 @@ object IndexAccess {
       else nextFetched = false
       br
     }
-    override def hasNext(): Boolean = {
+    override def hasNext: Boolean = {
       if (!nextFetched) {
         br = te.next()
         nextFetched = true
@@ -178,7 +178,7 @@ object IndexAccess {
   }
   
   private case class TermsToBytesRefIterable(te: Terms) extends Iterable[BytesRef] {
-    def iterator(): Iterator[BytesRef] = te.iterator
+    def iterator: Iterator[BytesRef] = te.iterator
   }
   
   private implicit def termsEnumToBytesRefIterator(te: BytesRefIterator): Iterator[BytesRef] = TermsEnumToBytesRefIterator(te)
@@ -192,7 +192,7 @@ object IndexAccess {
       val ret = (br, te.docFreq)
       ret
     }
-    override def hasNext(): Boolean = {
+    override def hasNext: Boolean = {
       if (!nextFetched) {
         br = te.next()
         nextFetched = true
@@ -202,7 +202,7 @@ object IndexAccess {
   }
   
   private case class TermsToBytesRefAndDocFreqIterable(te: Terms) extends Iterable[(BytesRef,Int)] {
-    def iterator(): Iterator[(BytesRef,Int)] = te.iterator
+    def iterator: Iterator[(BytesRef,Int)] = te.iterator
   }
   
   private implicit def termsEnumToBytesRefAndDocFreqIterator(te: TermsEnum): Iterator[(BytesRef,Int)] = TermsEnumToBytesRefAndDocFreqIterator(te)
@@ -216,7 +216,7 @@ object IndexAccess {
       val ret = (br, te.totalTermFreq)
       ret
     }
-    override def hasNext(): Boolean = {
+    override def hasNext: Boolean = {
       if (!nextFetched) {
         br = te.next()
         nextFetched = true
@@ -226,7 +226,7 @@ object IndexAccess {
   }
   
   private case class TermsToBytesRefAndTotalTermFreqIterable(te: Terms) extends Iterable[(BytesRef,Long)] {
-    def iterator(): Iterator[(BytesRef,Long)] = te.iterator
+    def iterator: Iterator[(BytesRef,Long)] = te.iterator
   }
   
   private implicit def termsEnumToBytesRefAndTotalTermFreqIterator(te: TermsEnum): Iterator[(BytesRef,Long)] = TermsEnumToBytesRefAndTotalTermFreqIterator(te)
@@ -240,7 +240,7 @@ object IndexAccess {
       val ret = (br, te.docFreq, te.totalTermFreq)
       ret
     }
-    override def hasNext(): Boolean = {
+    override def hasNext: Boolean = {
       if (!nextFetched) {
         br = te.next()
         nextFetched = true
@@ -250,7 +250,7 @@ object IndexAccess {
   }
 
   private case class TermsToBytesRefAndDocFreqAndTotalTermFreqIterable(te: Terms) extends Iterable[(BytesRef,Int,Long)] {
-    def iterator(): Iterator[(BytesRef,Int,Long)] = te.iterator
+    def iterator: Iterator[(BytesRef,Int,Long)] = te.iterator
   }
 
   private implicit def termsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te: TermsEnum): Iterator[(BytesRef,Int,Long)] = TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te)
@@ -769,7 +769,7 @@ case class FieldInfo(
           max = Math.min(min + (metadataOpts.to.toDouble*distance).toLong,max)
           val step = (max-min)/Math.max(((metadataOpts.to.toDouble-metadataOpts.from.toDouble)/metadataOpts.by.toDouble).toLong,1)+1
           ret = ret ++ Json.obj(
-            "histogram" -> (min to max by step).map(q => Json.obj("min" -> q, "max" -> (q+step), "proportion" -> (histogram.cdf(q+step) - histogram.cdf(q))))
+            "histogram" -> (min to max by step).map(q => Json.obj("min" -> q, "max" -> (q+step), "proportion" -> (histogram.cdf((q+step).toDouble) - histogram.cdf(q.toDouble))))
           )
         }
       case StoredFieldType.FLOATDOCVALUES | StoredFieldType.DOUBLEDOCVALUES =>
@@ -865,7 +865,7 @@ case class LevelMetadata(
             if (terms!=null) {
               for ((_, df, ttf) <- terms.asBytesRefAndDocFreqAndTotalTermFreqIterable) {
                 dft.add(df)
-                ttft.add(ttf)
+                ttft.add(ttf.toDouble)
               }
               val bb = ByteBuffer.allocateDirect(dft.smallByteSize + ttft.smallByteSize)
               dft.asSmallBytes(bb)
@@ -889,7 +889,7 @@ case class LevelMetadata(
                     var values = 0
                     if (dv!=null) while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
                       values += 1
-                      histogram.add(dv.longValue)
+                      histogram.add(dv.longValue.toDouble)
                     }
                     histogram.add(0,lr.numDocs-values)
                   case StoredFieldType.SORTEDNUMERICDOCVALUES =>
@@ -898,7 +898,7 @@ case class LevelMetadata(
                     if (dv!=null) while (dv.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
                       values += 1
                       for (_ <- 0 to dv.docValueCount)
-                        histogram.add(dv.nextValue)
+                        histogram.add(dv.nextValue.toDouble)
                     }
                     histogram.add(0,lr.numDocs-values)
                   case StoredFieldType.FLOATDOCVALUES =>
@@ -1122,6 +1122,29 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
       val key = klos.asArrayByteIterable()
       cursor.getSearchKeyRange(key)
       indexMetadata.offsetDataConverter(cursor,key,searchType)
+    }
+  }
+
+  def offsetDataIterator(doc: Int): Iterator[JsValue] = {
+    if (indexMetadata.offsetDataConverterAsText.isEmpty) return Iterator.empty
+    val cursor = offsetDataCursor.get
+    val klos = new LightOutputStream()
+    IntegerBinding.writeCompressed(klos, doc)
+    IntegerBinding.writeCompressed(klos, 0)
+    val key = klos.asArrayByteIterable()
+    var cursorOnNext = cursor.getSearchKeyRange(key) != null
+    new Iterator[JsValue] {
+      override def hasNext = {
+        if (!cursorOnNext) cursorOnNext = cursor.getNext()
+        if (!cursor.getKey().subIterable(0,key.getLength).equals(key)) cursorOnNext = false
+        cursorOnNext
+      }
+
+      override def next() = {
+        if (!cursorOnNext) cursor.getNext()
+        else cursorOnNext = false
+        indexMetadata.offsetDataConverter(cursor,cursor.getKey,OffsetSearchType.EXACT)
+      }
     }
   }
 
