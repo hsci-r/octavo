@@ -113,7 +113,7 @@ abstract class AQueuingController(qc: QueryCache) extends InjectedController wit
           logger.info(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - Running call " + ndcallId + " ("+name+")")
           logger.debug(remoteId + " % [" + name.substring(0,6).toUpperCase + "] - full parameters: "+fcallId + " ("+name+")")
           writeFile(pf, Json.prettyPrint(qm))
-          val promise = Promise[Result]
+          val promise = Promise[Result]()
           qc.runningQueries.put(name, (parameters, promise.future))
           val startTime = System.currentTimeMillis
           try {

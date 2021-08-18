@@ -181,7 +181,7 @@ object TermVectors extends Logging {
     var fieldGetters: Seq[Int => JsValue] = null
     var anyMatches = false
     val tvm = runTermVectorQuery(is, it, q, ctvp, minScalingTerms, maxDocs, (nlrc: LeafReaderContext) => {
-      fieldGetters = grpp.fields.map(level.fields(_).jsGetter(nlrc.reader).andThen(_.iterator.next))
+      fieldGetters = grpp.fields.map(level.fields(_).jsGetter(nlrc.reader).andThen(_.iterator.next()))
     }, (doc: Int) => {
       if (anyMatches) cv.docFreq += 1
       cv = cvm.getOrElseUpdate(grpp.grouper.map(ap => {
