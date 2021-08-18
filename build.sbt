@@ -73,8 +73,8 @@ lazy val dockerSettings = Seq(
   dockerExposedVolumes := Seq("/opt/docker/logs","/opt/docker/index","/opt/docker/tmp"),
   dockerRepository := Some("quay.io"),
   dockerUsername := Some("hsci"),
-  daemonUserUid in Docker := None,
-  daemonUser in Docker := "daemon",
+  Docker / daemonUserUid := None,
+  Docker / daemonUser := "daemon",
   dockerUpdateLatest := true,
   dockerCommands := dockerCommands.value ++ Seq(Cmd("USER","root"),Cmd("RUN","apt-get","-y","update"),Cmd("RUN","apt-get","-y","install","rsync"),Cmd("RUN","chmod","a+rwx","/opt/docker/tmp","/opt/docker/logs"),Cmd("USER","65536"))
   /*,
@@ -99,13 +99,13 @@ lazy val dockerSettings = Seq(
 )
 
 lazy val assemblySettings = Seq(
-  mainClass in assembly := Some("play.core.server.ProdServerStart"),
-  fullClasspath in assembly += Attributed.blank(PlayKeys.playPackageAssets.value),
-  artifact in (Compile, assembly) := {
-    val art = (artifact in (Compile, assembly)).value
+  assembly / mainClass := Some("play.core.server.ProdServerStart"),
+  assembly / fullClasspath += Attributed.blank(PlayKeys.playPackageAssets.value),
+  Compile / assembly / artifact := {
+    val art = (compile / assembly / artifact).value
     art.withClassifier(Some("assembly"))
   },
-  assemblyMergeStrategy in assembly := {
+  assembly / assemblyMergeStrategy := {
     case PathList("org","nd4j","serde","base64","Nd4jBase64.class") => MergeStrategy.first
     case PathList("org", "jetbrains", "annotations", xs @ _*) => MergeStrategy.first // these appear in multiple places
     case manifest if manifest.contains("MANIFEST.MF") =>
@@ -120,7 +120,7 @@ lazy val assemblySettings = Seq(
     case PathList("junit", xs @ _*) => MergeStrategy.first
     case "overview.html" => MergeStrategy.discard
     case x =>
-      val oldStrategy = (assemblyMergeStrategy in assembly).value
+      val oldStrategy = (assembly / assemblyMergeStrategy).value
       oldStrategy(x)
   }
 ) // ++ addArtifact(artifact in (Compile, assembly), assembly).settings 
@@ -149,11 +149,11 @@ lazy val octavoAssembly = (project in file("build/assembly"))
   .settings(name := "octavo-assembly")
   .settings(publishSettings:_*)
   .disablePlugins(AssemblyPlugin)
-  .settings(packageBin in Compile := (assembly in (octavo, Compile)).value)
+  .settings(Compile / packageBin := (octavo / Compile / assembly).value)
 
 lazy val rootSettings = Seq(
   publishArtifact := false,
-  publishArtifact in Test := false
+  Test / publishArtifact := false
 )
 
 lazy val root = (project in file("build/root"))
