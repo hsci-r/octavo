@@ -31,7 +31,7 @@ lazy val mainSettings = Seq(
     guice,
     "org.scala-lang.modules" %% "scala-parallel-collections" % "1.0.3",
     "commons-codec" % "commons-codec" % "1.15",
-    "fi.hsci" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.2.5",
+    "fi.hsci" %% "lucene-perfieldpostingsformatordtermvectorscodec" % "1.2.9",
     "org.apache.lucene" % "lucene-core" % "8.9.0",
     "org.apache.lucene" % "lucene-codecs" % "8.9.0",
     "org.apache.lucene" % "lucene-backward-codecs" % "8.9.0",
