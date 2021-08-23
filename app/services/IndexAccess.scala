@@ -1125,25 +1125,25 @@ class IndexAccess(id: String, path: String, lifecycle: ApplicationLifecycle) ext
     }
   }
 
-  def offsetDataIterator(doc: Int): Iterator[JsValue] = {
+  def offsetDataIterator(doc: Int): Iterator[(Int,JsValue)] = {
     if (indexMetadata.offsetDataConverterAsText.isEmpty) return Iterator.empty
     val cursor = offsetDataCursor.get
     val klos = new LightOutputStream()
     IntegerBinding.writeCompressed(klos, doc)
-    IntegerBinding.writeCompressed(klos, 0)
+//    IntegerBinding.writeCompressed(klos, 0)
     val key = klos.asArrayByteIterable()
     var cursorOnNext = cursor.getSearchKeyRange(key) != null
-    new Iterator[JsValue] {
+    new Iterator[(Int,JsValue)] {
       override def hasNext = {
-        if (!cursorOnNext) cursorOnNext = cursor.getNext()
-        if (!cursor.getKey().subIterable(0,key.getLength).equals(key)) cursorOnNext = false
+        if (!cursorOnNext) cursorOnNext = cursor.getNext
+        if (!cursor.getKey.subIterable(0,key.getLength).equals(key)) cursorOnNext = false
         cursorOnNext
       }
 
       override def next() = {
-        if (!cursorOnNext) cursor.getNext()
+        if (!cursorOnNext) cursor.getNext
         else cursorOnNext = false
-        indexMetadata.offsetDataConverter(cursor,cursor.getKey,OffsetSearchType.EXACT)
+        (IntegerBinding.readCompressed(cursor.getKey.subIterable(key.getLength,cursor.getKey.getLength-key.getLength).iterator()),indexMetadata.offsetDataConverter(cursor,cursor.getKey,OffsetSearchType.EXACT))
       }
     }
   }
