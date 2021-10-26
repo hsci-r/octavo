@@ -170,7 +170,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
       tlc.get.setCollector(collector)
       is.search(query, gp.tlc.get)
       val values: mutable.Seq[(Int,Float,Seq[JsValue])] = if (srp.limit == -1) nlc.sortInPlace()((a,b) => mcompare(a,b)).drop(srp.offset) else {
-        val v = new Array[(Int,Float,Seq[JsValue])](math.min(maxHeap.size,srp.limit))
+        val v = new Array[(Int,Float,Seq[JsValue])](math.max(math.min(maxHeap.size-srp.offset,srp.limit),0))
         for (i <- v.indices.reverse) v(i)=maxHeap.pop()
         v
       }
