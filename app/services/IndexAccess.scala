@@ -178,7 +178,7 @@ object IndexAccess {
   }
   
   private case class TermsToBytesRefIterable(te: Terms) extends Iterable[BytesRef] {
-    def iterator: Iterator[BytesRef] = te.iterator
+    def iterator: Iterator[BytesRef] = if (te == null) Iterator.empty else TermsEnumToBytesRefIterator(te.iterator)
   }
   
   private implicit def termsEnumToBytesRefIterator(te: BytesRefIterator): Iterator[BytesRef] = TermsEnumToBytesRefIterator(te)
@@ -202,7 +202,7 @@ object IndexAccess {
   }
   
   private case class TermsToBytesRefAndDocFreqIterable(te: Terms) extends Iterable[(BytesRef,Int)] {
-    def iterator: Iterator[(BytesRef,Int)] = te.iterator
+    def iterator: Iterator[(BytesRef,Int)] = if (te == null) Iterator.empty else TermsEnumToBytesRefAndDocFreqIterator(te.iterator)
   }
   
   private implicit def termsEnumToBytesRefAndDocFreqIterator(te: TermsEnum): Iterator[(BytesRef,Int)] = TermsEnumToBytesRefAndDocFreqIterator(te)
@@ -226,7 +226,7 @@ object IndexAccess {
   }
   
   private case class TermsToBytesRefAndTotalTermFreqIterable(te: Terms) extends Iterable[(BytesRef,Long)] {
-    def iterator: Iterator[(BytesRef,Long)] = te.iterator
+    def iterator: Iterator[(BytesRef,Long)] = if (te == null) Iterator.empty else TermsEnumToBytesRefAndTotalTermFreqIterator(te.iterator)
   }
   
   private implicit def termsEnumToBytesRefAndTotalTermFreqIterator(te: TermsEnum): Iterator[(BytesRef,Long)] = TermsEnumToBytesRefAndTotalTermFreqIterator(te)
@@ -250,7 +250,7 @@ object IndexAccess {
   }
 
   private case class TermsToBytesRefAndDocFreqAndTotalTermFreqIterable(te: Terms) extends Iterable[(BytesRef,Int,Long)] {
-    def iterator: Iterator[(BytesRef,Int,Long)] = te.iterator
+    def iterator: Iterator[(BytesRef,Int,Long)] = if (te == null) Iterator.empty else TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te.iterator)
   }
 
   private implicit def termsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te: TermsEnum): Iterator[(BytesRef,Int,Long)] = TermsEnumToBytesRefAndDocFreqAndTotalTermFreqIterator(te)
@@ -628,12 +628,12 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
     def jsGetter(lr: LeafReader, field: String, containsJson: Boolean): Int => Option[JsValue] =
       if (containsJson)
         (doc: Int) => {
-          val values = lr.getTermVector(doc, field).asBytesRefIterable.map(br => Json.parse(br.utf8ToString)).toSeq
+          val values = lr.getTermVector(doc, field).asBytesRefAndTotalTermFreqIterable.map(p => Json.obj("value" -> Json.parse(p._1.utf8ToString),"count" -> p._2)).toSeq
           if (values.isEmpty) None else Some(JsArray(values))
         }
       else
         (doc: Int) => {
-          val values = lr.getTermVector(doc, field).asBytesRefIterable.map(br => JsString(br.utf8ToString)).toSeq
+          val values = lr.getTermVector(doc, field).asBytesRefAndTotalTermFreqIterable.map(p => Json.obj("value"-> JsString(p._1.utf8ToString), "count" -> p._2)).toSeq
           if (values.isEmpty) None else Some(JsArray(values))
         }
     def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[BytesRef] = {
