@@ -633,8 +633,8 @@ object StoredFieldType extends Enum[StoredFieldType] with Logging {
         }
       else
         (doc: Int) => {
-          val values = lr.getTermVector(doc, field).asBytesRefAndTotalTermFreqIterable.map(p => Json.obj("value"-> JsString(p._1.utf8ToString), "count" -> p._2)).toSeq
-          if (values.isEmpty) None else Some(JsArray(values))
+          val values = lr.getTermVector(doc, field).asBytesRefAndTotalTermFreqIterable.map(p => (p._1.utf8ToString,JsNumber(p._2))).toSeq
+          if (values.isEmpty) None else Some(JsObject(values))
         }
     def getMatchingValues(is: IndexSearcher, q: Query, field: String)(implicit tlc: ThreadLocal[TimeLimitingCollector]): collection.Set[BytesRef] = {
       val ret = new mutable.HashSet[BytesRef]
