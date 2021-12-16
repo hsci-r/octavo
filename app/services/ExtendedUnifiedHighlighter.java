@@ -40,10 +40,12 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
     }
 
     private final boolean matchFullSpans;
+    private final boolean doNotJoinMatches;
 
-    public ExtendedUnifiedHighlighter(IndexSearcher indexSearcher, Analyzer indexAnalyzer, boolean matchFullSpans) {
+    public ExtendedUnifiedHighlighter(IndexSearcher indexSearcher, Analyzer indexAnalyzer, boolean matchFullSpans, boolean doNotJoinMatches) {
         super(indexSearcher, indexAnalyzer);
         this.matchFullSpans = matchFullSpans;
+        this.doNotJoinMatches = doNotJoinMatches;
         setFormatter(new PassageFormatter() {
             @Override
             public Object format(Passage[] passages, String content) {
@@ -103,7 +105,7 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
     }
 
     @Override
-    protected FieldHighlighter getFieldHighlighter(String field, Query iquery, Set<Term> allTerms, int maxPassages) {
+    protected ExtendedFieldHighlighter getFieldHighlighter(String field, Query iquery, Set<Term> allTerms, int maxPassages) {
         try {
             Query query = searcher.rewrite(iquery);
             allTerms.clear();
@@ -133,13 +135,13 @@ public class ExtendedUnifiedHighlighter extends UnifiedHighlighter {
                     if (offsetSource2 == OffsetSource.ANALYSIS) offsetSource = OffsetSource.ANALYSIS;
                 }
             }
-            return new FieldHighlighter(field,
+            return new ExtendedFieldHighlighter(field,
                     getOffsetStrategy(offsetSource, components),
                     new SplittingBreakIterator(getBreakIterator(field), UnifiedHighlighter.MULTIVAL_SEP_CHAR),
                     getScorer(field),
                     maxPassages,
                     getMaxNoHighlightPassages(field),
-                    getFormatter(field));
+                    getFormatter(field),doNotJoinMatches);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }

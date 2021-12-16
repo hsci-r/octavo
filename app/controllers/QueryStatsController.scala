@@ -60,13 +60,13 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
       val (qlevel,query) = buildFinalQueryRunningSubQueries(exactCounts = true, q.requiredQuery)
       val level = ia.indexMetadata.levelMap(qlevel)
       val is = searcher(qlevel, QueryScoring.TF)
+      var fieldVGetters: Seq[Int => Option[JsValue]] = null
       if (grpp.isDefined) {
-        val highlighter: ExtendedUnifiedHighlighter = if (grpp.groupByMatch) grpp.highlighter(is, ia.indexMetadata.indexingAnalyzers(ia.indexMetadata.contentField)) else null
+        val highlighter: ExtendedUnifiedHighlighter = if (grpp.groupByMatch || grpp.groupByMatchTerm) grpp.highlighter(is, ia.indexMetadata.indexingAnalyzers(ia.indexMetadata.contentField),matchFullSpans = true, doNotJoinMatches = true) else null
         val globalStats = new Stats
         var count = 0
         grpp.grouper.foreach(_.invokeMethod("setParameters", Seq(level, is, query, grpp, gatherTermFreqsPerDoc, globalStats).toArray))
         var fieldGetters: Seq[Int => Option[JsValue]] = null
-        var fieldVGetters: Seq[Int => Option[JsValue]] = null
         val groupedStats = new mutable.HashMap[JsObject,Stats]
         tlc.get.setCollector(new SimpleCollector() {
           override def scoreMode = ScoreMode.COMPLETE
@@ -101,15 +101,17 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
                   })))))
               val score = scorer.score().toInt
               val fieldSumValues = for ((key, getter) <- fieldSums.zip(fieldVGetters)) yield (key, getter(doc).map(_.asInstanceOf[JsNumber].value.toLong).getOrElse(0L))
-              val groupDefinitions: Iterable[JsObject] = if (grpp.groupByMatch)
-                ExtendedUnifiedHighlighter.highlightsToStrings(highlighter.highlightAsPassages(ia.indexMetadata.contentField, query, Array(doc), Int.MaxValue - 1).head, true).asScala.map(amatch => baseGroupDefinition ++ JsObject(Seq("match" -> grpp.matchTransformer.map(ap => {
+              val passages = if (grpp.groupByMatch || grpp.groupByMatchTerm) highlighter.highlightAsPassages(ia.indexMetadata.contentField, query, Array(doc), Int.MaxValue - 1).head else null
+              val handleGroupByMatch = () => if (grpp.groupByMatch)
+                ExtendedUnifiedHighlighter.highlightsToStrings(passages, true).asScala.map(amatch => baseGroupDefinition ++ JsObject(Seq("match" -> grpp.matchTransformer.map(ap => {
                   ap.getBinding.setProperty("match", amatch)
                   ap.run() match {
                     case v: JsValue => v
                     case v: String => JsString(v)
                   }
                 }).getOrElse(JsString(if (grpp.matchLength.isDefined) amatch.substring(0, grpp.matchLength.get) else amatch)))))
-              else Iterable(baseGroupDefinition)
+                else Iterable(baseGroupDefinition)
+              val groupDefinitions: Iterable[JsObject] = if (grpp.groupByMatchTerm) passages.passages.flatMap(ap => ap.getMatchTerms.take(ap.getNumMatches)).flatMap(mt => handleGroupByMatch().map(_ ++ JsObject(Seq("term"->JsString(mt.utf8ToString))))) else handleGroupByMatch()
               for (group <- groupDefinitions) {
                 val s = groupedStats.getOrElseUpdate(group, new Stats)
                 s.docFreq += 1
@@ -174,6 +176,14 @@ class QueryStatsController @Inject() (implicit iap: IndexAccessProvider, qc: Que
             val score = scorer.score().toInt
             if (gatherTermFreqsPerDoc) s.termFreqs += score
             s.totalTermFreq += score
+            val fieldSumValues = for ((key, getter) <- fieldSums.zip(fieldVGetters)) yield (key, getter(doc).map(_.asInstanceOf[JsNumber].value.toLong).getOrElse(0L))
+            for ((key, v) <- fieldSumValues)
+              s.fieldSums(key) = s.fieldSums.getOrElse(key, 0L) + v
+
+          }
+
+          override def doSetNextReader(context: LeafReaderContext): Unit = {
+            fieldVGetters = fieldSums.map(level.fields(_).jsGetter(context.reader))
           }
 
         })

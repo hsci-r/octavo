@@ -191,7 +191,7 @@ class SearchController @Inject() (iap: IndexAccessProvider, qc: QueryCache) exte
         values.indices.map(i => originalIndicesToMDSValueIndices.get(i).map(vi => Json.toJson(mdsValues(vi))).getOrElse(JsNull))
       } else null
       val matchesByDocs: Array[Passages] = if (srp.snippetLimit!=0) {
-        val highlighter: ExtendedUnifiedHighlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField))
+        val highlighter: ExtendedUnifiedHighlighter = srp.highlighter(is, indexMetadata.indexingAnalyzers(indexMetadata.contentField),matchFullSpans = false, doNotJoinMatches = false)
         highlighter.highlightAsPassages(indexMetadata.contentField, query, values.map(_._1).toArray, if (srp.snippetLimit == -1) Int.MaxValue - 1 else srp.snippetLimit)
       } else null
       srp.responseFormat match {
